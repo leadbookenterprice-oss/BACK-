@@ -109,7 +109,10 @@ def admin_stats_v2(request):
 @permission_classes([AllowAny])
 def admin_api_keys_list(request):
     """Lista paginada de todas las keys con filtros."""
-    service = request.query_params.get('service')
+    if not _check_admin(request):
+        return Response({'error': 'Forbidden'}, status=403)
+
+    service = request.query_params.get('service') or request.query_params.get('servicio')
     status_filter = request.query_params.get('status')
     
     keys = APIKey.objects.all().order_by('-created_at')
@@ -122,9 +125,15 @@ def admin_api_keys_list(request):
     for k in keys:
         data.append({
             "id": k.id,
+            "servicio": k.servicio,  # frontend might expect 'servicio'
             "service": k.servicio,
             "status": k.status,
+            "api_key": k.api_key,
+            "key_masked": k.api_key[:10] + "..." if k.api_key else "",
             "assigned_to": k.assigned_to.email if k.assigned_to else None,
+            "assigned_to_email": k.assigned_to.email if k.assigned_to else None,
+            "assigned_to_id": k.assigned_to.id if k.assigned_to else None,
+            "assigned_to_nombre": k.assigned_to.nombre if k.assigned_to else None,
             "daily_limit": k.daily_limit,
             "requests_today": k.requests_today,
             "last_health_status": k.last_health_status,
