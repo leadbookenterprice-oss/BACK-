@@ -21,9 +21,10 @@ from django.conf.urls.static import static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # admin_panel MUST come before api.urls so /api/admin/* routes are handled by admin_panel
+    path('api/admin/', include('admin_panel.urls')),
     path('api/v1/', include('api.urls')),
     path('api/', include('api.urls')),
-    path('api/admin/', include('admin_panel.urls')),
 ]
 
 if settings.DEBUG:

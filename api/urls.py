@@ -17,7 +17,9 @@ from .views_admin import (
     admin_usuario_detalle, admin_usuarios_eliminados, admin_usuario_restaurar,
     admin_usuario_suspender, admin_apikeys_resumen, admin_apikeys_pool,
     admin_apikeys_pool_crear, admin_apikeys_pool_detail, admin_apikeys_global,
-    admin_pool_estado, admin_alerts_read, admin_health_check, admin_enviar_email
+    admin_pool_estado, admin_alerts_read, admin_health_check, admin_enviar_email,
+    admin_bundles_list, admin_bundles_crear, admin_bundles_detail,
+    admin_bundles_asignar, admin_bundles_liberar, admin_bundles_stats,
 )
 
 router = DefaultRouter()
@@ -100,4 +102,12 @@ urlpatterns = [
     # Debug / Diagnóstico
     path('debug/email-check/', views.debug_email_check, name='debug_email_check'),
     path('debug/email-send/',  views.debug_email_send,  name='debug_email_send'),
+
+    # API Bundles
+    path('admin/bundles/', admin_bundles_list),
+    path('admin/bundles/crear/', admin_bundles_crear),
+    path('admin/bundles/stats/', admin_bundles_stats),
+    path('admin/bundles/<int:bundle_id>/', admin_bundles_detail),
+    path('admin/bundles/<int:bundle_id>/asignar/', admin_bundles_asignar),
+    path('admin/bundles/<int:bundle_id>/liberar/', admin_bundles_liberar),
 ]

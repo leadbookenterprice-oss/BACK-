@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from decouple import config
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
-from .models import Agent, Listado, Plan, APIKey, AdminAlert
+from .models import Agent, Listado, Plan, APIKey, APIBundle, APIBundleAssignment, AdminAlert
 from django.utils.timezone import now
 from datetime import timedelta
 from django.db.models import Count, Sum, Q
@@ -405,3 +405,181 @@ def admin_health_check(request):
     # Aquí iría el disparador de la tarea de health check
     # Por ahora devolvemos éxito simulado
     return Response({"success": True, "message": "Health check iniciado"})
+
+
+# ── Bundle endpoints ──────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_bundles_list(request):
+    """Lista todos los bundles con su estado y usuario asignado."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    bundles = APIBundle.objects.prefetch_related('assignments__usuario').select_related(
+        'key_gemini', 'key_elevenlabs', 'key_uploadpost'
+    ).all().order_by('-created_at')
+
+    data = []
+    for b in bundles:
+        asig_activa = b.assignments.filter(activo=True).select_related('usuario').first()
+        data.append({
+            'id': b.id,
+            'nombre': b.nombre,
+            'status': b.status,
+            'is_complete': b.is_complete(),
+            'notas': b.notas,
+            'key_gemini': b.key_gemini.label if b.key_gemini else None,
+            'key_elevenlabs': b.key_elevenlabs.label if b.key_elevenlabs else None,
+            'key_uploadpost': b.key_uploadpost.label if b.key_uploadpost else None,
+            'usuario_asignado': {
+                'id': asig_activa.usuario.id,
+                'email': asig_activa.usuario.email,
+                'nombre': asig_activa.usuario.nombre,
+                'asignado_en': asig_activa.asignado_en.isoformat(),
+            } if asig_activa else None,
+            'created_at': b.created_at.isoformat(),
+        })
+    return Response({'bundles': data})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_bundles_crear(request):
+    """Crea un nuevo bundle y opcionalmente lo asigna a un usuario."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    nombre = request.data.get('nombre')
+    if not nombre:
+        return Response({'error': 'El campo nombre es requerido'}, status=400)
+
+    key_gemini_id = request.data.get('key_gemini_id')
+    key_elevenlabs_id = request.data.get('key_elevenlabs_id')
+    key_uploadpost_id = request.data.get('key_uploadpost_id')
+    notas = request.data.get('notas', '')
+
+    bundle = APIBundle(nombre=nombre, notas=notas)
+    if key_gemini_id:
+        bundle.key_gemini_id = key_gemini_id
+    if key_elevenlabs_id:
+        bundle.key_elevenlabs_id = key_elevenlabs_id
+    if key_uploadpost_id:
+        bundle.key_uploadpost_id = key_uploadpost_id
+    bundle.save()
+
+    return Response({'success': True, 'id': bundle.id, 'nombre': bundle.nombre})
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([AllowAny])
+def admin_bundles_detail(request, bundle_id):
+    """Detalle, edición y eliminación de un bundle."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        b = APIBundle.objects.get(id=bundle_id)
+    except APIBundle.DoesNotExist:
+        return Response({'error': 'Bundle no encontrado'}, status=404)
+
+    if request.method == 'GET':
+        asig_activa = b.assignments.filter(activo=True).select_related('usuario').first()
+        return Response({
+            'id': b.id,
+            'nombre': b.nombre,
+            'status': b.status,
+            'notas': b.notas,
+            'is_complete': b.is_complete(),
+            'key_gemini_id': b.key_gemini_id,
+            'key_elevenlabs_id': b.key_elevenlabs_id,
+            'key_uploadpost_id': b.key_uploadpost_id,
+            'usuario_asignado': {
+                'id': asig_activa.usuario.id,
+                'email': asig_activa.usuario.email,
+            } if asig_activa else None,
+        })
+
+    elif request.method == 'PUT':
+        for field in ['nombre', 'status', 'notas', 'key_gemini_id', 'key_elevenlabs_id', 'key_uploadpost_id']:
+            if field in request.data:
+                setattr(b, field, request.data[field])
+        b.save()
+        return Response({'success': True})
+
+    elif request.method == 'DELETE':
+        if b.assignments.filter(activo=True).exists():
+            return Response({'error': 'No se puede eliminar un bundle con usuarios activos'}, status=400)
+        b.delete()
+        return Response({'success': True})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_bundles_asignar(request, bundle_id):
+    """Asigna manualmente un bundle a un usuario específico."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    usuario_id = request.data.get('usuario_id')
+    if not usuario_id:
+        return Response({'error': 'usuario_id es requerido'}, status=400)
+
+    try:
+        bundle = APIBundle.objects.get(id=bundle_id)
+        usuario = Agent.objects.get(id=usuario_id)
+    except (APIBundle.DoesNotExist, Agent.DoesNotExist) as e:
+        return Response({'error': str(e)}, status=404)
+
+    # Liberar bundle anterior si tiene
+    APIBundleAssignment.objects.filter(usuario=usuario, activo=True).update(
+        activo=False
+    )
+
+    bundle.status = 'assigned'
+    bundle.save(update_fields=['status'])
+
+    asig, _ = APIBundleAssignment.objects.get_or_create(
+        bundle=bundle,
+        usuario=usuario,
+        defaults={'activo': True}
+    )
+    asig.activo = True
+    asig.save()
+
+    return Response({'success': True, 'bundle': bundle.nombre, 'usuario': usuario.email})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_bundles_liberar(request, bundle_id):
+    """Libera un bundle de su usuario actual."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    from django.utils import timezone as tz
+    try:
+        bundle = APIBundle.objects.get(id=bundle_id)
+    except APIBundle.DoesNotExist:
+        return Response({'error': 'Bundle no encontrado'}, status=404)
+
+    asig = bundle.assignments.filter(activo=True).first()
+    if asig:
+        asig.activo = False
+        asig.liberado_en = tz.now()
+        asig.save()
+
+    bundle.status = 'available'
+    bundle.save(update_fields=['status'])
+    return Response({'success': True, 'message': 'Bundle liberado correctamente'})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_bundles_stats(request):
+    """Estadísticas rápidas del pool de bundles."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    from .services.pool_service import APIPoolService
+    return Response(APIPoolService.get_pool_stats())

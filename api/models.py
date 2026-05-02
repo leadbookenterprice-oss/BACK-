@@ -243,19 +243,29 @@ class APIKey(models.Model):
         ('gemini', 'Gemini'),
         ('elevenlabs', 'ElevenLabs'),
         ('uploadpost', 'Upload Post'),
+        ('openai', 'OpenAI'),
+        ('groq', 'Groq'),
+        ('anthropic', 'Anthropic'),
+        ('stability', 'Stability AI'),
+        ('replicate', 'Replicate'),
+        ('other', 'Otro'),
     ]
     STATUS_CHOICES = [
-        ('available', 'Available'),
-        ('assigned', 'Assigned'),
-        ('exhausted', 'Exhausted'),
-        ('dead', 'Dead'),
-        ('disabled', 'Disabled'),
+        ('available', 'Disponible'),
+        ('in_bundle', 'En Bundle'),
+        ('assigned', 'Asignada (legacy)'),
+        ('exhausted', 'Agotada'),
+        ('dead', 'Muerta'),
+        ('disabled', 'Deshabilitada'),
     ]
     
     servicio = models.CharField(max_length=20, choices=SERVICIOS)
     api_key = models.TextField()
+    label = models.CharField(max_length=100, blank=True, null=True, help_text='Nombre descriptivo interno')
+    empresa = models.CharField(max_length=100, blank=True, null=True, help_text='Empresa/cuenta propietaria de la key')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='available')
     
+    # Legacy: asignación directa a un usuario (mantener por compatibilidad)
     assigned_to = models.ForeignKey(
         'Agent', null=True, blank=True,
         on_delete=models.SET_NULL,
@@ -280,12 +290,6 @@ class APIKey(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('assigned_to', 'servicio') if True else [] # Only for assigned
-        # Wait, unique_together will fail if both are null (multiple null/service allowed)
-        # In Postgres, NULL != NULL, but in Django uniqueness it might be tricky.
-        # Actually, it's better to use unique_together = ('assigned_to', 'servicio')
-        # but only when assigned_to is not null.
-        # Django 2.2+ supports Constraints.
         constraints = [
             models.UniqueConstraint(
                 fields=['assigned_to', 'servicio'], 
@@ -295,7 +299,91 @@ class APIKey(models.Model):
         ]
         
     def __str__(self):
-        return f"{self.servicio} [{self.status}] - {'libre' if not self.assigned_to else self.assigned_to.email}"
+        label = self.label or self.api_key[:12] + '...'
+        return f"[{self.get_servicio_display()}] {label} — {self.get_status_display()}"
+
+
+class APIBundle(models.Model):
+    """
+    Un paquete de 3 APIs (gemini + elevenlabs + uploadpost).
+    Se asigna como unidad a un usuario Free.
+    """
+    STATUS_CHOICES = [
+        ('available', 'Disponible'),
+        ('assigned', 'Asignado'),
+        ('retired', 'Retirado'),
+    ]
+    nombre = models.CharField(max_length=100, help_text='Ej: Bundle #1 — Cuenta Google A')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='available')
+    
+    # Las 3 keys del bundle (pueden ser null si no está configurado)
+    key_gemini = models.OneToOneField(
+        APIKey, null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='bundle_gemini'
+    )
+    key_elevenlabs = models.OneToOneField(
+        APIKey, null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='bundle_elevenlabs'
+    )
+    key_uploadpost = models.OneToOneField(
+        APIKey, null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='bundle_uploadpost'
+    )
+    
+    notas = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'API Bundle'
+        verbose_name_plural = 'API Bundles'
+
+    def __str__(self):
+        return f"{self.nombre} [{self.get_status_display()}]"
+
+    def is_complete(self):
+        """Verifica que las 3 keys requeridas estén configuradas."""
+        return all([self.key_gemini_id, self.key_elevenlabs_id, self.key_uploadpost_id])
+
+    def get_key_for(self, servicio):
+        """Devuelve el valor de la API key para el servicio indicado."""
+        mapping = {
+            'gemini': self.key_gemini,
+            'elevenlabs': self.key_elevenlabs,
+            'uploadpost': self.key_uploadpost,
+        }
+        key_obj = mapping.get(servicio)
+        return key_obj.api_key if key_obj else None
+
+
+class APIBundleAssignment(models.Model):
+    """
+    Registro de qué bundle fue asignado a qué usuario y cuándo.
+    Un usuario solo puede tener un bundle activo a la vez.
+    """
+    bundle = models.ForeignKey(
+        APIBundle,
+        on_delete=models.PROTECT,
+        related_name='assignments'
+    )
+    usuario = models.OneToOneField(
+        'Agent',
+        on_delete=models.CASCADE,
+        related_name='api_bundle_assignment'
+    )
+    asignado_en = models.DateTimeField(auto_now_add=True)
+    liberado_en = models.DateTimeField(null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Asignación de Bundle'
+        verbose_name_plural = 'Asignaciones de Bundle'
+
+    def __str__(self):
+        return f"{self.bundle.nombre} → {self.usuario.email} ({'activo' if self.activo else 'liberado'})"
 
 class APIRequestLog(models.Model):
     api_key = models.ForeignKey(APIKey, on_delete=models.CASCADE, related_name='logs')

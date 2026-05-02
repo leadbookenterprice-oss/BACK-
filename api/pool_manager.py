@@ -1,58 +1,106 @@
-from api.models import APIKey
+from api.models import APIKey, APIBundle, APIBundleAssignment
 from django.conf import settings
 from django.utils import timezone
 
+
 def get_api_key(agente, servicio):
     """
-    Retorna la API key correcta según el plan del agente.
-    Free → usa su cuenta del pool asignada
-    Pago → usa la key global del .env
+    Devuelve la API key string correcta según el plan del agente.
+
+    Lógica:
+      1. Planes de pago (no-free) → key global del .env
+      2. Plan free → buscar bundle asignado y extraer la key del servicio
+      3. Fallback → key global del .env (para no bloquear el sistema)
     """
     plan = getattr(agente, 'plan_nombre', 'free') or 'free'
 
     if plan != 'free':
-        # Planes de pago: usar keys globales
-        keys_globales = {
-            'gemini': settings.GEMINI_API_KEY,
-            'elevenlabs': getattr(settings, 'ELEVENLABS_API_KEY', ''),
-            'uploadpost': getattr(settings, 'UPLOADPOST_API_KEY', ''),
-        }
-        return keys_globales.get(servicio, '')
+        return _get_global_key(servicio)
 
-    # Plan free: buscar cuenta asignada del pool
+    # Plan free: buscar bundle asignado y activo
+    try:
+        asig = APIBundleAssignment.objects.select_related('bundle__key_gemini',
+                                                           'bundle__key_elevenlabs',
+                                                           'bundle__key_uploadpost').get(
+            usuario=agente, activo=True
+        )
+        key_val = asig.bundle.get_key_for(servicio)
+        if key_val:
+            return key_val
+    except APIBundleAssignment.DoesNotExist:
+        # No tiene bundle asignado, intentar asignar uno disponible
+        bundle_asignado = _asignar_bundle(agente)
+        if bundle_asignado:
+            key_val = bundle_asignado.get_key_for(servicio)
+            if key_val:
+                return key_val
+
+    # Legacy: buscar key individual directa (compatibilidad hacia atrás)
     cuenta = APIKey.objects.filter(
         assigned_to=agente,
         servicio=servicio,
         status='assigned'
     ).first()
-
     if cuenta:
         return cuenta.api_key
 
-    # Si no tiene cuenta asignada, asignar una libre
-    cuenta_libre = APIKey.objects.filter(
-        assigned_to=None,
-        servicio=servicio,
-        status='available'
-    ).first()
+    # Fallback final: key global
+    return _get_global_key(servicio)
 
-    if cuenta_libre:
-        cuenta_libre.assigned_to = agente
-        cuenta_libre.status = 'assigned'
-        cuenta_libre.assigned_at = timezone.now()
-        cuenta_libre.save()
-        return cuenta_libre.api_key
 
-    # No hay cuentas disponibles en el pool, usar keys globales como fallback
-    keys_globales = {
-        'gemini': settings.GEMINI_API_KEY,
-        'elevenlabs': getattr(settings, 'ELEVENLABS_API_KEY', ''),
-        'uploadpost': getattr(settings, 'UPLOADPOST_API_KEY', ''),
+def _get_global_key(servicio):
+    """Retorna la key global configurada en el .env para el servicio dado."""
+    keys = {
+        'gemini':      getattr(settings, 'GEMINI_API_KEY', ''),
+        'elevenlabs':  getattr(settings, 'ELEVENLABS_API_KEY', ''),
+        'uploadpost':  getattr(settings, 'UPLOADPOST_API_KEY', ''),
+        'groq':        getattr(settings, 'GROQ_API_KEY', ''),
+        'openai':      getattr(settings, 'OPENAI_API_KEY', ''),
+        'anthropic':   getattr(settings, 'ANTHROPIC_API_KEY', ''),
     }
-    return keys_globales.get(servicio, None)
+    return keys.get(servicio, None)
+
+
+def _asignar_bundle(agente):
+    """
+    Busca un bundle disponible y completo, lo asigna al agente y lo devuelve.
+    Devuelve el objeto APIBundle asignado, o None si no hay disponibles.
+    """
+    bundle = APIBundle.objects.filter(status='available').first()
+    if not bundle or not bundle.is_complete():
+        return None
+
+    bundle.status = 'assigned'
+    bundle.save(update_fields=['status'])
+
+    APIBundleAssignment.objects.create(
+        bundle=bundle,
+        usuario=agente,
+    )
+    return bundle
+
+
+def liberar_bundle(agente):
+    """
+    Libera el bundle asignado a un agente (por ejemplo, al hacer upgrade o baja).
+    """
+    try:
+        asig = APIBundleAssignment.objects.get(usuario=agente, activo=True)
+        asig.activo = False
+        asig.liberado_en = timezone.now()
+        asig.save(update_fields=['activo', 'liberado_en'])
+
+        asig.bundle.status = 'available'
+        asig.bundle.save(update_fields=['status'])
+    except APIBundleAssignment.DoesNotExist:
+        pass
+
 
 def marcar_agotada(agente, servicio):
-    """Marca la cuenta del pool como agotada cuando la API falla"""
+    """
+    Marca la key individual (legacy) como agotada.
+    En el nuevo sistema de bundles, esto no es necesario pero se mantiene por compatibilidad.
+    """
     APIKey.objects.filter(
         assigned_to=agente,
         servicio=servicio,
