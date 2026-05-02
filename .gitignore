@@ -1,0 +1,51 @@
+# Entornos y credenciales
+.env
+venv/
+venv_msys2_backup/
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# Base de datos
+db.sqlite3
+
+# Logs
+*.log
+
+# Temporales
+/tmp/
+
+# Entornos IDE
+.vscode/
+.idea/
+.DS_Store
+
+staticfiles/
+/tmp/*.pdf
+/tmp/*.jpg
+/tmp/*.png
+media/
+node_modules/
+package-lock.json
+*.zip
+*.rar
+*.exe
+*.bin
+*.dll
+*.so
+*.dylib
+*.log
+*.sqlite3
+db.sqlite3
+/tmp/
+/media/
+/staticfiles/
+.vscode/
+.idea/
+.DS_Store
+__pycache__/
+*.pyc
+venv/
+env/
+.env

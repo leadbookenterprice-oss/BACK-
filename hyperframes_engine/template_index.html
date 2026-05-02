@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 1080px;
+      height: 1920px;
+      overflow: hidden;
+      background: #030e1a;
+      font-family: "Outfit", sans-serif;
+    }
+
+    /* ── IMAGES ─────────────────────────────────────────────── */
+    .scene-img {
+      position: absolute;
+      top: 0; left: 0;
+      width: 1080px;
+      height: 1920px;
+      object-fit: cover;
+      transform-origin: center center;
+    }
+
+    /* ── FLASH OVERLAY ──────────────────────────────────────── */
+    #flash {
+      position: absolute;
+      top: 0; left: 0;
+      width: 1080px;
+      height: 1920px;
+      background: #ffffff;
+      opacity: 0;
+      z-index: 50;
+      pointer-events: none;
+    }
+
+    /* ── CAPTIONS ────────────────────────────────────────────── */
+    .cap-word {
+      position: absolute;
+      left: 0;
+      width: 1080px;
+      top: 1249px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 60;
+      opacity: 0;
+      visibility: hidden;
+    }
+    .cap-inner {
+      background: rgba(0, 0, 0, 0.55);
+      border-radius: 8px;
+      padding: 10px 26px;
+      max-width: 920px;
+    }
+    .cap-text {
+      font-family: "Outfit", sans-serif;
+      font-weight: 900;
+      font-size: 80px;
+      color: #00E5FF;
+      text-shadow: 3px 3px 14px rgba(0, 0, 0, 0.95);
+      text-align: center;
+      line-height: 1.1;
+      text-transform: uppercase;
+      display: block;
+    }
+    .cap-text.gold  { color: #FFD700; }
+    .cap-text.price { color: #FFD700; font-size: 88px; }
+    .cap-text.white { color: #ffffff; }
+
+    /* ── CTA OVERLAY ─────────────────────────────────────────── */
+    #cta-overlay {
+      position: absolute;
+      left: 0;
+      width: 1080px;
+      top: 1450px;
+      display: flex;
+      justify-content: center;
+      z-index: 70;
+      opacity: 0;
+    }
+    .cta-card {
+      background: rgba(0, 0, 0, 0.4);
+      border: 2px solid #FFD700;
+      border-radius: 18px;
+      padding: 28px 56px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+    .cta-price {
+      font-family: "Outfit", sans-serif;
+      font-weight: 900;
+      font-size: 86px;
+      color: #FFD700;
+      text-shadow: 2px 2px 10px rgba(0, 0, 0, 0.9);
+      line-height: 1.1;
+    }
+    .cta-location {
+      font-family: "Outfit", sans-serif;
+      font-weight: 600;
+      font-size: 38px;
+      color: #ffffff;
+      text-shadow: 1px 1px 6px rgba(0, 0, 0, 0.9);
+    }
+    .cta-dm {
+      font-family: "Outfit", sans-serif;
+      font-weight: 700;
+      font-size: 46px;
+      color: #00E5FF;
+      text-shadow: 2px 2px 10px rgba(0, 0, 0, 0.9);
+    }
+
+    #final-fade {
+      position: absolute;
+      top: 0; left: 0;
+      width: 1080px;
+      height: 1920px;
+      background: #000000;
+      opacity: 0;
+      z-index: 100;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div
+  id="root"
+  data-composition-id="real-estate-video"
+  data-start="0"
+  data-duration="{{ duration }}"
+  data-width="1080"
+  data-height="1920"
+>
+
+  <!-- ── IMAGES (slideshow) ──────────────────────────────────── -->
+  {{ images_html }}
+
+  <!-- ── MUSIC ───────────────────────────────────── -->
+  <audio id="audio-music" class="clip"
+         data-start="0" data-duration="{{ duration }}"
+         data-track-index="0" data-volume="0.2"
+         src="{{ music_url }}"></audio>
+
+  <!-- ── VOICEOVER ─────────────────────── -->
+  <audio id="audio-vo" class="clip"
+         data-start="0.5" data-duration="{{ vo_duration }}"
+         data-track-index="1" data-volume="1.0"
+         src="{{ vo_url }}"></audio>
+
+  <!-- ── SFX: SWOOSH at open and CTA ───── -->
+  <audio id="sfx-swoosh1" class="clip" data-start="0" data-duration="3" data-track-index="4" data-volume="0.5" src="{{ sfx_swoosh_url }}"></audio>
+  <audio id="sfx-swoosh2" class="clip" data-start="{{ cta_start }}" data-duration="3" data-track-index="4" data-volume="0.5" src="{{ sfx_swoosh_url }}"></audio>
+
+  <!-- ── SFX: IMPACT at CTA ──────────────────── -->
+  <audio id="sfx-impact" class="clip" data-start="{{ cta_start }}" data-duration="2" data-track-index="5" data-volume="0.55" src="{{ sfx_impact_url }}"></audio>
+
+  <!-- ── SFX: CAMERA SHOTS at each cut ───────────────────────── -->
+  {{ sfx_camera_html }}
+
+  <!-- ── FLASH OVERLAY ─────────────────────── -->
+  <div id="flash" data-layout-ignore></div>
+
+  <!-- ── CAPTIONS ───────────────────────────────────── -->
+  {{ captions_html }}
+
+  <!-- ── CTA OVERLAY ────────────────────────── -->
+  <div id="cta-overlay">
+    <div class="cta-card">
+      <div class="cta-price">🏡 {{ price }}</div>
+      <div class="cta-location">{{ location }}</div>
+      <div class="cta-dm">Consultar por MD ✉️</div>
+    </div>
+  </div>
+
+  <div id="final-fade" data-layout-ignore></div>
+
+</div>
+
+<script>
+  window.__timelines = window.__timelines || {};
+  var tl = gsap.timeline({ paused: true });
+
+  // ── KEN BURNS effect ────────────────────
+  {{ ken_burns_js }}
+
+  // ── FLASH CUTS ──────────────────────────────
+  var cuts = [{{ cut_times }}];
+  cuts.forEach(function (t) {
+    tl.fromTo("#flash",
+      { opacity: 0 },
+      { opacity: 0.62, duration: 0.06, ease: "power2.in", overwrite: "auto" },
+      t
+    );
+    tl.to("#flash", { opacity: 0, duration: 0.14, ease: "power3.out", overwrite: "auto" }, t + 0.06);
+  });
+
+  // ── WORD-BY-WORD CAPTIONS ─────────────────────────────────────
+  var WORDS = [
+    {{ words_js }}
+  ];
+
+  WORDS.forEach(function (w) {
+    var id = w[0], start = w[1], end = w[2];
+    var el = "#cg-" + id;
+    var dur = end - start;
+
+    tl.set(el, { visibility: "visible", opacity: 0 }, start);
+
+    if (dur >= 0.12) {
+      tl.fromTo(el,
+        { opacity: 0, scale: 0.82 },
+        { opacity: 1, scale: 1, duration: 0.08, ease: "back.out(1.7)" },
+        start
+      );
+    } else {
+      tl.set(el, { opacity: 1, scale: 1 }, start);
+    }
+
+    if (dur >= 0.14) {
+      tl.to(el, { opacity: 0, scale: 0.94, duration: 0.06, ease: "power2.in" }, end - 0.06);
+    }
+    tl.set(el, { opacity: 0, visibility: "hidden" }, end);
+  });
+
+  // ── CTA OVERLAY ─────────────────────
+  tl.fromTo("#cta-overlay",
+    { opacity: 0, y: 36 },
+    { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" },
+    {{ cta_start }}
+  );
+
+  tl.fromTo("#final-fade",
+    { opacity: 0 },
+    { opacity: 1, duration: 0.5, ease: "power2.inOut" },
+    {{ duration }} - 0.5
+  );
+
+  window.__timelines["real-estate-video"] = tl;
+</script>
+</body>
+</html>

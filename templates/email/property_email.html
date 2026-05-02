@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f4f4f4;">
+<tr><td align="center" style="padding: 20px;">
+    <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+        <!-- Header -->
+        <tr>
+            <td style="background-color: #1a1a1a; padding: 20px; text-align: center;">
+                {% if data.logoAgenciaUrl %}
+                    <img src="{{ data.logoAgenciaUrl }}" alt="Logo" style="max-height: 60px; max-width: 200px;">
+                {% endif %}
+                <h1 style="color: #ffffff; margin: 10px 0 0; font-size: 24px;">{{ data.agenciaNombre|default:"Agencia Inmobiliaria" }}</h1>
+            </td>
+        </tr>
+        <!-- Cover -->
+        <tr>
+            <td>
+                {% if data.portadaUrl %}
+                    <img src="{{ data.portadaUrl }}" alt="Portada" style="width: 100%; display: block;">
+                {% endif %}
+            </td>
+        </tr>
+        <!-- Body -->
+        <tr>
+            <td style="padding: 30px;">
+                <h2 style="margin: 0 0 10px; font-size: 22px; color: #333333;">{{ data.tipoPropiedad|default:"Propiedad" }} en {{ data.ciudad|default:"Excelente ubicación" }}</h2>
+                <div style="font-size: 28px; font-weight: bold; color: #20b2aa; margin-bottom: 20px;">{{ data.moneda|default:"USD" }} {{ data.precio }}</div>
+                
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 20px; background-color: #f9f9f9; padding: 15px; border-radius: 6px;">
+                    <tr>
+                        {% if data.recamaras %}<td align="center" style="font-size: 14px; color: #555;">🛏️ {{ data.recamaras }} Rec</td>{% endif %}
+                        {% if data.banos %}<td align="center" style="font-size: 14px; color: #555;">🛁 {{ data.banos }} Baños</td>{% endif %}
+                        {% if data.superficieConstruida %}<td align="center" style="font-size: 14px; color: #555;">📏 {{ data.superficieConstruida }} m²</td>{% endif %}
+                    </tr>
+                </table>
+
+                <div style="font-size: 15px; line-height: 1.6; color: #555555; margin-bottom: 30px;">
+                    {% if data.escenas %}
+                        {% for escena in data.escenas %}
+                            <p><strong>{{ escena.nombre }}:</strong> {{ escena.texto }}</p>
+                        {% endfor %}
+                    {% else %}
+                        <p>Descubre esta increíble propiedad y enamórate de sus espacios, diseñados para tu máximo confort.</p>
+                    {% endif %}
+                </div>
+
+                {% if data.amenidades %}
+                <h3 style="font-size: 18px; color: #333; margin-bottom: 10px;">Amenidades</h3>
+                <ul style="margin: 0 0 30px; padding: 0 0 0 20px; color: #555; font-size: 14px; line-height: 1.6;">
+                    {% for item in data.amenidades %}
+                        <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+
+                <!-- Button -->
+                <div style="text-align: center; margin: 40px 0;">
+                    <a href="https://wa.me/{{ data.agenteTelefono|default:''|urlencode }}?text=Hola,%20quisiera%20más%20información%20sobre%20la%20propiedad%20en%20{{ data.ciudad|urlencode }}" 
+                       style="background-color: #20b2aa; color: #ffffff; text-decoration: none; padding: 15px 30px; font-size: 16px; font-weight: bold; border-radius: 4px; display: inline-block;">
+                        📲 Solicitar Información
+                    </a>
+                </div>
+            </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+            <td style="background-color: #333333; padding: 25px; text-align: center; color: #aaaaaa; font-size: 13px; line-height: 1.5;">
+                <p style="margin: 0 0 10px; color: #ffffff; font-size: 16px; font-weight: bold;">{{ data.agenteNombre|default:"Agente SUBZERO" }}</p>
+                {% if data.agenteTelefono %}<p style="margin: 0 0 5px;">Teléfono: {{ data.agenteTelefono }}</p>{% endif %}
+                {% if data.agenteEmail %}<p style="margin: 0 0 5px;">Email: {{ data.agenteEmail }}</p>{% endif %}
+                <p style="margin: 15px 0 0;">Este email fue generado mediante tecnología SUBZERO-02.</p>
+            </td>
+        </tr>
+    </table>
+</td></tr>
+</table>
+</body>
+</html>

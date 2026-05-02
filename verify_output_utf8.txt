@@ -1,0 +1,3058 @@
+﻿
+=== Probando con Charlyadmin@gmail.com ===
+Login: OK
+
+# Onboarding:
+
+
+email               : Charlyadmin@gmail.com
+nombre              : Charles
+nombre_inmobiliaria : Test
+logo_url            : 
+nicho               : inmobiliaria
+pais                : Argentina
+agentes_asociados   : {}
+plan_nombre         : starter
+
+
+
+
+# Perfil:
+
+
+email                     : Charlyadmin@gmail.com
+nombre                    : Charles
+nombre_inmobiliaria       : Test
+logo_url                  : 
+nicho                     : inmobiliaria
+pais                      : Argentina
+meta_access_token         : 
+meta_instagram_account_id : 
+agentes_asociados         : {}
+plan_nombre               : starter
+
+
+
+
+# Dashboard:
+Error: 
+
+
+  
+  
+  IntegrityError
+          at /api/dashboard/
+  
+    html * { padding:0; margin:0; }
+    body * { padding:10px 20px; }
+    body * * { padding:0; }
+    body { font:small sans-serif; background-color:#fff; color:#000; }
+    body>div { border-bottom:1px solid #ddd; }
+    h1 { font-weight:normal; }
+    h2 { margin-bottom:.8em; }
+    h3 { margin:1em 0 .5em 0; }
+    h4 { margin:0 0 .5em 0; font-weight: normal; }
+    code, pre { font-size: 100%; white-space: pre-wrap; word-break: break-word; }
+    summary { cursor: pointer; }
+    table { border:1px solid #ccc; border-collapse: collapse; width:100%; background:white; }
+    tbody td, tbody th { vertical-align:top; padding:2px 3px; }
+    thead th {
+      padding:1px 6px 1px 3px; background:#fefefe; text-align:left;
+      font-weight:normal; font-size:11px; border:1px solid #ddd;
+    }
+    tbody th { width:12em; text-align:right; color:#666; padding-right:.5em; }
+    table.vars { margin:5px 10px 2px 40px; width: auto; }
+    table.vars td, table.req td { font-family:monospace; }
+    table td.code { width:100%; }
+    table td.code pre { overflow:hidden; }
+    table.source th { color:#666; }
+    table.source td { font-family:monospace; white-space:pre; border-bottom:1px solid #eee; }
+    ul.traceback { list-style-type:none; color: #222; }
+    ul.traceback li.cause { word-break: break-word; }
+    ul.traceback li.frame { padding-bottom:1em; color:#4f4f4f; }
+    ul.traceback li.user { background-color:#e0e0e0; color:#000 }
+    div.context { padding:10px 0; overflow:hidden; }
+    div.context ol { padding-left:30px; margin:0 10px; list-style-position: inside; }
+    div.context ol li { font-family:monospace; white-space:pre; color:#777; cursor:pointer; padding-left: 2px; }
+    div.context ol li pre { display:inline; }
+    div.context ol.context-line li { color:#464646; background-color:#dfdfdf; padding: 3px 2px; }
+    div.context ol.context-line li span { position:absolute; right:32px; }
+    .user div.context ol.context-line li { background-color:#bbb; color:#000; }
+    .user div.context ol li { color:#666; }
+    div.commands, summary.commands { margin-left: 40px; }
+    div.commands a, summary.commands { color:#555; text-decoration:none; }
+    .user div.commands a { color: black; }
+    #summary { background: #ffc; }
+    #summary h2 { font-weight: normal; color: #666; }
+    #explanation { background:#eee; }
+    #template, #template-not-exist { background:#f6f6f6; }
+    #template-not-exist ul { margin: 0 0 10px 20px; }
+    #template-not-exist .postmortem-section { margin-bottom: 3px; }
+    #unicode-hint { background:#eee; }
+    #traceback { background:#eee; }
+    #requestinfo { background:#f6f6f6; padding-left:120px; }
+    #summary table { border:none; background:transparent; }
+    #requestinfo h2, #requestinfo h3 { position:relative; margin-left:-100px; }
+    #requestinfo h3 { margin-bottom:-1em; }
+    .error { background: #ffc; }
+    .specific { color:#cc3300; font-weight:bold; }
+    h2 span.commands { font-size:.7em; font-weight:normal; }
+    span.commands a:link {color:#5E5694;}
+    pre.exception_value { font-family: sans-serif; color: #575757; font-size: 1.5em; margin: 10px 0 10px 0; }
+    .append-bottom { margin-bottom: 10px; }
+    .fname { user-select: all; }
+  
+  
+  
+    function hideAll(elems) {
+      for (var e = 0; e 
+  
+
+
+
+  IntegrityError
+       at /api/dashboard/
+  el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"
+DETAIL:  La fila que falla contiene (5, starter, null, 20, 50, 20, 0, f, f, f, f, null).
+  
+
+    
+      Request Method:
+      GET
+    
+    
+      Request URL:
+      http://127.0.0.1:8000/api/dashboard/
+    
+
+    
+      Django Version:
+      4.2.29
+    
+
+    
+      Exception Type:
+      IntegrityError
+    
+
+
+    
+      Exception Value:
+      el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"
+DETAIL:  La fila que falla contiene (5, starter, null, 20, 50, 20, 0, f, f, f, f, null).
+    
+
+
+    
+      Exception Location:
+      C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\psycopg\cursor.py, line 117, in execute
+    
+
+
+    
+      Raised during:
+      api.views.DashboardView
+    
+
+    
+      Python Executable:
+      C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\python.exe
+    
+    
+      Python Version:
+      3.14.3
+    
+    
+      Python Path:
+      [&#x27;C:\\Users\\elalc\\Desktop\\Leadbook-back-main&#x27;,
+ &#x27;C:\\Users\\elalc\\Desktop\\Leadbook-back-main&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64\\python314.zip&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64\\DLLs&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages&#x27;]
+    
+    
+      Server time:
+      Sat, 04 Apr 2026 16:26:39 +0000
+    
+  
+
+
+
+
+
+
+  Traceback 
+    Switch to copy-and-paste view
+  
+  
+    
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\db\models\query.py, line 918, in get_or_create
+          
+
+          
+            
+              
+                
+                
+                          Return a tuple of (object, created), where created is a boolean
+                
+                          specifying whether an object was created.
+                
+                          &quot;&quot;&quot;
+                
+                          # The get() needs to be targeted at the write database in order
+                
+                          # to avoid potential transaction consistency problems.
+                
+                          self._for_write = True
+                
+                          try:
+                
+                
+              
+              
+                            return self.get(**kwargs), False
+                        ^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                          except self.model.DoesNotExist:
+                  
+                              params = self._extract_model_params(defaults, **kwargs)
+                  
+                              # Try to create an object using passed params.
+                  
+                              try:
+                  
+                                  with transaction.atomic(using=self.db):
+                  
+                                      params = dict(resolve_callables(params))
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    defaults
+                    None
+                  
+                
+                  
+                    kwargs
+                    {&#x27;nombre&#x27;: &#x27;starter&#x27;}
+                  
+                
+                  
+                    params
+                    {&#x27;nombre&#x27;: &#x27;starter&#x27;}
+                  
+                
+                  
+                    self
+                    &lt;QuerySet []&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\db\models\query.py, line 639, in get
+          
+
+          
+            
+              
+                
+                
+                          ):
+                
+                              limit = MAX_GET_RESULTS
+                
+                              clone.query.set_limits(high=limit)
+                
+                          num = len(clone)
+                
+                          if num == 1:
+                
+                              return clone._result_cache[0]
+                
+                          if not num:
+                
+                
+              
+              
+                            raise self.model.DoesNotExist(
+                 ^ .
+              
+              
+                
+                  
+                                  &quot;%s matching query does not exist.&quot; % self.model._meta.object_name
+                  
+                              )
+                  
+                          raise self.model.MultipleObjectsReturned(
+                  
+                              &quot;get() returned more than one %s -- it returned %s!&quot;
+                  
+                              % (
+                  
+                                  self.model._meta.object_name,
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    ()
+                  
+                
+                  
+                    clone
+                    &lt;QuerySet []&gt;
+                  
+                
+                  
+                    kwargs
+                    {&#x27;nombre&#x27;: &#x27;starter&#x27;}
+                  
+                
+                  
+                    limit
+                    21
+                  
+                
+                  
+                    num
+                    0
+                  
+                
+                  
+                    self
+                    &lt;QuerySet []&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+          
+          
+            During handling of the above exception (Plan matching query does not exist.), another exception occurred:
+          
+        
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\db\backends\utils.py, line 89, in _execute
+          
+
+          
+            
+              
+                
+                
+                      def _execute(self, sql, params, *ignored_wrapper_args):
+                
+                          self.db.validate_no_broken_transaction()
+                
+                          with self.db.wrap_database_errors:
+                
+                              if params is None:
+                
+                                  # params default might be backend specific.
+                
+                                  return self.cursor.execute(sql)
+                
+                              else:
+                
+                
+              
+              
+                                return self.cursor.execute(sql, params)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                      def _executemany(self, sql, param_list, *ignored_wrapper_args):
+                  
+                          self.db.validate_no_broken_transaction()
+                  
+                          with self.db.wrap_database_errors:
+                  
+                              return self.cursor.executemany(sql, param_list)
+                  
+                  
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    ignored_wrapper_args
+                    (False,
+ {&#x27;connection&#x27;: &lt;DatabaseWrapper vendor=&#x27;postgresql&#x27; alias=&#x27;default&#x27;&gt;,
+  &#x27;cursor&#x27;: &lt;django.db.backends.postgresql.base.CursorDebugWrapper object at 0x00000146A193B6B0&gt;})
+                  
+                
+                  
+                    params
+                    (&#x27;starter&#x27;,
+ None,
+ Int4(20),
+ Int4(50),
+ Int4(20),
+ Int4(0),
+ False,
+ False,
+ False,
+ False,
+ None)
+                  
+                
+                  
+                    self
+                    &lt;django.db.backends.postgresql.base.CursorDebugWrapper object at 0x00000146A193B6B0&gt;
+                  
+                
+                  
+                    sql
+                    (&#x27;INSERT INTO &quot;api_plan&quot; (&quot;nombre&quot;, &quot;precio_usd&quot;, &quot;properties_per_month&quot;, &#x27;
+ &#x27;&quot;ai_generations&quot;, &quot;image_generations&quot;, &quot;video_generations&quot;, &quot;auto_posting&quot;, &#x27;
+ &#x27;&quot;voice_ai&quot;, &quot;branding&quot;, &quot;priority_support&quot;, &quot;mp_plan_id&quot;) VALUES (%s, %s, &#x27;
+ &#x27;%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING &quot;api_plan&quot;.&quot;id&quot;&#x27;)
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\psycopg\cursor.py, line 117, in execute
+          
+
+          
+            
+              
+                
+                
+                          &quot;&quot;&quot;
+                
+                          try:
+                
+                              with self._conn.lock:
+                
+                                  self._conn.wait(
+                
+                                      self._execute_gen(query, params, prepare=prepare, binary=binary)
+                
+                                  )
+                
+                          except e._NO_TRACEBACK as ex:
+                
+                
+              
+              
+                            raise ex.with_traceback(None)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                          return self
+                  
+                  
+                  
+                      def executemany(
+                  
+                          self, query: Query, params_seq: Iterable[Params], *, returning: bool = False
+                  
+                      ) -&gt; None:
+                  
+                          &quot;&quot;&quot;
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    binary
+                    None
+                  
+                
+                  
+                    params
+                    (&#x27;starter&#x27;,
+ None,
+ Int4(20),
+ Int4(50),
+ Int4(20),
+ Int4(0),
+ False,
+ False,
+ False,
+ False,
+ None)
+                  
+                
+                  
+                    prepare
+                    None
+                  
+                
+                  
+                    query
+                    (&#x27;INSERT INTO &quot;api_plan&quot; (&quot;nombre&quot;, &quot;precio_usd&quot;, &quot;properties_per_month&quot;, &#x27;
+ &#x27;&quot;ai_generations&quot;, &quot;image_generations&quot;, &quot;video_generations&quot;, &quot;auto_posting&quot;, &#x27;
+ &#x27;&quot;voice_ai&quot;, &quot;branding&quot;, &quot;priority_support&quot;, &quot;mp_plan_id&quot;) VALUES (%s, %s, &#x27;
+ &#x27;%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING &quot;api_plan&quot;.&quot;id&quot;&#x27;)
+                  
+                
+                  
+                    self
+                    &lt;django.db.backends.postgresql.base.Cursor [closed] [IDLE] (host=localhost database=postgres) at 0x146a1907860&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+          
+          
+            The above exception (el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"
+DETAIL:  La fila que falla contiene (5, starter, null, 20, 50, 20, 0, f, f, f, f, null).) was the direct cause of the following exception:
+          
+        
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\core\handlers\exception.py, line 55, in inner
+          
+
+          
+            
+              
+                
+                
+                  
+                
+                          return inner
+                
+                      else:
+                
+                  
+                
+                          @wraps(get_response)
+                
+                          def inner(request):
+                
+                              try:
+                
+                
+              
+              
+                                response = get_response(request)
+                               ^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                              except Exception as exc:
+                  
+                                  response = response_for_exception(request, exc)
+                  
+                              return response
+                  
+                  
+                  
+                          return inner
+                  
+                  
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    exc
+                    IntegrityError(&#x27;el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"\nDETAIL:  La fila que falla contiene (5, starter, null, 20, 50, 20, 0, f, f, f, f, null).&#x27;)
+                  
+                
+                  
+                    get_response
+                    &lt;bound method BaseHandler._get_response of &lt;django.core.handlers.wsgi.WSGIHandler object at 0x000001469ACBB230&gt;&gt;
+                  
+                
+                  
+                    request
+                    &lt;WSGIRequest: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\core\handlers\base.py, line 197, in _get_response
+          
+
+          
+            
+              
+                
+                
+                  
+                
+                          if response is None:
+                
+                              wrapped_callback = self.make_view_atomic(callback)
+                
+                              # If it is an asynchronous view, run it in a subthread.
+                
+                              if iscoroutinefunction(wrapped_callback):
+                
+                                  wrapped_callback = async_to_sync(wrapped_callback)
+                
+                              try:
+                
+                
+              
+              
+                                response = wrapped_callback(request, *callback_args, **callback_kwargs)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                              except Exception as e:
+                  
+                                  response = self.process_exception_by_middleware(e, request)
+                  
+                                  if response is None:
+                  
+                                      raise
+                  
+                  
+                  
+                          # Complain if the view returned None (a common error).
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    callback
+                    &lt;function View.as_view.&lt;locals&gt;.view at 0x00000146A0E356F0&gt;
+                  
+                
+                  
+                    callback_args
+                    ()
+                  
+                
+                  
+                    callback_kwargs
+                    {}
+                  
+                
+                  
+                    middleware_method
+                    &lt;bound method CsrfViewMiddleware.process_view of &lt;CsrfViewMiddleware get_response=convert_exception_to_response.&lt;locals&gt;.inner&gt;&gt;
+                  
+                
+                  
+                    request
+                    &lt;WSGIRequest: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    response
+                    None
+                  
+                
+                  
+                    self
+                    &lt;django.core.handlers.wsgi.WSGIHandler object at 0x000001469ACBB230&gt;
+                  
+                
+                  
+                    wrapped_callback
+                    &lt;function View.as_view.&lt;locals&gt;.view at 0x00000146A0E356F0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\views\decorators\csrf.py, line 56, in wrapper_view
+          
+
+          
+            
+              
+                
+                
+                  def csrf_exempt(view_func):
+                
+                      &quot;&quot;&quot;Mark a view function as being exempt from the CSRF view protection.&quot;&quot;&quot;
+                
+                  
+                
+                      # view_func.csrf_exempt = True would also work, but decorators are nicer
+                
+                      # if they don&#x27;t have side effects, so return a new function.
+                
+                      @wraps(view_func)
+                
+                      def wrapper_view(*args, **kwargs):
+                
+                
+              
+              
+                        return view_func(*args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                      wrapper_view.csrf_exempt = True
+                  
+                      return wrapper_view
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    (&lt;WSGIRequest: GET &#x27;/api/dashboard/&#x27;&gt;,)
+                  
+                
+                  
+                    kwargs
+                    {}
+                  
+                
+                  
+                    view_func
+                    &lt;function View.as_view.&lt;locals&gt;.view at 0x00000146A0E35640&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\views\generic\base.py, line 105, in view
+          
+
+          
+            
+              
+                
+                
+                              self = cls(**initkwargs)
+                
+                              self.setup(request, *args, **kwargs)
+                
+                              if not hasattr(self, &quot;request&quot;):
+                
+                                  raise AttributeError(
+                
+                                      &quot;%s instance has no &#x27;request&#x27; attribute. Did you override &quot;
+                
+                                      &quot;setup() and forget to call super()?&quot; % cls.__name__
+                
+                                  )
+                
+                
+              
+              
+                            return self.dispatch(request, *args, **kwargs)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                          view.view_class = cls
+                  
+                          view.view_initkwargs = initkwargs
+                  
+                  
+                  
+                          # __name__ and __qualname__ are intentionally left unchanged as
+                  
+                          # view_class should be used to robustly determine the name of the view
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    ()
+                  
+                
+                  
+                    cls
+                    &lt;class &#x27;api.views.DashboardView&#x27;&gt;
+                  
+                
+                  
+                    initkwargs
+                    {}
+                  
+                
+                  
+                    kwargs
+                    {}
+                  
+                
+                  
+                    request
+                    &lt;WSGIRequest: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\rest_framework\views.py, line 515, in dispatch
+          
+
+          
+            
+              
+                
+                
+                                                    self.http_method_not_allowed)
+                
+                              else:
+                
+                                  handler = self.http_method_not_allowed
+                
+                  
+                
+                              response = handler(request, *args, **kwargs)
+                
+                  
+                
+                          except Exception as exc:
+                
+                
+              
+              
+                            response = self.handle_exception(exc)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                          self.response = self.finalize_response(request, response, *args, **kwargs)
+                  
+                          return self.response
+                  
+                  
+                  
+                      def options(self, request, *args, **kwargs):
+                  
+                          &quot;&quot;&quot;
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    ()
+                  
+                
+                  
+                    handler
+                    &lt;bound method DashboardView.get of &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;&gt;
+                  
+                
+                  
+                    kwargs
+                    {}
+                  
+                
+                  
+                    request
+                    &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\rest_framework\views.py, line 475, in handle_exception
+          
+
+          
+            
+              
+                
+                
+                  
+                
+                          exception_handler = self.get_exception_handler()
+                
+                  
+                
+                          context = self.get_exception_handler_context()
+                
+                          response = exception_handler(exc, context)
+                
+                  
+                
+                          if response is None:
+                
+                
+              
+              
+                            self.raise_uncaught_exception(exc)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                          response.exception = True
+                  
+                          return response
+                  
+                  
+                  
+                      def raise_uncaught_exception(self, exc):
+                  
+                          if settings.DEBUG:
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    context
+                    {&#x27;args&#x27;: (),
+ &#x27;kwargs&#x27;: {},
+ &#x27;request&#x27;: &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;,
+ &#x27;view&#x27;: &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;}
+                  
+                
+                  
+                    exc
+                    IntegrityError(&#x27;el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"\nDETAIL:  La fila que falla contiene (5, starter, null, 20, 50, 20, 0, f, f, f, f, null).&#x27;)
+                  
+                
+                  
+                    exception_handler
+                    &lt;function exception_handler at 0x000001469CD50300&gt;
+                  
+                
+                  
+                    response
+                    None
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\rest_framework\views.py, line 486, in raise_uncaught_exception
+          
+
+          
+            
+              
+                
+                
+                  
+                
+                      def raise_uncaught_exception(self, exc):
+                
+                          if settings.DEBUG:
+                
+                              request = self.request
+                
+                              renderer_format = getattr(request.accepted_renderer, &#x27;format&#x27;)
+                
+                              use_plaintext_traceback = renderer_format not in (&#x27;html&#x27;, &#x27;api&#x27;, &#x27;admin&#x27;)
+                
+                              request.force_plaintext_errors(use_plaintext_traceback)
+                
+                
+              
+              
+                        raise exc
+             ^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                      # Note: Views are made CSRF exempt from within `as_view` as to prevent
+                  
+                      # accidental removal of this exemption in cases where `dispatch` needs to
+                  
+                      # be overridden.
+                  
+                      def dispatch(self, request, *args, **kwargs):
+                  
+                          &quot;&quot;&quot;
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    exc
+                    IntegrityError(&#x27;el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"\nDETAIL:  La fila que falla contiene (5, starter, null, 20, 50, 20, 0, f, f, f, f, null).&#x27;)
+                  
+                
+                  
+                    renderer_format
+                    &#x27;json&#x27;
+                  
+                
+                  
+                    request
+                    &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;
+                  
+                
+                  
+                    use_plaintext_traceback
+                    True
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\rest_framework\views.py, line 512, in dispatch
+          
+
+          
+            
+              
+                
+                
+                              # Get the appropriate handler method
+                
+                              if request.method.lower() in self.http_method_names:
+                
+                                  handler = getattr(self, request.method.lower(),
+                
+                                                    self.http_method_not_allowed)
+                
+                              else:
+                
+                                  handler = self.http_method_not_allowed
+                
+                  
+                
+                
+              
+              
+                            response = handler(request, *args, **kwargs)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                          except Exception as exc:
+                  
+                              response = self.handle_exception(exc)
+                  
+                  
+                  
+                          self.response = self.finalize_response(request, response, *args, **kwargs)
+                  
+                          return self.response
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    ()
+                  
+                
+                  
+                    handler
+                    &lt;bound method DashboardView.get of &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;&gt;
+                  
+                
+                  
+                    kwargs
+                    {}
+                  
+                
+                  
+                    request
+                    &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\Desktop\Leadbook-back-main\api\views.py, line 140, in get
+          
+
+          
+            
+              
+                
+                
+                          
+                
+                          videos_creados = listados.aggregate(total_videos=Sum(&#x27;videos_creados&#x27;))[&#x27;total_videos&#x27;] or 0
+                
+                  
+                
+                          listados_recientes = listados.order_by(&#x27;-creado_en&#x27;)[:5].values(
+                
+                              &#x27;id&#x27;, &#x27;titulo&#x27;, &#x27;tipo_propiedad&#x27;, &#x27;ciudad&#x27;, &#x27;precio&#x27;, &#x27;creado_en&#x27;
+                
+                          )
+                
+                  
+                
+                
+              
+              
+                        susc = get_suscripcion(user)
+                    ^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                          plan = susc.plan
+                  
+                  
+                  
+                          return Response({
+                  
+                              &quot;nombre_inmobiliaria&quot;: getattr(user, &#x27;nombre_inmobiliaria&#x27;, None),
+                  
+                              &quot;logo_url&quot;: getattr(user, &#x27;logo_url&#x27;, None),
+                  
+                              &quot;listados_este_mes&quot;: listados_este_mes,
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    listados
+                    &lt;QuerySet []&gt;
+                  
+                
+                  
+                    listados_este_mes
+                    0
+                  
+                
+                  
+                    listados_recientes
+                    &lt;QuerySet []&gt;
+                  
+                
+                  
+                    now
+                    datetime.datetime(2026, 4, 4, 16, 26, 39, 761782, tzinfo=datetime.timezone.utc)
+                  
+                
+                  
+                    request
+                    &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19516E0&gt;
+                  
+                
+                  
+                    start_of_month
+                    datetime.datetime(2026, 4, 1, 0, 0, tzinfo=datetime.timezone.utc)
+                  
+                
+                  
+                    total_generados
+                    0
+                  
+                
+                  
+                    user
+                    &lt;Agent: Cha
+
+# Admin metricas:
+
+
+total_usuarios       : 6
+usuarios_activos_mes : 6
+total_listados       : 2
+listados_hoy         : 2
+ingresos_mes         : 0
+usuarios_por_plan    : @{starter=6; pro=0; premium=0}
+
+
+
+
+# Admin usuarios:
+
+
+total         : 6
+paginas       : 1
+pagina_actual : 1
+usuarios      : {@{id=7; email=Atilioadmin@gmail.com; nombre=Atilio; 
+                plan=starter; 
+                fecha_registro=2026-04-04T16:26:11.088431+00:00; 
+                listados_totales=0; ultimo_acceso=}, @{id=6; 
+                email=Charlyadmin@gmail.com; nombre=Charles; 
+                plan=starter; 
+                fecha_registro=2026-04-04T16:26:10.825868+00:00; 
+                listados_totales=0; ultimo_acceso=}, @{id=4; 
+                email=admin@leadbook.io; nombre=Admin LeadBook; 
+                plan=starter; 
+                fecha_registro=2026-04-04T16:13:57.482470+00:00; 
+                listados_totales=0; ultimo_acceso=}, @{id=3; 
+                email=testig_ps1@test.com; nombre=Test Agent IG; 
+                plan=starter; 
+                fecha_registro=2026-04-04T15:35:36.028114+00:00; 
+                listados_totales=0; ultimo_acceso=}...}
+
+
+
+
+# Instagram service:
+Error: {"success":false,"error":"Credenciales de Instagram no configuradas."}
+
+# Video status:
+Error: {"error":"Listado no encontrado"}
+
+=== Probando con Atilioadmin@gmail.com ===
+Login: OK
+
+# Onboarding:
+
+
+email               : Atilioadmin@gmail.com
+nombre              : Atilio
+nombre_inmobiliaria : Test
+logo_url            : 
+nicho               : inmobiliaria
+pais                : Argentina
+agentes_asociados   : {}
+plan_nombre         : starter
+
+
+
+
+# Perfil:
+
+
+email                     : Atilioadmin@gmail.com
+nombre                    : Atilio
+nombre_inmobiliaria       : Test
+logo_url                  : 
+nicho                     : inmobiliaria
+pais                      : Argentina
+meta_access_token         : 
+meta_instagram_account_id : 
+agentes_asociados         : {}
+plan_nombre               : starter
+
+
+
+
+# Dashboard:
+Error: 
+
+
+  
+  
+  IntegrityError
+          at /api/dashboard/
+  
+    html * { padding:0; margin:0; }
+    body * { padding:10px 20px; }
+    body * * { padding:0; }
+    body { font:small sans-serif; background-color:#fff; color:#000; }
+    body>div { border-bottom:1px solid #ddd; }
+    h1 { font-weight:normal; }
+    h2 { margin-bottom:.8em; }
+    h3 { margin:1em 0 .5em 0; }
+    h4 { margin:0 0 .5em 0; font-weight: normal; }
+    code, pre { font-size: 100%; white-space: pre-wrap; word-break: break-word; }
+    summary { cursor: pointer; }
+    table { border:1px solid #ccc; border-collapse: collapse; width:100%; background:white; }
+    tbody td, tbody th { vertical-align:top; padding:2px 3px; }
+    thead th {
+      padding:1px 6px 1px 3px; background:#fefefe; text-align:left;
+      font-weight:normal; font-size:11px; border:1px solid #ddd;
+    }
+    tbody th { width:12em; text-align:right; color:#666; padding-right:.5em; }
+    table.vars { margin:5px 10px 2px 40px; width: auto; }
+    table.vars td, table.req td { font-family:monospace; }
+    table td.code { width:100%; }
+    table td.code pre { overflow:hidden; }
+    table.source th { color:#666; }
+    table.source td { font-family:monospace; white-space:pre; border-bottom:1px solid #eee; }
+    ul.traceback { list-style-type:none; color: #222; }
+    ul.traceback li.cause { word-break: break-word; }
+    ul.traceback li.frame { padding-bottom:1em; color:#4f4f4f; }
+    ul.traceback li.user { background-color:#e0e0e0; color:#000 }
+    div.context { padding:10px 0; overflow:hidden; }
+    div.context ol { padding-left:30px; margin:0 10px; list-style-position: inside; }
+    div.context ol li { font-family:monospace; white-space:pre; color:#777; cursor:pointer; padding-left: 2px; }
+    div.context ol li pre { display:inline; }
+    div.context ol.context-line li { color:#464646; background-color:#dfdfdf; padding: 3px 2px; }
+    div.context ol.context-line li span { position:absolute; right:32px; }
+    .user div.context ol.context-line li { background-color:#bbb; color:#000; }
+    .user div.context ol li { color:#666; }
+    div.commands, summary.commands { margin-left: 40px; }
+    div.commands a, summary.commands { color:#555; text-decoration:none; }
+    .user div.commands a { color: black; }
+    #summary { background: #ffc; }
+    #summary h2 { font-weight: normal; color: #666; }
+    #explanation { background:#eee; }
+    #template, #template-not-exist { background:#f6f6f6; }
+    #template-not-exist ul { margin: 0 0 10px 20px; }
+    #template-not-exist .postmortem-section { margin-bottom: 3px; }
+    #unicode-hint { background:#eee; }
+    #traceback { background:#eee; }
+    #requestinfo { background:#f6f6f6; padding-left:120px; }
+    #summary table { border:none; background:transparent; }
+    #requestinfo h2, #requestinfo h3 { position:relative; margin-left:-100px; }
+    #requestinfo h3 { margin-bottom:-1em; }
+    .error { background: #ffc; }
+    .specific { color:#cc3300; font-weight:bold; }
+    h2 span.commands { font-size:.7em; font-weight:normal; }
+    span.commands a:link {color:#5E5694;}
+    pre.exception_value { font-family: sans-serif; color: #575757; font-size: 1.5em; margin: 10px 0 10px 0; }
+    .append-bottom { margin-bottom: 10px; }
+    .fname { user-select: all; }
+  
+  
+  
+    function hideAll(elems) {
+      for (var e = 0; e 
+  
+
+
+
+  IntegrityError
+       at /api/dashboard/
+  el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"
+DETAIL:  La fila que falla contiene (6, starter, null, 20, 50, 20, 0, f, f, f, f, null).
+  
+
+    
+      Request Method:
+      GET
+    
+    
+      Request URL:
+      http://127.0.0.1:8000/api/dashboard/
+    
+
+    
+      Django Version:
+      4.2.29
+    
+
+    
+      Exception Type:
+      IntegrityError
+    
+
+
+    
+      Exception Value:
+      el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"
+DETAIL:  La fila que falla contiene (6, starter, null, 20, 50, 20, 0, f, f, f, f, null).
+    
+
+
+    
+      Exception Location:
+      C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\psycopg\cursor.py, line 117, in execute
+    
+
+
+    
+      Raised during:
+      api.views.DashboardView
+    
+
+    
+      Python Executable:
+      C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\python.exe
+    
+    
+      Python Version:
+      3.14.3
+    
+    
+      Python Path:
+      [&#x27;C:\\Users\\elalc\\Desktop\\Leadbook-back-main&#x27;,
+ &#x27;C:\\Users\\elalc\\Desktop\\Leadbook-back-main&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64\\python314.zip&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64\\DLLs&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64&#x27;,
+ &#x27;C:\\Users\\elalc\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib\\site-packages&#x27;]
+    
+    
+      Server time:
+      Sat, 04 Apr 2026 16:26:40 +0000
+    
+  
+
+
+
+
+
+
+  Traceback 
+    Switch to copy-and-paste view
+  
+  
+    
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\db\models\query.py, line 918, in get_or_create
+          
+
+          
+            
+              
+                
+                
+                          Return a tuple of (object, created), where created is a boolean
+                
+                          specifying whether an object was created.
+                
+                          &quot;&quot;&quot;
+                
+                          # The get() needs to be targeted at the write database in order
+                
+                          # to avoid potential transaction consistency problems.
+                
+                          self._for_write = True
+                
+                          try:
+                
+                
+              
+              
+                            return self.get(**kwargs), False
+                        ^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                          except self.model.DoesNotExist:
+                  
+                              params = self._extract_model_params(defaults, **kwargs)
+                  
+                              # Try to create an object using passed params.
+                  
+                              try:
+                  
+                                  with transaction.atomic(using=self.db):
+                  
+                                      params = dict(resolve_callables(params))
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    defaults
+                    None
+                  
+                
+                  
+                    kwargs
+                    {&#x27;nombre&#x27;: &#x27;starter&#x27;}
+                  
+                
+                  
+                    params
+                    {&#x27;nombre&#x27;: &#x27;starter&#x27;}
+                  
+                
+                  
+                    self
+                    &lt;QuerySet []&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\db\models\query.py, line 639, in get
+          
+
+          
+            
+              
+                
+                
+                          ):
+                
+                              limit = MAX_GET_RESULTS
+                
+                              clone.query.set_limits(high=limit)
+                
+                          num = len(clone)
+                
+                          if num == 1:
+                
+                              return clone._result_cache[0]
+                
+                          if not num:
+                
+                
+              
+              
+                            raise self.model.DoesNotExist(
+                 ^ .
+              
+              
+                
+                  
+                                  &quot;%s matching query does not exist.&quot; % self.model._meta.object_name
+                  
+                              )
+                  
+                          raise self.model.MultipleObjectsReturned(
+                  
+                              &quot;get() returned more than one %s -- it returned %s!&quot;
+                  
+                              % (
+                  
+                                  self.model._meta.object_name,
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    ()
+                  
+                
+                  
+                    clone
+                    &lt;QuerySet []&gt;
+                  
+                
+                  
+                    kwargs
+                    {&#x27;nombre&#x27;: &#x27;starter&#x27;}
+                  
+                
+                  
+                    limit
+                    21
+                  
+                
+                  
+                    num
+                    0
+                  
+                
+                  
+                    self
+                    &lt;QuerySet []&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+          
+          
+            During handling of the above exception (Plan matching query does not exist.), another exception occurred:
+          
+        
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\db\backends\utils.py, line 89, in _execute
+          
+
+          
+            
+              
+                
+                
+                      def _execute(self, sql, params, *ignored_wrapper_args):
+                
+                          self.db.validate_no_broken_transaction()
+                
+                          with self.db.wrap_database_errors:
+                
+                              if params is None:
+                
+                                  # params default might be backend specific.
+                
+                                  return self.cursor.execute(sql)
+                
+                              else:
+                
+                
+              
+              
+                                return self.cursor.execute(sql, params)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                      def _executemany(self, sql, param_list, *ignored_wrapper_args):
+                  
+                          self.db.validate_no_broken_transaction()
+                  
+                          with self.db.wrap_database_errors:
+                  
+                              return self.cursor.executemany(sql, param_list)
+                  
+                  
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    ignored_wrapper_args
+                    (False,
+ {&#x27;connection&#x27;: &lt;DatabaseWrapper vendor=&#x27;postgresql&#x27; alias=&#x27;default&#x27;&gt;,
+  &#x27;cursor&#x27;: &lt;django.db.backends.postgresql.base.CursorDebugWrapper object at 0x00000146A193A930&gt;})
+                  
+                
+                  
+                    params
+                    (&#x27;starter&#x27;,
+ None,
+ Int4(20),
+ Int4(50),
+ Int4(20),
+ Int4(0),
+ False,
+ False,
+ False,
+ False,
+ None)
+                  
+                
+                  
+                    self
+                    &lt;django.db.backends.postgresql.base.CursorDebugWrapper object at 0x00000146A193A930&gt;
+                  
+                
+                  
+                    sql
+                    (&#x27;INSERT INTO &quot;api_plan&quot; (&quot;nombre&quot;, &quot;precio_usd&quot;, &quot;properties_per_month&quot;, &#x27;
+ &#x27;&quot;ai_generations&quot;, &quot;image_generations&quot;, &quot;video_generations&quot;, &quot;auto_posting&quot;, &#x27;
+ &#x27;&quot;voice_ai&quot;, &quot;branding&quot;, &quot;priority_support&quot;, &quot;mp_plan_id&quot;) VALUES (%s, %s, &#x27;
+ &#x27;%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING &quot;api_plan&quot;.&quot;id&quot;&#x27;)
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\psycopg\cursor.py, line 117, in execute
+          
+
+          
+            
+              
+                
+                
+                          &quot;&quot;&quot;
+                
+                          try:
+                
+                              with self._conn.lock:
+                
+                                  self._conn.wait(
+                
+                                      self._execute_gen(query, params, prepare=prepare, binary=binary)
+                
+                                  )
+                
+                          except e._NO_TRACEBACK as ex:
+                
+                
+              
+              
+                            raise ex.with_traceback(None)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                          return self
+                  
+                  
+                  
+                      def executemany(
+                  
+                          self, query: Query, params_seq: Iterable[Params], *, returning: bool = False
+                  
+                      ) -&gt; None:
+                  
+                          &quot;&quot;&quot;
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    binary
+                    None
+                  
+                
+                  
+                    params
+                    (&#x27;starter&#x27;,
+ None,
+ Int4(20),
+ Int4(50),
+ Int4(20),
+ Int4(0),
+ False,
+ False,
+ False,
+ False,
+ None)
+                  
+                
+                  
+                    prepare
+                    None
+                  
+                
+                  
+                    query
+                    (&#x27;INSERT INTO &quot;api_plan&quot; (&quot;nombre&quot;, &quot;precio_usd&quot;, &quot;properties_per_month&quot;, &#x27;
+ &#x27;&quot;ai_generations&quot;, &quot;image_generations&quot;, &quot;video_generations&quot;, &quot;auto_posting&quot;, &#x27;
+ &#x27;&quot;voice_ai&quot;, &quot;branding&quot;, &quot;priority_support&quot;, &quot;mp_plan_id&quot;) VALUES (%s, %s, &#x27;
+ &#x27;%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING &quot;api_plan&quot;.&quot;id&quot;&#x27;)
+                  
+                
+                  
+                    self
+                    &lt;django.db.backends.postgresql.base.Cursor [closed] [IDLE] (host=localhost database=postgres) at 0x146a16c8a10&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+          
+          
+            The above exception (el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"
+DETAIL:  La fila que falla contiene (6, starter, null, 20, 50, 20, 0, f, f, f, f, null).) was the direct cause of the following exception:
+          
+        
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\core\handlers\exception.py, line 55, in inner
+          
+
+          
+            
+              
+                
+                
+                  
+                
+                          return inner
+                
+                      else:
+                
+                  
+                
+                          @wraps(get_response)
+                
+                          def inner(request):
+                
+                              try:
+                
+                
+              
+              
+                                response = get_response(request)
+                               ^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                              except Exception as exc:
+                  
+                                  response = response_for_exception(request, exc)
+                  
+                              return response
+                  
+                  
+                  
+                          return inner
+                  
+                  
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    exc
+                    IntegrityError(&#x27;el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"\nDETAIL:  La fila que falla contiene (6, starter, null, 20, 50, 20, 0, f, f, f, f, null).&#x27;)
+                  
+                
+                  
+                    get_response
+                    &lt;bound method BaseHandler._get_response of &lt;django.core.handlers.wsgi.WSGIHandler object at 0x000001469ACBB230&gt;&gt;
+                  
+                
+                  
+                    request
+                    &lt;WSGIRequest: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\core\handlers\base.py, line 197, in _get_response
+          
+
+          
+            
+              
+                
+                
+                  
+                
+                          if response is None:
+                
+                              wrapped_callback = self.make_view_atomic(callback)
+                
+                              # If it is an asynchronous view, run it in a subthread.
+                
+                              if iscoroutinefunction(wrapped_callback):
+                
+                                  wrapped_callback = async_to_sync(wrapped_callback)
+                
+                              try:
+                
+                
+              
+              
+                                response = wrapped_callback(request, *callback_args, **callback_kwargs)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                              except Exception as e:
+                  
+                                  response = self.process_exception_by_middleware(e, request)
+                  
+                                  if response is None:
+                  
+                                      raise
+                  
+                  
+                  
+                          # Complain if the view returned None (a common error).
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    callback
+                    &lt;function View.as_view.&lt;locals&gt;.view at 0x00000146A0E356F0&gt;
+                  
+                
+                  
+                    callback_args
+                    ()
+                  
+                
+                  
+                    callback_kwargs
+                    {}
+                  
+                
+                  
+                    middleware_method
+                    &lt;bound method CsrfViewMiddleware.process_view of &lt;CsrfViewMiddleware get_response=convert_exception_to_response.&lt;locals&gt;.inner&gt;&gt;
+                  
+                
+                  
+                    request
+                    &lt;WSGIRequest: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    response
+                    None
+                  
+                
+                  
+                    self
+                    &lt;django.core.handlers.wsgi.WSGIHandler object at 0x000001469ACBB230&gt;
+                  
+                
+                  
+                    wrapped_callback
+                    &lt;function View.as_view.&lt;locals&gt;.view at 0x00000146A0E356F0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\views\decorators\csrf.py, line 56, in wrapper_view
+          
+
+          
+            
+              
+                
+                
+                  def csrf_exempt(view_func):
+                
+                      &quot;&quot;&quot;Mark a view function as being exempt from the CSRF view protection.&quot;&quot;&quot;
+                
+                  
+                
+                      # view_func.csrf_exempt = True would also work, but decorators are nicer
+                
+                      # if they don&#x27;t have side effects, so return a new function.
+                
+                      @wraps(view_func)
+                
+                      def wrapper_view(*args, **kwargs):
+                
+                
+              
+              
+                        return view_func(*args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                      wrapper_view.csrf_exempt = True
+                  
+                      return wrapper_view
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    (&lt;WSGIRequest: GET &#x27;/api/dashboard/&#x27;&gt;,)
+                  
+                
+                  
+                    kwargs
+                    {}
+                  
+                
+                  
+                    view_func
+                    &lt;function View.as_view.&lt;locals&gt;.view at 0x00000146A0E35640&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\django\views\generic\base.py, line 105, in view
+          
+
+          
+            
+              
+                
+                
+                              self = cls(**initkwargs)
+                
+                              self.setup(request, *args, **kwargs)
+                
+                              if not hasattr(self, &quot;request&quot;):
+                
+                                  raise AttributeError(
+                
+                                      &quot;%s instance has no &#x27;request&#x27; attribute. Did you override &quot;
+                
+                                      &quot;setup() and forget to call super()?&quot; % cls.__name__
+                
+                                  )
+                
+                
+              
+              
+                            return self.dispatch(request, *args, **kwargs)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                          view.view_class = cls
+                  
+                          view.view_initkwargs = initkwargs
+                  
+                  
+                  
+                          # __name__ and __qualname__ are intentionally left unchanged as
+                  
+                          # view_class should be used to robustly determine the name of the view
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    ()
+                  
+                
+                  
+                    cls
+                    &lt;class &#x27;api.views.DashboardView&#x27;&gt;
+                  
+                
+                  
+                    initkwargs
+                    {}
+                  
+                
+                  
+                    kwargs
+                    {}
+                  
+                
+                  
+                    request
+                    &lt;WSGIRequest: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\rest_framework\views.py, line 515, in dispatch
+          
+
+          
+            
+              
+                
+                
+                                                    self.http_method_not_allowed)
+                
+                              else:
+                
+                                  handler = self.http_method_not_allowed
+                
+                  
+                
+                              response = handler(request, *args, **kwargs)
+                
+                  
+                
+                          except Exception as exc:
+                
+                
+              
+              
+                            response = self.handle_exception(exc)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                          self.response = self.finalize_response(request, response, *args, **kwargs)
+                  
+                          return self.response
+                  
+                  
+                  
+                      def options(self, request, *args, **kwargs):
+                  
+                          &quot;&quot;&quot;
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    ()
+                  
+                
+                  
+                    handler
+                    &lt;bound method DashboardView.get of &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;&gt;
+                  
+                
+                  
+                    kwargs
+                    {}
+                  
+                
+                  
+                    request
+                    &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\rest_framework\views.py, line 475, in handle_exception
+          
+
+          
+            
+              
+                
+                
+                  
+                
+                          exception_handler = self.get_exception_handler()
+                
+                  
+                
+                          context = self.get_exception_handler_context()
+                
+                          response = exception_handler(exc, context)
+                
+                  
+                
+                          if response is None:
+                
+                
+              
+              
+                            self.raise_uncaught_exception(exc)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                          response.exception = True
+                  
+                          return response
+                  
+                  
+                  
+                      def raise_uncaught_exception(self, exc):
+                  
+                          if settings.DEBUG:
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    context
+                    {&#x27;args&#x27;: (),
+ &#x27;kwargs&#x27;: {},
+ &#x27;request&#x27;: &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;,
+ &#x27;view&#x27;: &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;}
+                  
+                
+                  
+                    exc
+                    IntegrityError(&#x27;el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"\nDETAIL:  La fila que falla contiene (6, starter, null, 20, 50, 20, 0, f, f, f, f, null).&#x27;)
+                  
+                
+                  
+                    exception_handler
+                    &lt;function exception_handler at 0x000001469CD50300&gt;
+                  
+                
+                  
+                    response
+                    None
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\rest_framework\views.py, line 486, in raise_uncaught_exception
+          
+
+          
+            
+              
+                
+                
+                  
+                
+                      def raise_uncaught_exception(self, exc):
+                
+                          if settings.DEBUG:
+                
+                              request = self.request
+                
+                              renderer_format = getattr(request.accepted_renderer, &#x27;format&#x27;)
+                
+                              use_plaintext_traceback = renderer_format not in (&#x27;html&#x27;, &#x27;api&#x27;, &#x27;admin&#x27;)
+                
+                              request.force_plaintext_errors(use_plaintext_traceback)
+                
+                
+              
+              
+                        raise exc
+             ^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                      # Note: Views are made CSRF exempt from within `as_view` as to prevent
+                  
+                      # accidental removal of this exemption in cases where `dispatch` needs to
+                  
+                      # be overridden.
+                  
+                      def dispatch(self, request, *args, **kwargs):
+                  
+                          &quot;&quot;&quot;
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    exc
+                    IntegrityError(&#x27;el valor nulo en la columna «precio_usd» de la relación «api_plan» viola la restricción "not-null"\nDETAIL:  La fila que falla contiene (6, starter, null, 20, 50, 20, 0, f, f, f, f, null).&#x27;)
+                  
+                
+                  
+                    renderer_format
+                    &#x27;json&#x27;
+                  
+                
+                  
+                    request
+                    &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;
+                  
+                
+                  
+                    use_plaintext_traceback
+                    True
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\rest_framework\views.py, line 512, in dispatch
+          
+
+          
+            
+              
+                
+                
+                              # Get the appropriate handler method
+                
+                              if request.method.lower() in self.http_method_names:
+                
+                                  handler = getattr(self, request.method.lower(),
+                
+                                                    self.http_method_not_allowed)
+                
+                              else:
+                
+                                  handler = self.http_method_not_allowed
+                
+                  
+                
+                
+              
+              
+                            response = handler(request, *args, **kwargs)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                  
+                  
+                          except Exception as exc:
+                  
+                              response = self.handle_exception(exc)
+                  
+                  
+                  
+                          self.response = self.finalize_response(request, response, *args, **kwargs)
+                  
+                          return self.response
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    args
+                    ()
+                  
+                
+                  
+                    handler
+                    &lt;bound method DashboardView.get of &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;&gt;
+                  
+                
+                  
+                    kwargs
+                    {}
+                  
+                
+                  
+                    request
+                    &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;
+                  
+                
+              
+            
+            
+          
+        
+      
+        
+        
+          
+            C:\Users\elalc\Desktop\Leadbook-back-main\api\views.py, line 140, in get
+          
+
+          
+            
+              
+                
+                
+                          
+                
+                          videos_creados = listados.aggregate(total_videos=Sum(&#x27;videos_creados&#x27;))[&#x27;total_videos&#x27;] or 0
+                
+                  
+                
+                          listados_recientes = listados.order_by(&#x27;-creado_en&#x27;)[:5].values(
+                
+                              &#x27;id&#x27;, &#x27;titulo&#x27;, &#x27;tipo_propiedad&#x27;, &#x27;ciudad&#x27;, &#x27;precio&#x27;, &#x27;creado_en&#x27;
+                
+                          )
+                
+                  
+                
+                
+              
+              
+                        susc = get_suscripcion(user)
+                    ^^^^^^^^^^^^^^^^^^^^^ .
+              
+              
+                
+                  
+                          plan = susc.plan
+                  
+                  
+                  
+                          return Response({
+                  
+                              &quot;nombre_inmobiliaria&quot;: getattr(user, &#x27;nombre_inmobiliaria&#x27;, None),
+                  
+                              &quot;logo_url&quot;: getattr(user, &#x27;logo_url&#x27;, None),
+                  
+                              &quot;listados_este_mes&quot;: listados_este_mes,
+                  
+              
+              
+            
+          
+
+          
+            
+              
+                Local vars
+            
+            
+              
+                
+                  Variable
+                  Value
+                
+              
+              
+                
+                  
+                    listados
+                    &lt;QuerySet []&gt;
+                  
+                
+                  
+                    listados_este_mes
+                    0
+                  
+                
+                  
+                    listados_recientes
+                    &lt;QuerySet []&gt;
+                  
+                
+                  
+                    now
+                    datetime.datetime(2026, 4, 4, 16, 26, 40, 190319, tzinfo=datetime.timezone.utc)
+                  
+                
+                  
+                    request
+                    &lt;rest_framework.request.Request: GET &#x27;/api/dashboard/&#x27;&gt;
+                  
+                
+                  
+                    self
+                    &lt;api.views.DashboardView object at 0x00000146A19116D0&gt;
+                  
+                
+                  
+                    start_of_month
+                    datetime.datetime(2026, 4, 1, 0, 0, tzinfo=datetime.timezone.utc)
+                  
+                
+                  
+                    total_generados
+                    0
+                  
+                
+                  
+                    user
+                    &lt;Agent: Ati
+
+# Admin metricas:
+
+
+total_usuarios       : 6
+usuarios_activos_mes : 6
+total_listados       : 2
+listados_hoy         : 2
+ingresos_mes         : 0
+usuarios_por_plan    : @{starter=6; pro=0; premium=0}
+
+
+
+
+# Admin usuarios:
+
+
+total         : 6
+paginas       : 1
+pagina_actual : 1
+usuarios      : {@{id=7; email=Atilioadmin@gmail.com; nombre=Atilio; 
+                plan=starter; 
+                fecha_registro=2026-04-04T16:26:11.088431+00:00; 
+                listados_totales=0; ultimo_acceso=}, @{id=6; 
+                email=Charlyadmin@gmail.com; nombre=Charles; 
+                plan=starter; 
+                fecha_registro=2026-04-04T16:26:10.825868+00:00; 
+                listados_totales=0; ultimo_acceso=}, @{id=4; 
+                email=admin@leadbook.io; nombre=Admin LeadBook; 
+                plan=starter; 
+                fecha_registro=2026-04-04T16:13:57.482470+00:00; 
+                listados_totales=0; ultimo_acceso=}, @{id=3; 
+                email=testig_ps1@test.com; nombre=Test Agent IG; 
+                plan=starter; 
+                fecha_registro=2026-04-04T15:35:36.028114+00:00; 
+                listados_totales=0; ultimo_acceso=}...}
+
+
+
+
+# Instagram service:
+Error: {"success":false,"error":"Credenciales de Instagram no configuradas."}
+
+# Video status:
+Error: {"error":"Listado no encontrado"}

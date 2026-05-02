@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Email Notification</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Inter', Helvetica, Arial, sans-serif; background-color: #f2f2f2;">
+
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f2f2f2;">
+        <tr>
+            <td align="center">
+                
+                <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #ffffff; margin-top: 50px; margin-bottom: 50px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); overflow: hidden;">
+                    
+                    <!-- Header -->
+                    <tr>
+                        <td align="center" style="background-color: #1a1a1a; padding: 30px;">
+                            <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: 1.5px;">SUBZERO ASSETS</h1>
+                        </td>
+                    </tr>
+
+                    <!-- Body Context -->
+                    <tr>
+                        <td style="padding: 40px; color: #333333;">
+                            <h2 style="font-size: 24px; color: #1a1a1a; margin-top: 0; margin-bottom: 20px;">Nueva Propiedad Creada</h2>
+                            
+                            <p style="font-size: 16px; line-height: 1.5; color: #595959;">
+                                Has añadido exitosamente <strong>{{ property.title }}</strong> al sistema de propiedades.
+                            </p>
+
+                            <div style="background-color: #f9f9f9; padding: 20px; border-left: 4px solid #ff4d4d; margin-top: 30px; margin-bottom: 30px;">
+                                <p style="margin: 0; font-size: 18px; color: #262626;"><strong>Precio:</strong> ${{ property.price|floatformat:2 }}</p>
+                                <p style="margin: 5px 0 0 0; font-size: 16px; color: #666666;"><strong>Ubicación:</strong> {{ property.address }}</p>
+                            </div>
+
+                            <p style="font-size: 16px; line-height: 1.5; color: #595959; text-align: justify;">
+                                El proceso de generación de contenidos potenciados por IA (Video, Folleto PDF y Assets Sociales) ha iniciado. Podrás visualizar el progreso en tu dashboard dentro de la plataforma.
+                            </p>
+                            
+                            <div style="text-align: center; margin-top: 40px; margin-bottom: 10px;">
+                                <a href="http://localhost:3000/dashboard" style="background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 15px 30px; font-weight: bold; border-radius: 4px; display: inline-block; font-size: 16px;">Ver Dashboard</a>
+                            </div>
+
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td align="center" style="background-color: #e6e6e6; padding: 20px;">
+                            <p style="color: #808080; font-size: 12px; margin: 0;">&copy; 2026 SUBZERO Real Estate. Generado Automáticamente.</p>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>

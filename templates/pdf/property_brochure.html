@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<style>
+  @page { margin: 0mm; size: A4; }
+  body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+
+  .cover-img { width: 100%; height: 260px; display: block; }
+
+  .badge-row { background: #e53e3e; padding: 8px 16px; }
+  .badge-text { color: white; font-size: 12px; font-weight: bold; letter-spacing: 2px; }
+
+  .precio-row { background: #111111; padding: 16px 24px; }
+  .precio-text { color: white; font-size: 26px; font-weight: bold; }
+  .ciudad-text { color: #aaaaaa; font-size: 12px; margin-top: 4px; }
+
+  .stats-table { width: 100%; border-collapse: collapse; background: #1e3a5f; }
+  .stat-cell { 
+    text-align: center; padding: 12px 4px; 
+    border-right: 1px solid #2d5080; 
+    width: 20%;
+  }
+  .stat-value { color: white; font-size: 20px; font-weight: bold; display: block; }
+  .stat-label { color: #94b8d8; font-size: 9px; margin-top: 3px; display: block; }
+
+  .content-area { padding: 20px 24px; background: white; }
+  .section-title { 
+    font-size: 15px; font-weight: bold; 
+    color: #1e3a5f; margin-bottom: 10px; 
+    margin-top: 16px;
+  }
+  .descripcion-text { 
+    font-size: 10.5px; line-height: 1.5; 
+    color: #333333; text-align: justify;
+  }
+  .descripcion-text p { margin-bottom: 10px; }
+
+  .chip { 
+    display: inline-block;
+    border: 1px solid #cccccc; border-radius: 12px;
+    padding: 3px 10px; font-size: 9.5px; 
+    color: #444444; margin: 2px;
+  }
+
+  .agente-table { 
+    width: 100%; border-collapse: collapse; 
+    border-top: 1px solid #eeeeee; 
+    margin-top: 16px;
+  }
+  .agente-cell { padding: 14px 24px; vertical-align: middle; }
+  .agente-nombre { font-size: 12px; font-weight: bold; color: #111; }
+  .agente-sub { font-size: 10px; color: #666666; margin-top: 2px; }
+  .generado-cell { 
+    text-align: right; padding: 14px 24px; 
+    vertical-align: middle; color: #999999; font-size: 9px;
+  }
+
+  .galeria-page { padding: 24px; page-break-before: always; }
+  .foto-main { width: 100%; height: 200px; display: block; margin-bottom: 6px; }
+  .fotos-table { width: 100%; border-collapse: separate; border-spacing: 4px; }
+  .foto-thumb { width: 100%; height: 130px; display: block; }
+</style>
+</head>
+<body>
+
+{% if portada_url %}
+<img class="cover-img" src="{{ portada_url }}" />
+{% endif %}
+
+<div class="badge-row">
+  <span class="badge-text">{{ operacion|upper }}</span>
+</div>
+
+<div class="precio-row">
+  <div class="precio-text">{{ moneda }} {{ precio }}</div>
+  <div class="ciudad-text">{{ ciudad }}</div>
+</div>
+
+<table class="stats-table">
+  <tr>
+    {% if recamaras %}
+    <td class="stat-cell">
+      <span class="stat-value">{{ recamaras }}</span>
+      <span class="stat-label">Recámaras</span>
+    </td>
+    {% endif %}
+    {% if banos %}
+    <td class="stat-cell">
+      <span class="stat-value">{{ banos }}</span>
+      <span class="stat-label">Baños</span>
+    </td>
+    {% endif %}
+    {% if superficie_cubierta %}
+    <td class="stat-cell">
+      <span class="stat-value">{{ superficie_cubierta }}</span>
+      <span class="stat-label">m² Construidos</span>
+    </td>
+    {% endif %}
+    {% if superficie_total %}
+    <td class="stat-cell">
+      <span class="stat-value">{{ superficie_total }}</span>
+      <span class="stat-label">m² Terreno</span>
+    </td>
+    {% endif %}
+    {% if estacionamientos %}
+    <td class="stat-cell" style="border-right:none;">
+      <span class="stat-value">{{ estacionamientos }}</span>
+      <span class="stat-label">Estacion.</span>
+    </td>
+    {% endif %}
+  </tr>
+</table>
+
+<div class="content-area">
+
+  <div class="section-title">Descripción</div>
+  <div class="descripcion-text">
+    {{ descripcion|linebreaks }}
+  </div>
+
+{% if amenidades %}
+<div style="font-size:14px;font-weight:bold;color:#1e3a5f;margin:14px 0 8px 0;">
+  Amenidades
+</div>
+<table style="border-collapse:separate; border-spacing:4px 4px;">
+  <tr>
+  {% for a in amenidades %}
+    <td style="border:1px solid #999999; border-radius:10px; padding:4px 12px; 
+               font-size:9.5px; color:#444444; white-space:nowrap;
+               background-color:#ffffff;">
+      {{ a }}
+    </td>
+    {% if forloop.counter|divisibleby:5 and not forloop.last %}</tr><tr>{% endif %}
+  {% endfor %}
+  </tr>
+</table>
+{% endif %}
+
+  <table class="agente-table">
+    <tr>
+      <td class="agente-cell">
+        <div class="agente-nombre">{{ agente_nombre }}</div>
+        <div class="agente-sub">{{ agencia_nombre }}</div>
+        <div class="agente-sub">{{ agente_telefono }} | {{ agente_email }}</div>
+      </td>
+      <td class="generado-cell">
+        {% if qr_code %}
+        <img src="{{ qr_code }}" style="width:60px;height:60px;display:block;margin-left:auto;" />
+        {% endif %}
+        <div style="font-size:9px;color:#999999;text-align:right;margin-top:4px;">
+          Generado con LeadBook
+        </div>
+      </td>
+    </tr>
+  </table>
+
+</div>
+
+{% if fotos_recorrido %}
+<div class="galeria-page">
+  <div class="section-title">Galería de Fotos</div>
+  
+  {% if fotos_recorrido.0 %}
+  <img class="foto-main" src="{{ fotos_recorrido.0 }}" />
+  {% endif %}
+
+  <table class="fotos-table">
+    {% if fotos_recorrido|length > 1 %}
+    <tr>
+      <td style="width:50%; padding:2px;">
+        <img class="foto-thumb" src="{{ fotos_recorrido.1 }}" />
+      </td>
+      <td style="width:50%; padding:2px;">
+        {% if fotos_recorrido|length > 2 %}
+        <img class="foto-thumb" src="{{ fotos_recorrido.2 }}" />
+        {% endif %}
+      </td>
+    </tr>
+    {% endif %}
+    {% if fotos_recorrido|length > 3 %}
+    <tr>
+      <td style="padding:2px;">
+        <img class="foto-thumb" src="{{ fotos_recorrido.3 }}" />
+      </td>
+      <td style="padding:2px;">
+        {% if fotos_recorrido|length > 4 %}
+        <img class="foto-thumb" src="{{ fotos_recorrido.4 }}" />
+        {% endif %}
+      </td>
+    </tr>
+    {% endif %}
+  </table>
+</div>
+{% endif %}
+
+</body>
+</html>

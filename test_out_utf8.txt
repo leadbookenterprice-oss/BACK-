@@ -1,0 +1,587 @@
+﻿Requirement already satisfied: Django<5.0,>=4.2 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 1)) (4.2.29)
+Requirement already satisfied: djangorestframework in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 2)) (3.17.1)
+Requirement already satisfied: djangorestframework-simplejwt in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 3)) (5.5.1)
+Requirement already satisfied: django-cors-headers in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 4)) (4.9.0)
+Requirement already satisfied: psycopg==3.1.18 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 5)) (3.1.18)
+Requirement already satisfied: celery==5.3.6 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 6)) (5.3.6)
+Requirement already satisfied: redis==5.0.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 7)) (5.0.1)
+Requirement already satisfied: xhtml2pdf in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 8)) (0.2.17)
+Requirement already satisfied: pillow in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 9)) (12.2.0)
+Requirement already satisfied: python-dotenv in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 10)) (1.2.2)
+Requirement already satisfied: requests in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 11)) (2.33.1)
+Requirement already satisfied: groq in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 12)) (1.1.2)
+Requirement already satisfied: google-generativeai in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 13)) (0.8.6)
+Requirement already satisfied: python-decouple in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 14)) (3.8)
+Requirement already satisfied: stripe in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 15)) (15.0.1)
+Requirement already satisfied: dj-database-url==2.1.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 16)) (2.1.0)
+Requirement already satisfied: psycopg2-binary==2.9.9 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 17)) (2.9.9)
+Requirement already satisfied: whitenoise==6.6.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 18)) (6.6.0)
+Requirement already satisfied: gunicorn==21.2.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from -r requirements.txt (line 19)) (21.2.0)
+Requirement already satisfied: typing-extensions>=4.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from psycopg==3.1.18->-r requirements.txt (line 5)) (4.15.0)
+Requirement already satisfied: tzdata in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from psycopg==3.1.18->-r requirements.txt (line 5)) (2025.3)
+Requirement already satisfied: billiard<5.0,>=4.2.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from celery==5.3.6->-r requirements.txt (line 6)) (4.2.4)
+Requirement already satisfied: click-didyoumean>=0.3.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from celery==5.3.6->-r requirements.txt (line 6)) (0.3.1)
+Requirement already satisfied: click-plugins>=1.1.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from celery==5.3.6->-r requirements.txt (line 6)) (1.1.1.2)
+Requirement already satisfied: click-repl>=0.2.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from celery==5.3.6->-r requirements.txt (line 6)) (0.3.0)
+Requirement already satisfied: click<9.0,>=8.1.2 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from celery==5.3.6->-r requirements.txt (line 6)) (8.3.1)
+Requirement already satisfied: kombu<6.0,>=5.3.4 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from celery==5.3.6->-r requirements.txt (line 6)) (5.6.2)
+Requirement already satisfied: python-dateutil>=2.8.2 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from celery==5.3.6->-r requirements.txt (line 6)) (2.9.0.post0)
+Requirement already satisfied: vine<6.0,>=5.1.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from celery==5.3.6->-r requirements.txt (line 6)) (5.1.0)
+Requirement already satisfied: packaging in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from gunicorn==21.2.0->-r requirements.txt (line 19)) (26.0)
+Requirement already satisfied: asgiref<4,>=3.6.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from Django<5.0,>=4.2->-r requirements.txt (line 1)) (3.11.1)
+Requirement already satisfied: sqlparse>=0.3.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from Django<5.0,>=4.2->-r requirements.txt (line 1)) (0.5.5)
+Requirement already satisfied: pyjwt>=1.7.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from djangorestframework-simplejwt->-r requirements.txt (line 3)) (2.12.1)
+Requirement already satisfied: arabic-reshaper>=3.0.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from xhtml2pdf->-r requirements.txt (line 8)) (3.0.0)
+Requirement already satisfied: html5lib>=1.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from xhtml2pdf->-r requirements.txt (line 8)) (1.1)
+Requirement already satisfied: pyHanko>=0.12.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from xhtml2pdf->-r requirements.txt (line 8)) (0.34.1)
+Requirement already satisfied: pyhanko-certvalidator>=0.19.5 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from xhtml2pdf->-r requirements.txt (line 8)) (0.30.2)
+Requirement already satisfied: pypdf>=3.1.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from xhtml2pdf->-r requirements.txt (line 8)) (6.9.2)
+Requirement already satisfied: python-bidi>=0.5.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from xhtml2pdf->-r requirements.txt (line 8)) (0.6.7)
+Requirement already satisfied: reportlab<5,>=4.0.4 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from xhtml2pdf->-r requirements.txt (line 8)) (4.4.10)
+Requirement already satisfied: svglib>=1.2.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from xhtml2pdf->-r requirements.txt (line 8)) (1.6.0)
+Requirement already satisfied: charset_normalizer<4,>=2 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from requests->-r requirements.txt (line 11)) (3.4.6)
+Requirement already satisfied: idna<4,>=2.5 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from requests->-r requirements.txt (line 11)) (3.11)
+Requirement already satisfied: urllib3<3,>=1.26 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from requests->-r requirements.txt (line 11)) (2.6.3)
+Requirement already satisfied: certifi>=2023.5.7 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from requests->-r requirements.txt (line 11)) (2026.2.25)
+Requirement already satisfied: anyio<5,>=3.5.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from groq->-r requirements.txt (line 12)) (4.13.0)
+Requirement already satisfied: distro<2,>=1.7.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from groq->-r requirements.txt (line 12)) (1.9.0)
+Requirement already satisfied: httpx<1,>=0.23.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from groq->-r requirements.txt (line 12)) (0.28.1)
+Requirement already satisfied: pydantic<3,>=1.9.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from groq->-r requirements.txt (line 12)) (2.12.5)
+Requirement already satisfied: sniffio in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from groq->-r requirements.txt (line 12)) (1.3.1)
+Requirement already satisfied: google-ai-generativelanguage==0.6.15 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-generativeai->-r requirements.txt (line 13)) (0.6.15)
+Requirement already satisfied: google-api-core in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-generativeai->-r requirements.txt (line 13)) (2.30.1)
+Requirement already satisfied: google-api-python-client in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-generativeai->-r requirements.txt (line 13)) (2.193.0)
+Requirement already satisfied: google-auth>=2.15.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-generativeai->-r requirements.txt (line 13)) (2.49.1)
+Requirement already satisfied: protobuf in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-generativeai->-r requirements.txt (line 13)) (5.29.6)
+Requirement already satisfied: tqdm in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-generativeai->-r requirements.txt (line 13)) (4.67.3)
+Requirement already satisfied: proto-plus<2.0.0dev,>=1.22.3 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-ai-generativelanguage==0.6.15->google-generativeai->-r requirements.txt (line 13)) (1.27.2)
+Requirement already satisfied: colorama in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from click<9.0,>=8.1.2->celery==5.3.6->-r requirements.txt (line 6)) (0.4.6)
+Requirement already satisfied: prompt-toolkit>=3.0.36 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from click-repl>=0.2.0->celery==5.3.6->-r requirements.txt (line 6)) (3.0.52)
+Requirement already satisfied: googleapis-common-protos<2.0.0,>=1.63.2 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-api-core->google-generativeai->-r requirements.txt (line 13)) (1.73.1)
+Requirement already satisfied: pyasn1-modules>=0.2.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-auth>=2.15.0->google-generativeai->-r requirements.txt (line 13)) (0.4.2)
+Requirement already satisfied: cryptography>=38.0.3 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-auth>=2.15.0->google-generativeai->-r requirements.txt (line 13)) (46.0.6)
+Requirement already satisfied: six>=1.9 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from html5lib>=1.1->xhtml2pdf->-r requirements.txt (line 8)) (1.17.0)
+Requirement already satisfied: webencodings in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from html5lib>=1.1->xhtml2pdf->-r requirements.txt (line 8)) (0.5.1)
+Requirement already satisfied: httpcore==1.* in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from httpx<1,>=0.23.0->groq->-r requirements.txt (line 12)) (1.0.9)
+Requirement already satisfied: h11>=0.16 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from httpcore==1.*->httpx<1,>=0.23.0->groq->-r requirements.txt (line 12)) (0.16.0)
+Requirement already satisfied: amqp<6.0.0,>=5.1.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from kombu<6.0,>=5.3.4->celery==5.3.6->-r requirements.txt (line 6)) (5.3.1)
+Requirement already satisfied: annotated-types>=0.6.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pydantic<3,>=1.9.0->groq->-r requirements.txt (line 12)) (0.7.0)
+Requirement already satisfied: pydantic-core==2.41.5 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pydantic<3,>=1.9.0->groq->-r requirements.txt (line 12)) (2.41.5)
+Requirement already satisfied: typing-inspection>=0.4.2 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pydantic<3,>=1.9.0->groq->-r requirements.txt (line 12)) (0.4.2)
+Requirement already satisfied: asn1crypto>=1.5.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pyHanko>=0.12.1->xhtml2pdf->-r requirements.txt (line 8)) (1.5.1)
+Requirement already satisfied: tzlocal>=4.3 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pyHanko>=0.12.1->xhtml2pdf->-r requirements.txt (line 8)) (5.3.1)
+Requirement already satisfied: pyyaml>=6.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pyHanko>=0.12.1->xhtml2pdf->-r requirements.txt (line 8)) (6.0.3)
+Requirement already satisfied: lxml>=5.4.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pyHanko>=0.12.1->xhtml2pdf->-r requirements.txt (line 8)) (6.0.2)
+Requirement already satisfied: oscrypto>=1.1.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pyhanko-certvalidator>=0.19.5->xhtml2pdf->-r requirements.txt (line 8)) (1.3.0)
+Requirement already satisfied: uritools>=3.0.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pyhanko-certvalidator>=0.19.5->xhtml2pdf->-r requirements.txt (line 8)) (6.0.1)
+Requirement already satisfied: cssselect2>=0.2.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from svglib>=1.2.1->xhtml2pdf->-r requirements.txt (line 8)) (0.9.0)
+Requirement already satisfied: rlpycairo>=0.4.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from svglib>=1.2.1->xhtml2pdf->-r requirements.txt (line 8)) (0.4.0)
+Requirement already satisfied: tinycss2>=0.6.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from svglib>=1.2.1->xhtml2pdf->-r requirements.txt (line 8)) (1.5.1)
+Requirement already satisfied: httplib2<1.0.0,>=0.19.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-api-python-client->google-generativeai->-r requirements.txt (line 13)) (0.31.2)
+Requirement already satisfied: google-auth-httplib2<1.0.0,>=0.2.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-api-python-client->google-generativeai->-r requirements.txt (line 13)) (0.3.1)
+Requirement already satisfied: uritemplate<5,>=3.0.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-api-python-client->google-generativeai->-r requirements.txt (line 13)) (4.2.0)
+Requirement already satisfied: cffi>=2.0.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from cryptography>=38.0.3->google-auth>=2.15.0->google-generativeai->-r requirements.txt (line 13)) (2.0.0)
+Requirement already satisfied: grpcio<2.0.0,>=1.33.2 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0dev,>=1.34.1->google-ai-generativelanguage==0.6.15->google-generativeai->-r requirements.txt (line 13)) (1.80.0)
+Requirement already satisfied: grpcio-status<2.0.0,>=1.33.2 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0dev,>=1.34.1->google-ai-generativelanguage==0.6.15->google-generativeai->-r requirements.txt (line 13)) (1.71.2)
+Requirement already satisfied: pyparsing<4,>=3.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from httplib2<1.0.0,>=0.19.0->google-api-python-client->google-generativeai->-r requirements.txt (line 13)) (3.3.2)
+Requirement already satisfied: wcwidth in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from prompt-toolkit>=3.0.36->click-repl>=0.2.0->celery==5.3.6->-r requirements.txt (line 6)) (0.6.0)
+Requirement already satisfied: pyasn1<0.7.0,>=0.6.1 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from pyasn1-modules>=0.2.1->google-auth>=2.15.0->google-generativeai->-r requirements.txt (line 13)) (0.6.3)
+Requirement already satisfied: pycairo>=1.20.0 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from rlpycairo>=0.4.0->svglib>=1.2.1->xhtml2pdf->-r requirements.txt (line 8)) (1.29.0)
+Requirement already satisfied: freetype-py>=2.3 in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from rlpycairo>=0.4.0->svglib>=1.2.1->xhtml2pdf->-r requirements.txt (line 8)) (2.5.1)
+Requirement already satisfied: pycparser in c:\users\atili\onedrive\documents\leadbook-\leadbook-back\leadbook-back\venv\lib\site-packages (from cffi>=2.0.0->cryptography>=38.0.3->google-auth>=2.15.0->google-generativeai->-r requirements.txt (line 13)) (3.0)
+pip : 
+En línea: 1 Carácter: 24
++ ... s\activate; pip 
+install -r 
+requirements.txt > 
+test_out.txt 2>&1; pyth 
+...
++                 ~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (:  
+  String) [], RemoteExc   
+ eption
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+[notice] A new release of 
+pip is available: 25.0.1 
+-> 26.0.1
+[notice] To update, run: 
+python.exe -m pip install 
+--upgrade pip
+i=o^uo3y*eula_#climxfq+_vw+9+c$ff$tj$fqo(!vdivib#+
+python : Traceback (most 
+recent call last):
+En línea: 1 Carácter: 206
++ ... t.txt 2>&1; python 
+manage.py check --deploy 
+>> test_out.txt 2>&1; pyt 
+...
++                 ~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (T  
+  raceback (most recent   
+  call last)::String)     
+[], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\manage.py", line 22, in 
+<module>
+    main()
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\manage.py", line 18, in 
+main
+    execute_from_command_l
+ine(sys.argv)
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\core\management\__in
+it__.py", line 442, in 
+execute_from_command_line
+    utility.execute()
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\core\management\__in
+it__.py", line 382, in 
+execute
+    
+settings.INSTALLED_APPS
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 102, in __getattr__
+    self._setup(name)
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 89, in _setup
+    self._wrapped = 
+Settings(settings_module)
+                    
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 217, in __init__
+    mod = importlib.import
+_module(self.SETTINGS_MODU
+LE)
+          ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^
+  File "C:\Users\atili\App
+Data\Local\Programs\Python
+\Python312\Lib\importlib\_
+_init__.py", line 90, in 
+import_module
+    return _bootstrap._gcd
+_import(name[level:], 
+package, level)
+           ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^
+  File "<frozen 
+importlib._bootstrap>", 
+line 1387, in _gcd_import
+  File "<frozen 
+importlib._bootstrap>", 
+line 1360, in 
+_find_and_load
+  File "<frozen 
+importlib._bootstrap>", 
+line 1331, in 
+_find_and_load_unlocked
+  File "<frozen 
+importlib._bootstrap>", 
+line 935, in 
+_load_unlocked
+  File "<frozen importlib.
+_bootstrap_external>", 
+line 999, in exec_module
+  File "<frozen 
+importlib._bootstrap>", 
+line 488, in 
+_call_with_frames_removed
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\subzero_core\settings.py
+", line 25, in <module>
+    SECRET_KEY = 
+config('SECRET_KEY')
+                 
+^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 248, in 
+__call__
+    return 
+self.config(*args, 
+**kwargs)
+           ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 107, in 
+__call__
+    return 
+self.get(*args, **kwargs)
+           
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 92, in 
+get
+    raise 
+UndefinedValueError('{} 
+not found. Declare it as 
+envvar or define a 
+default 
+value.'.format(option))
+decouple.UndefinedValueErr
+or: SECRET_KEY not found. 
+Declare it as envvar or 
+define a default value.
+python : Traceback (most 
+recent call last):
+En línea: 1 Carácter: 260
++ ... t.txt 2>&1; python 
+manage.py migrate 
+--noinput >> test_out.txt 
+2>&1;  ...
++                 ~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (T  
+  raceback (most recent   
+  call last)::String)     
+[], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\manage.py", line 22, in 
+<module>
+    main()
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\manage.py", line 18, in 
+main
+    execute_from_command_l
+ine(sys.argv)
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\core\management\__in
+it__.py", line 442, in 
+execute_from_command_line
+    utility.execute()
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\core\management\__in
+it__.py", line 382, in 
+execute
+    
+settings.INSTALLED_APPS
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 102, in __getattr__
+    self._setup(name)
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 89, in _setup
+    self._wrapped = 
+Settings(settings_module)
+                    
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 217, in __init__
+    mod = importlib.import
+_module(self.SETTINGS_MODU
+LE)
+          ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^
+  File "C:\Users\atili\App
+Data\Local\Programs\Python
+\Python312\Lib\importlib\_
+_init__.py", line 90, in 
+import_module
+    return _bootstrap._gcd
+_import(name[level:], 
+package, level)
+           ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^
+  File "<frozen 
+importlib._bootstrap>", 
+line 1387, in _gcd_import
+  File "<frozen 
+importlib._bootstrap>", 
+line 1360, in 
+_find_and_load
+  File "<frozen 
+importlib._bootstrap>", 
+line 1331, in 
+_find_and_load_unlocked
+  File "<frozen 
+importlib._bootstrap>", 
+line 935, in 
+_load_unlocked
+  File "<frozen importlib.
+_bootstrap_external>", 
+line 999, in exec_module
+  File "<frozen 
+importlib._bootstrap>", 
+line 488, in 
+_call_with_frames_removed
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\subzero_core\settings.py
+", line 25, in <module>
+    SECRET_KEY = 
+config('SECRET_KEY')
+                 
+^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 248, in 
+__call__
+    return 
+self.config(*args, 
+**kwargs)
+           ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 107, in 
+__call__
+    return 
+self.get(*args, **kwargs)
+           
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 92, in 
+get
+    raise 
+UndefinedValueError('{} 
+not found. Declare it as 
+envvar or define a 
+default 
+value.'.format(option))
+decouple.UndefinedValueErr
+or: SECRET_KEY not found. 
+Declare it as envvar or 
+define a default value.
+python : Traceback (most 
+recent call last):
+En línea: 1 Carácter: 317
++ ... t.txt 2>&1; python 
+manage.py collectstatic 
+--noinput >> test_out.txt 
+ ...
++                 ~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (T  
+  raceback (most recent   
+  call last)::String)     
+[], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\manage.py", line 22, in 
+<module>
+    main()
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\manage.py", line 18, in 
+main
+    execute_from_command_l
+ine(sys.argv)
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\core\management\__in
+it__.py", line 442, in 
+execute_from_command_line
+    utility.execute()
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\core\management\__in
+it__.py", line 382, in 
+execute
+    
+settings.INSTALLED_APPS
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 102, in __getattr__
+    self._setup(name)
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 89, in _setup
+    self._wrapped = 
+Settings(settings_module)
+                    
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+jango\conf\__init__.py", 
+line 217, in __init__
+    mod = importlib.import
+_module(self.SETTINGS_MODU
+LE)
+          ^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^
+  File "C:\Users\atili\App
+Data\Local\Programs\Python
+\Python312\Lib\importlib\_
+_init__.py", line 90, in 
+import_module
+    return _bootstrap._gcd
+_import(name[level:], 
+package, level)
+           ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^
+  File "<frozen 
+importlib._bootstrap>", 
+line 1387, in _gcd_import
+  File "<frozen 
+importlib._bootstrap>", 
+line 1360, in 
+_find_and_load
+  File "<frozen 
+importlib._bootstrap>", 
+line 1331, in 
+_find_and_load_unlocked
+  File "<frozen 
+importlib._bootstrap>", 
+line 935, in 
+_load_unlocked
+  File "<frozen importlib.
+_bootstrap_external>", 
+line 999, in exec_module
+  File "<frozen 
+importlib._bootstrap>", 
+line 488, in 
+_call_with_frames_removed
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\subzero_core\settings.py
+", line 25, in <module>
+    SECRET_KEY = 
+config('SECRET_KEY')
+                 
+^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 248, in 
+__call__
+    return 
+self.config(*args, 
+**kwargs)
+           ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 107, in 
+__call__
+    return 
+self.get(*args, **kwargs)
+           
+^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\atili\One
+Drive\Documents\LeadBook-\
+LeadBook-back\Leadbook-bac
+k\venv\Lib\site-packages\d
+ecouple.py", line 92, in 
+get
+    raise 
+UndefinedValueError('{} 
+not found. Declare it as 
+envvar or define a 
+default 
+value.'.format(option))
+decouple.UndefinedValueErr
+or: SECRET_KEY not found. 
+Declare it as envvar or 
+define a default value.
