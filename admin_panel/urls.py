@@ -38,6 +38,7 @@ urlpatterns = [
     path('usuarios/', views.admin_users_list, name='admin_usuarios_list'),
     path('users/<int:pk>/', views.admin_users_detail, name='admin_users_detail'),
     path('usuarios/<int:pk>/detalle/', views.admin_users_detail, name='admin_usuarios_detail'),
+    path('usuarios/<int:pk>/', views.admin_usuario_eliminar, name='admin_usuarios_eliminar'),
     path('users/<int:pk>/info-general/', views.admin_user_info_general, name='admin_user_info_general'),
     path('users/<int:pk>/api-asignada/', views.admin_user_api_pool, name='admin_user_api_pool'),
     path('users/<int:pk>/delete/', views.admin_users_hard_delete, name='admin_users_hard_delete'),

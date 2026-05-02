@@ -492,6 +492,12 @@ def admin_usuario_restaurar(request, pk):
         return Response({"error": "No encontrado"}, status=404)
 
 
+@api_view(['POST', 'DELETE'])
+@permission_classes([AllowAny])
+def admin_usuario_eliminar(request, pk):
+    from api.views_admin import admin_usuario_eliminar as _v
+    return _v(request._request, user_id=pk)
+
 @api_view(['PUT'])
 @permission_classes([AllowAny])
 def admin_usuario_cambiar_plan(request, pk):
