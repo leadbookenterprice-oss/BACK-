@@ -176,6 +176,7 @@ def admin_api_keys_bulk_create(request):
         servicio = data.get('service') or data.get('servicio')
         api_key_str = data.get('api_key') or data.get('key')
         limit = data.get('daily_limit', 1500)
+        label_str = data.get('label')
         
         if servicio and api_key_str:
             # Avoid exact duplicates
@@ -184,15 +185,20 @@ def admin_api_keys_bulk_create(request):
                     servicio=servicio,
                     api_key=api_key_str,
                     daily_limit=limit,
+                    label=label_str,
                     status='available'
                 ))
                 
+    counts = {}
     if new_keys:
         APIKey.objects.bulk_create(new_keys)
+        for k in new_keys:
+            counts[k.servicio] = counts.get(k.servicio, 0) + 1
         
     return Response({
         "status": "created", 
         "count": len(new_keys), 
+        "counts_by_service": counts,
         "ignored": len(keys_data) - len(new_keys)
     }, status=201)
 
