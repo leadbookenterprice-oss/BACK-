@@ -13,6 +13,7 @@ urlpatterns = [
     path('api-keys/<int:pk>/reassign/', views.admin_api_keys_reassign, name='admin_api_keys_reassign'),
 
     # ── Pool (aliases used by the old frontend) ───────────────────────────────
+    path('apikeys/pool/bulk/', views.admin_api_keys_bulk_create, name='admin_apikeys_pool_bulk'),
     path('apikeys/pool/', views.admin_api_keys_list, name='admin_apikeys_pool'),
     path('apikeys/pool/crear/', views.admin_api_keys_create, name='admin_apikeys_pool_crear'),
     path('apikeys/pool/<int:pk>/', views.admin_api_keys_detail, name='admin_apikeys_pool_detail'),

@@ -160,6 +160,42 @@ def admin_api_keys_create(request):
     )
     return Response({"id": key.id, "status": "created"}, status=201)
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_api_keys_bulk_create(request):
+    """Crear múltiples keys de forma masiva."""
+    if not _check_admin(request):
+        return Response({'error': 'Forbidden'}, status=403)
+        
+    keys_data = request.data.get('keys', [])
+    if not keys_data:
+        return Response({"error": "No se enviaron keys"}, status=400)
+        
+    new_keys = []
+    for data in keys_data:
+        servicio = data.get('service') or data.get('servicio')
+        api_key_str = data.get('api_key') or data.get('key')
+        limit = data.get('daily_limit', 1500)
+        
+        if servicio and api_key_str:
+            # Avoid exact duplicates
+            if not APIKey.objects.filter(api_key=api_key_str, servicio=servicio).exists():
+                new_keys.append(APIKey(
+                    servicio=servicio,
+                    api_key=api_key_str,
+                    daily_limit=limit,
+                    status='available'
+                ))
+                
+    if new_keys:
+        APIKey.objects.bulk_create(new_keys)
+        
+    return Response({
+        "status": "created", 
+        "count": len(new_keys), 
+        "ignored": len(keys_data) - len(new_keys)
+    }, status=201)
+
 @api_view(['PATCH', 'DELETE'])
 @permission_classes([AllowAny])
 def admin_api_keys_detail(request, pk):
