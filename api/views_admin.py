@@ -583,3 +583,110 @@ def admin_bundles_stats(request):
 
     from .services.pool_service import APIPoolService
     return Response(APIPoolService.get_pool_stats())
+
+
+# ─── Librería de Audio (VideoMusic + VideoSFX) ───────────────────────────────
+
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def admin_audio_music(request):
+    """Lista o sube música de fondo para los videos."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=403)
+
+    from .models import VideoMusic
+    if request.method == 'GET':
+        tracks = VideoMusic.objects.all().order_by('-creado_en')
+        data = [{
+            'id': t.id,
+            'nombre': t.nombre,
+            'duracion_segundos': t.duracion_segundos,
+            'activo': t.activo,
+            'url': request.build_absolute_uri(t.archivo.url) if t.archivo else None,
+            'creado_en': t.creado_en,
+        } for t in tracks]
+        return Response(data)
+
+    # POST: subir nueva pista
+    archivo = request.FILES.get('archivo')
+    nombre = request.data.get('nombre', archivo.name if archivo else 'Sin nombre')
+    duracion = request.data.get('duracion_segundos', 0)
+    if not archivo:
+        return Response({'error': 'No se envió archivo'}, status=400)
+    track = VideoMusic.objects.create(nombre=nombre, archivo=archivo, duracion_segundos=duracion)
+    return Response({'success': True, 'id': track.id, 'nombre': track.nombre}, status=201)
+
+
+@api_view(['DELETE', 'PATCH'])
+@permission_classes([AllowAny])
+def admin_audio_music_detail(request, pk):
+    """Elimina o activa/desactiva una pista de música."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=403)
+    from .models import VideoMusic
+    try:
+        track = VideoMusic.objects.get(pk=pk)
+    except VideoMusic.DoesNotExist:
+        return Response({'error': 'No encontrado'}, status=404)
+
+    if request.method == 'DELETE':
+        track.archivo.delete(save=False)
+        track.delete()
+        return Response({'success': True})
+
+    # PATCH: toggle activo
+    track.activo = not track.activo
+    track.save(update_fields=['activo'])
+    return Response({'success': True, 'activo': track.activo})
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def admin_audio_sfx(request):
+    """Lista o sube efectos de sonido (SFX)."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=403)
+
+    from .models import VideoSFX
+    if request.method == 'GET':
+        sfx_list = VideoSFX.objects.all().order_by('-creado_en')
+        data = [{
+            'id': s.id,
+            'nombre': s.nombre,
+            'tipo': s.tipo,
+            'activo': s.activo,
+            'url': request.build_absolute_uri(s.archivo.url) if s.archivo else None,
+            'creado_en': s.creado_en,
+        } for s in sfx_list]
+        return Response(data)
+
+    # POST: subir nuevo SFX
+    archivo = request.FILES.get('archivo')
+    nombre = request.data.get('nombre', archivo.name if archivo else 'Sin nombre')
+    tipo = request.data.get('tipo', 'other')
+    if not archivo:
+        return Response({'error': 'No se envió archivo'}, status=400)
+    sfx = VideoSFX.objects.create(nombre=nombre, tipo=tipo, archivo=archivo)
+    return Response({'success': True, 'id': sfx.id, 'nombre': sfx.nombre}, status=201)
+
+
+@api_view(['DELETE', 'PATCH'])
+@permission_classes([AllowAny])
+def admin_audio_sfx_detail(request, pk):
+    """Elimina o activa/desactiva un SFX."""
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=403)
+    from .models import VideoSFX
+    try:
+        sfx = VideoSFX.objects.get(pk=pk)
+    except VideoSFX.DoesNotExist:
+        return Response({'error': 'No encontrado'}, status=404)
+
+    if request.method == 'DELETE':
+        sfx.archivo.delete(save=False)
+        sfx.delete()
+        return Response({'success': True})
+
+    sfx.activo = not sfx.activo
+    sfx.save(update_fields=['activo'])
+    return Response({'success': True, 'activo': sfx.activo})

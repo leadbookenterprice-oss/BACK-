@@ -20,6 +20,7 @@ from .views_admin import (
     admin_pool_estado, admin_alerts_read, admin_health_check, admin_enviar_email,
     admin_bundles_list, admin_bundles_crear, admin_bundles_detail,
     admin_bundles_asignar, admin_bundles_liberar, admin_bundles_stats,
+    admin_audio_music, admin_audio_music_detail, admin_audio_sfx, admin_audio_sfx_detail,
 )
 
 router = DefaultRouter()
@@ -111,4 +112,10 @@ urlpatterns = [
     path('admin/bundles/<int:bundle_id>/', admin_bundles_detail),
     path('admin/bundles/<int:bundle_id>/asignar/', admin_bundles_asignar),
     path('admin/bundles/<int:bundle_id>/liberar/', admin_bundles_liberar),
+
+    # Librería de Audio
+    path('admin/audio/music/', admin_audio_music),
+    path('admin/audio/music/<int:pk>/', admin_audio_music_detail),
+    path('admin/audio/sfx/', admin_audio_sfx),
+    path('admin/audio/sfx/<int:pk>/', admin_audio_sfx_detail),
 ]
