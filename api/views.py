@@ -1908,6 +1908,41 @@ def conexiones_init(request):
         }, status=500)
 
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def conexiones_eliminar(request):
+    """
+    Elimina el perfil del usuario en UploadPost (desvincula todas las redes y libera el límite de la API).
+    """
+    try:
+        from api.pool_manager import get_api_key
+        user = request.user
+        username = f"leadbook_{user.id}"
+        api_key = get_api_key(user, 'uploadpost')
+        
+        if not api_key:
+            return Response({"success": False, "error": "No se encontró API Key vinculada para este usuario"}, status=400)
+            
+        headers = {
+            "Authorization": f"Apikey {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        resp = http_requests.delete(
+            "https://api.upload-post.com/api/uploadposts/users",
+            headers=headers,
+            json={"username": username},
+            timeout=10
+        )
+        
+        if resp.status_code in [200, 204]:
+            return Response({"success": True, "message": "Perfil eliminado. Podés volver a vincular tus cuentas."})
+        else:
+            return Response({"success": False, "error": f"Error al eliminar: {resp.text[:200]}"}, status=400)
+            
+    except Exception as e:
+        return Response({"success": False, "error": f"Error interno: {str(e)[:100]}"}, status=500)
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def conexiones_estado(request):

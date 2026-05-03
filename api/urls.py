@@ -98,6 +98,7 @@ urlpatterns = [
     # Conexiones Redes (UploadPost)
     path('conexiones/init/', views.conexiones_init),
     path('conexiones/estado/', views.conexiones_estado),
+    path('conexiones/eliminar/', views.conexiones_eliminar),
 
     # Debug / Diagnóstico
     path('debug/email-check/', views.debug_email_check, name='debug_email_check'),
