@@ -1860,9 +1860,16 @@ def conexiones_init(request):
         print(f"[conexiones_init] create_profile status={create_resp.status_code}", flush=True)
         # 200 o 409 (ya existe) son aceptables
         if create_resp.status_code not in [200, 201, 409]:
+            err_text = create_resp.text[:200]
+            if "PROFILE_LIMIT_REACHED" in err_text or "limit of 2 profiles" in err_text:
+                return Response({
+                    "success": False,
+                    "error": "Alcanzaste el límite de cuentas vinculadas de tu plan actual. Para conectar más redes sociales, por favor mejorá a un Plan Pro."
+                }, status=400)
+                
             return Response({
                 "success": False,
-                "error": f"Error creando perfil: {create_resp.text[:200]}"
+                "error": f"Error al vincular: {err_text}"
             }, status=500)
         
         # PASO 2: Generar JWT URL
