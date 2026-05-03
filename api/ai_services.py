@@ -107,7 +107,7 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
     return None  # fallback local manejará esto
 
 @track_api_call(service='elevenlabs')
-def call_elevenlabs_api(text: str, agente=None) -> bytes:
+def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
     """Genera audio MP3 usando ElevenLabs y el Pool de APIs."""
     if agente is not None:
         try:
@@ -122,8 +122,11 @@ def call_elevenlabs_api(text: str, agente=None) -> bytes:
         print("[ERROR] No hay ElevenLabs API Key disponible.")
         return None
 
-    # Voice: Daniel (Spanish - pNInz6obpgnuMvHLW6m8) o similar
-    voice_id = "EXAVITQu4vr4xnSDxMaL" # Bella (default) 
+    # Voice selection
+    if voz == 'masculina':
+        voice_id = "pNInz6obpgnuMvHLW6m8" # Daniel (Spanish)
+    else:
+        voice_id = "EXAVITQu4vr4xnSDxMaL" # Bella (Default Femenina)
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
     headers = {

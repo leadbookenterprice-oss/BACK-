@@ -73,24 +73,42 @@ def generar_video_listado(listado_id):
         # --- VOICE OVER GENERATION ---
         audio_filename = f'audio_{listado.id}.mp3'
         audio_path = os.path.join(settings.MEDIA_ROOT, 'assets', audio_filename)
-        vo_duration = 10 # fallback
+        
+        tipo_video = datos.get('tipoVideo', 'reel').lower()
+        voz_seleccionada = datos.get('voz', 'femenina').lower()
+        tono_seleccionado = datos.get('tono', 'profesional')
+        contexto_adicional = datos.get('contextoAdicional', '')
+        escenas = datos.get('escenas', [])
+        
+        is_tour = 'tour' in tipo_video
+        
+        # Parámetros según el estilo
+        vo_duration = 45 if is_tour else 15 # fallback initial
+        duracion_texto = "entre 45 y 60 segundos. Describí los ambientes con detalle y de forma inmersiva" if is_tour else "unos 15-20 segundos. Sé muy dinámico y enfocado en el hook"
         
         try:
-            prompt_vo = f"""Escribí un guion breve y persuasivo para un video de Instagram sobre esta propiedad.
+            # SI EL USUARIO EDITÓ EL GUION EN EL PASO 5, USAR ESO Y NO REGENERAR
+            if escenas and isinstance(escenas, list) and len(escenas) > 0:
+                script_vo = " ".join([esc.get('texto', '') for esc in escenas])
+            else:
+                prompt_vo = f"""Escribí un guion persuasivo para un video sobre esta propiedad.
 Tipo: {listado.tipo_propiedad} en {listado.ciudad}
 Precio: {listado.precio}
 Detalles: {listado.titulo}
 
-El guion debe durar unos 15-20 segundos. No incluyas preámbulos, solo el texto.
-Hablá en español neutro."""
-            
-            script_vo = smart_call(prompt_vo, agente=listado.agente)
-            if not script_vo:
-                script_vo = f"Descubre esta increíble {listado.tipo_propiedad} en {listado.ciudad}. Una oportunidad única por solo {listado.precio}. Contáctanos hoy mismo para más información."
+El guion debe durar {duracion_texto}.
+Tono de voz deseado: {tono_seleccionado}.
+Enfoque especial solicitado por el usuario: {contexto_adicional}.
+
+No incluyas preámbulos, solo el texto en español neutro."""
+                
+                script_vo = smart_call(prompt_vo, agente=listado.agente)
+                if not script_vo:
+                    script_vo = f"Descubre esta increíble {listado.tipo_propiedad} en {listado.ciudad}. Una oportunidad única por solo {listado.precio}. Contáctanos hoy mismo para más información."
 
             if script_vo:
                 script_vo = script_vo.replace('**', '').replace('"', '').strip()
-                audio_bytes = call_elevenlabs_api(script_vo, agente=listado.agente)
+                audio_bytes = call_elevenlabs_api(script_vo, agente=listado.agente, voz=voz_seleccionada)
                 if audio_bytes:
                     with open(audio_path, 'wb') as f_audio:
                         f_audio.write(audio_bytes)
@@ -126,7 +144,7 @@ Hablá en español neutro."""
             logging.error(f"Voiceover/Transcription failed: {e}")
 
         # --- VIDEO COMPOSITION LOGIC ---
-        scene_duration = 2.0
+        scene_duration = 3.8 if is_tour else 1.8
         total_duration = max(vo_duration + 2, len(fotos) * scene_duration + 2)
         cta_start = total_duration - 3.5 # Slightly shorter CTA to feel snappy
         
