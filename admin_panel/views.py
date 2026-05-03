@@ -275,15 +275,17 @@ def admin_api_keys_reassign(request, pk):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def admin_users_list(request):
-    users = Agent.objects.all()[:100] # Limite temporal
+    users = Agent.objects.all().order_by('-fecha_registro')[:100] # Limite temporal
     data = []
     for u in users:
         data.append({
             "id": u.id,
             "email": u.email,
+            "nombre": u.nombre,
+            "logo_url": u.logo_url,
             "plan": u.plan_nombre,
             "is_active": u.is_active,
-            "is_banned": hasattr(u, 'bans') and u.bans.filter(is_active=True).exists()
+            "is_suspended": not u.is_active
         })
     return Response(data)
 
@@ -307,6 +309,7 @@ def admin_users_detail(request, pk):
         "id": u.id,
         "email": u.email,
         "nombre": u.nombre,
+        "logo_url": u.logo_url,
         "telefono": u.telefono,
         "agencia": u.agencia,
         "nombre_inmobiliaria": u.nombre_inmobiliaria,
@@ -388,13 +391,21 @@ def admin_users_ban(request, pk):
         u = Agent.objects.get(pk=pk)
         UserBanRecord.objects.create(
             user=u,
-            banned_by=request.user,
+            banned_by=request.user if request.user.is_authenticated else None,
             reason=request.data.get('reason', 'Sin razón provista')
         )
         u.is_active = False
         u.save()
         APIPoolService.release_keys_from_user(u)
-        return Response({"status": "banned"})
+        
+        # Añadir email a la blacklist permanente para que nunca se pueda re-registrar
+        from api.models import BannedEmail
+        BannedEmail.objects.get_or_create(
+            email=u.email,
+            defaults={'reason': request.data.get('reason', 'Baneado por el administrador')}
+        )
+        
+        return Response({"status": "banned_permanently", "email": u.email})
     except Agent.DoesNotExist:
         return Response(status=404)
 

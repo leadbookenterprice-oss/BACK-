@@ -444,6 +444,23 @@ class UserBanRecord(models.Model):
     reason = models.TextField()
     is_active = models.BooleanField(default=True)
 
+class BannedEmail(models.Model):
+    """
+    Blacklist permanente de emails. 
+    Un email baneado aquí no puede volver a registrarse NUNCA.
+    Se crea al banear un usuario. NO se crea al eliminar un usuario.
+    """
+    email = models.EmailField(unique=True)
+    banned_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField(blank=True, default='Baneado por el administrador')
+
+    class Meta:
+        verbose_name = "Email Baneado Permanentemente"
+        verbose_name_plural = "Emails Baneados Permanentemente"
+
+    def __str__(self):
+        return self.email
+
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 

@@ -80,8 +80,12 @@ class RegisterView(APIView):
         from django.utils import timezone
         email = request.data.get('email', '').strip().lower()
         
-        # CAMBIO 1: Validar email duplicado
-        from .models import Agent
+        # Verificar blacklist de emails baneados permanentemente
+        from .models import Agent, BannedEmail
+        if BannedEmail.objects.filter(email=email).exists():
+            return Response({"error": "Esta cuenta ha sido inhabilitada permanentemente. No podés registrarte con este email."}, status=403)
+        
+        # Validar email duplicado
         if Agent.objects.filter(email=email).exists():
             return Response({"error": "Este email ya está registrado. ¿Olvidaste tu contraseña?"}, status=400)
 
