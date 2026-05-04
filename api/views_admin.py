@@ -690,3 +690,51 @@ def admin_audio_sfx_detail(request, pk):
     sfx.activo = not sfx.activo
     sfx.save(update_fields=['activo'])
     return Response({'success': True, 'activo': sfx.activo})
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_apikeys_auto_repair(request):
+    """
+    Busca usuarios free que tengan asignadas menos de 3 APIs 
+    y les intenta asignar las faltantes del pool.
+    """
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=403)
+        
+    from api.models import Agent, APIKey, APIBundleAssignment
+    from django.utils import timezone
+    
+    users = Agent.objects.filter(plan='free')
+    fixed = 0
+    details = []
+    
+    for user in users:
+        bundle_assignment = APIBundleAssignment.objects.filter(usuario=user, activo=True).first()
+        if bundle_assignment and bundle_assignment.bundle.is_complete():
+            continue
+            
+        keys = APIKey.objects.filter(assigned_to=user)
+        if keys.count() >= 3:
+            continue
+            
+        owned_services = list(keys.values_list('servicio', flat=True))
+        missing_services = [s for s in ['gemini', 'elevenlabs', 'uploadpost'] if s not in owned_services]
+        
+        success = True
+        assigned_now = []
+        for s in missing_services:
+            key = APIKey.objects.filter(status='available', servicio=s).first()
+            if key:
+                key.status = 'assigned'
+                key.assigned_to = user
+                key.assigned_at = timezone.now()
+                key.save()
+                assigned_now.append(s)
+            else:
+                success = False
+                
+        if missing_services and success:
+            fixed += 1
+            details.append({"email": user.email, "repaired": assigned_now})
+            
+    return Response({"status": "success", "fixed_count": fixed, "details": details})

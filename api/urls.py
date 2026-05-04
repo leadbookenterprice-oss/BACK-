@@ -22,6 +22,7 @@ from .views_admin import (
     admin_bundles_list, admin_bundles_crear, admin_bundles_detail,
     admin_bundles_asignar, admin_bundles_liberar, admin_bundles_stats,
     admin_audio_music, admin_audio_music_detail, admin_audio_sfx, admin_audio_sfx_detail,
+    admin_apikeys_auto_repair,
 )
 
 router = DefaultRouter()
@@ -93,6 +94,7 @@ urlpatterns = [
     path('admin/apikeys/pool/crear/', admin_apikeys_pool_crear),
     path('admin/apikeys/pool/<int:key_id>/', admin_apikeys_pool_detail),
     path('admin/apikeys/global/', admin_apikeys_global),
+    path('admin/apikeys/pool/auto-repair/', admin_apikeys_auto_repair),
     path('admin/pool/estado/', admin_pool_estado),
     path('admin/pool/listar/', admin_apikeys_pool), # Alias
     path('admin/alerts/<int:alert_id>/read/', admin_alerts_read),
