@@ -421,7 +421,7 @@ class PerfilView(APIView):
             "plan_nombre": getattr(user, 'plan_nombre', 'starter')
         }, status=status.HTTP_200_OK)
 
-from .services.instagram_service import publicar_post, publicar_story, publicar_carrusel
+from .services.instagram_service import publicar_post, publicar_story, publicar_carrusel, publicar_media_upload_api
 from django.conf import settings
 
 @api_view(['POST'])
@@ -455,6 +455,53 @@ def publicar_instagram(request):
         else:
             return Response(result, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except Exception as e:
+        return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def publicar_redes_sociales(request):
+    """
+    Endpoint unificado para publicar contenido en redes sociales vía Upload Post API.
+    Tipos soportados: image, video, carousel, document (PDF).
+    """
+    try:
+        data = request.data
+        media_type = data.get('media_type', 'image') # image, video, carousel, document
+        caption = data.get('caption', '')
+        
+        # URLs de contenido
+        image_url = data.get('image_url')
+        video_url = data.get('video_url')
+        document_url = data.get('document_url')
+        images = data.get('images', []) # array de URLs para carrusel
+        
+        # Opciones extra
+        platforms = data.get('platforms') # ej: ['instagram', 'facebook', 'youtube']
+        scheduled_at = data.get('scheduled_at') # string ISO 8601
+        
+        user = request.user
+        
+        # Llamar al servicio unificado de Upload Post
+        result = publicar_media_upload_api(
+            media_type=media_type,
+            caption=caption,
+            image_url=image_url,
+            video_url=video_url,
+            images=images,
+            document_url=document_url,
+            platforms=platforms,
+            scheduled_at=scheduled_at,
+            agente=user
+        )
+        
+        if result.get('success'):
+            return Response(result, status=status.HTTP_200_OK)
+        else:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])

@@ -10,7 +10,8 @@ from .views import (
     OnboardingView, video_status, publicar_instagram, send_otp, verify_otp,
     generar_video, obtener_terminos, obtener_politica_privacidad,
     plan_status, seleccionar_plan_free, test_upload_avatar, generar_carrusel,
-    amenidades_presets, recuperar_password, confirmar_recuperacion
+    amenidades_presets, recuperar_password, confirmar_recuperacion,
+    publicar_redes_sociales
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -55,6 +56,7 @@ urlpatterns = [
     path('generar-imagen-story/', generar_imagen_story, name='generar_imagen_story'),
     path('generar-email/', generar_email, name='generar_email'),
     path('publicar-instagram/', publicar_instagram, name='publicar_instagram'),
+    path('publicar-redes/', publicar_redes_sociales, name='publicar_redes_sociales'),
     path('pdf/<str:uuid_str>/', serve_pdf_file, name='serve_pdf'),
     path('video-status/<int:listado_id>/', video_status, name='video_status'),
     
