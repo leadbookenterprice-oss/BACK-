@@ -92,27 +92,49 @@ class APIPoolService:
     @staticmethod
     def assign_keys_to_user(user):
         """
-        Compatibilidad hacia atrás: intenta asignar un bundle.
-        Si no hay bundles, cae al sistema legacy de keys individuales.
+        Intenta asignar un bundle pre-armado.
+        Si no hay bundles, intenta armar uno dinámicamente juntando 3 keys sueltas.
+        Garantiza que siempre se asigne un bloque de 3 APIs a usuarios Free.
         """
         bundle, created = APIPoolService.assign_bundle_to_user(user)
         if bundle:
             return ['gemini', 'elevenlabs', 'uploadpost']
 
-        # Fallback legacy
+        # Fallback: intentar armar un bundle automático con 3 keys sueltas
         servicios = ['gemini', 'elevenlabs', 'uploadpost']
-        asignadas = []
+        keys_to_assign = {}
         for s in servicios:
-            if APIKey.objects.filter(assigned_to=user, servicio=s).exists():
-                continue
             key = APIKey.objects.filter(status='available', servicio=s).first()
-            if key:
-                key.status = 'assigned'
-                key.assigned_to = user
-                key.assigned_at = timezone.now()
-                key.save()
-                asignadas.append(s)
-        return asignadas
+            if not key:
+                # Si falta alguna de las 3, no se asigna NADA y se alerta
+                AdminAlert.objects.create(
+                    type='quota_warning',
+                    severity='critical',
+                    title='Faltan keys individuales para armar bundle',
+                    message=f'No se pudo armar el bloque de 3 APIs para {user.email} porque falta key de {s}.',
+                    related_user=user
+                )
+                return []
+            keys_to_assign[s] = key
+
+        # Si tenemos las 3, armamos el bundle
+        bundle = APIBundle.objects.create(
+            nombre=f"Bundle Auto - {user.email}",
+            status='assigned',
+            key_gemini=keys_to_assign['gemini'],
+            key_elevenlabs=keys_to_assign['elevenlabs'],
+            key_uploadpost=keys_to_assign['uploadpost'],
+            notas="Bundle creado dinámicamente al registrarse"
+        )
+
+        for s, k in keys_to_assign.items():
+            k.status = 'in_bundle'
+            k.assigned_to = user
+            k.assigned_at = timezone.now()
+            k.save()
+
+        APIBundleAssignment.objects.create(bundle=bundle, usuario=user)
+        return servicios
 
     @staticmethod
     def release_keys_from_user(user):
