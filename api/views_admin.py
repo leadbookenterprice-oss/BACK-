@@ -283,14 +283,28 @@ def admin_apikeys_pool(request):
     if servicio:
         keys = keys.filter(servicio=servicio)
         
+    # Límite por defecto para el cálculo de porcentaje
+    DEFAULT_LIMITS = {
+        'gemini': 1500,
+        'elevenlabs': 10000,
+        'uploadpost': 50
+    }
+    
     data = []
     for k in keys:
+        limite = k.monthly_limit or DEFAULT_LIMITS.get(k.servicio, 100)
+        consumo = k.requests_this_month
+        porcentaje = min(100, int((consumo / limite) * 100)) if limite else 0
+
         data.append({
             "id": k.id,
             "servicio": k.servicio,
             "status": k.status,
             "key_masked": k.api_key[:10] + "..." if k.api_key else "",
             "requests_today": k.requests_today,
+            "requests_this_month": consumo,
+            "monthly_limit": limite,
+            "porcentaje_uso": porcentaje,
             "total_requests": k.total_requests,
             "error_count": k.error_count,
             "last_used": k.last_used_at.isoformat() if k.last_used_at else None,

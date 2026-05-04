@@ -495,6 +495,24 @@ def publicar_redes_sociales(request):
         )
         
         if result.get('success'):
+            # --- Añadir tracking manual de uso para UploadPost ---
+            try:
+                from api.pool_manager import get_api_key
+                from api.models import APIKey
+                from django.utils import timezone
+                key_str = get_api_key(user, 'uploadpost')
+                if key_str:
+                    k = APIKey.objects.filter(api_key=key_str).first()
+                    if k:
+                        k.requests_today += 1
+                        k.requests_this_month += 1
+                        k.total_requests += 1
+                        k.last_used_at = timezone.now()
+                        k.save()
+            except Exception as trk_e:
+                print(f"[UploadPost Tracking Error]: {trk_e}")
+            # -----------------------------------------------------
+            
             return Response(result, status=status.HTTP_200_OK)
         else:
             return Response(result, status=status.HTTP_400_BAD_REQUEST)

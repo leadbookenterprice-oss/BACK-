@@ -2,6 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from . import views
+from . import views_usage
 from .views import (
     PropertyViewSet, GeneratedAssetViewSet, generar_guion, generar_listado, 
     RegisterView, LogoutView, DashboardView, ListadosView, generar_pdf, 
@@ -109,6 +110,10 @@ urlpatterns = [
     path('debug/email-check/', views.debug_email_check, name='debug_email_check'),
     path('debug/email-send/',  views.debug_email_send,  name='debug_email_send'),
     path('debug/uploadpost/<str:username>/', views.debug_uploadpost, name='debug_uploadpost'),
+
+    # Uso de APIs
+    path('auth/mi-uso/', views_usage.mi_uso_apis, name='mi_uso_apis'),
+    path('admin/uso-global/', views_usage.admin_uso_global, name='admin_uso_global'),
 
     # API Bundles
     path('admin/bundles/', admin_bundles_list),
