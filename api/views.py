@@ -2092,37 +2092,50 @@ def conexiones_estado(request):
             print(f"[conexiones_estado] Perfil '{username}' no encontrado en UploadPost", flush=True)
             return Response({"success": True, "redes": [], "conectado": False, "username": username})
 
-        # Detectar el campo de cuentas conectadas (UploadPost puede usar distintos nombres)
-        redes = (
-            perfil.get("accounts") or
-            perfil.get("social_accounts") or
-            perfil.get("platforms") or
-            perfil.get("connected_accounts") or
-            perfil.get("connected_platforms") or
-            []
-        )
+        # Obtener el objeto de redes.
+        # UploadPost devuelve {"success": true, "profile": {"social_accounts": {"instagram": {...}, "tiktok": ""}}}
+        if "profile" in perfil:
+            social_accounts = perfil["profile"].get("social_accounts", {})
+        else:
+            social_accounts = perfil.get("social_accounts", {})
 
-        print(f"[conexiones_estado] redes encontradas={redes}", flush=True)
+        print(f"[conexiones_estado] social_accounts={social_accounts}", flush=True)
 
-        # Normalizar cada red para que siempre tenga { platform, username, status }
         redes_normalizadas = []
-        for r in redes:
-            if isinstance(r, str):
-                redes_normalizadas.append({"platform": r, "username": "", "status": "connected"})
-            elif isinstance(r, dict):
-                redes_normalizadas.append({
-                    "platform": r.get("platform") or r.get("network") or r.get("type") or "unknown",
-                    "username": r.get("username") or r.get("account_name") or r.get("handle") or "",
-                    "status": r.get("status") or "connected",
-                })
+        
+        # Iterar sobre las claves del diccionario (ej: "instagram", "tiktok")
+        if isinstance(social_accounts, dict):
+            for platform, data in social_accounts.items():
+                # Si el valor está vacío (ej: ""), significa que no está conectado
+                if not data:
+                    continue
+                    
+                # Si es un dict, extraer la info
+                if isinstance(data, dict):
+                    # Ignorar si requiere reconexión
+                    if data.get("reauth_required") is True:
+                        continue
+                        
+                    redes_normalizadas.append({
+                        "platform": platform,
+                        "username": data.get("handle") or data.get("display_name") or data.get("username") or "",
+                        "status": "connected"
+                    })
+                elif isinstance(data, str) and data:
+                    # Por si acaso devuelve un string no vacío
+                    redes_normalizadas.append({
+                        "platform": platform,
+                        "username": data,
+                        "status": "connected"
+                    })
 
         return Response({
             "success": True,
             "conectado": len(redes_normalizadas) > 0,
             "redes": redes_normalizadas,
             "username": username,
-            "total": len(redes_normalizadas),
-            "debug_raw_perfil": perfil  # TEMPORAL PARA DEBUG
+            "total": len(redes_normalizadas)
+            # Removemos debug_raw_perfil porque ya vimos la estructura
         })
 
     except Exception as e:
