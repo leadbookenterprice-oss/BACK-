@@ -1878,18 +1878,30 @@ def conexiones_init(request):
     try:
         from django.conf import settings
         from api.pool_manager import get_api_key
+        import os
         
         user = request.user
         username = f"leadbook_{user.id}"
         print(f"[conexiones_init] user={user.email} username={username}", flush=True)
         
+        # 1. Key del bundle/pool del usuario
         api_key = get_api_key(user, 'uploadpost')
         
+        # 2. Fallback: key global del .env de producción
         if not api_key:
-            print(f"[conexiones_init] No hay API key de uploadpost para {user.email}. Plan={getattr(user, 'plan_nombre', 'free')}", flush=True)
+            api_key = (
+                getattr(settings, 'UPLOADPOST_API_KEY', '') or
+                os.environ.get('UPLOADPOST_API_KEY', '') or
+                os.environ.get('UPLOAD_POST_API_KEY', '')
+            ) or None
+            if api_key:
+                print(f"[conexiones_init] Usando UPLOADPOST_API_KEY global para {user.email}", flush=True)
+        
+        if not api_key:
+            print(f"[conexiones_init] Sin key uploadpost para {user.email}. Plan={getattr(user, 'plan_nombre', 'free')}", flush=True)
             return Response({
                 "success": False,
-                "error": "No hay cuentas disponibles en el pool"
+                "error": "Tu cuenta no tiene una API de publicación asignada. Contactá a soporte."
             }, status=400)
         
         headers = {
