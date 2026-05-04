@@ -2012,61 +2012,118 @@ def conexiones_eliminar(request):
 @permission_classes([IsAuthenticated])
 def conexiones_estado(request):
     """
-    Devuelve las redes sociales conectadas del usuario.
+    Devuelve las redes sociales conectadas del usuario consultando UploadPost.
     Siempre devuelve JSON — nunca HTML.
     """
-    import traceback, sys
+    import traceback, sys, os
     try:
         from api.pool_manager import get_api_key
-        
+        from django.conf import settings
+
         user = request.user
         username = f"leadbook_{user.id}"
         print(f"[conexiones_estado] user={user.email} username={username}", flush=True)
-        
+
+        # 1. Key del pool del usuario
         api_key = get_api_key(user, 'uploadpost')
-        
+
+        # 2. Fallback a key global de .env
         if not api_key:
-            print(f"[conexiones_estado] No uploadpost key para {user.email}, devolviendo vacío", flush=True)
+            api_key = (
+                getattr(settings, 'UPLOADPOST_API_KEY', '') or
+                os.environ.get('UPLOADPOST_API_KEY', '') or
+                os.environ.get('UPLOAD_POST_API_KEY', '')
+            ) or None
+            if api_key:
+                print(f"[conexiones_estado] Usando key global para {user.email}", flush=True)
+
+        if not api_key:
+            print(f"[conexiones_estado] Sin key uploadpost para {user.email}", flush=True)
             return Response({"success": True, "redes": [], "conectado": False})
-        
+
         headers = {
             "Authorization": f"Apikey {api_key}",
             "Content-Type": "application/json"
         }
-        
-        resp = http_requests.get(
-            "https://api.upload-post.com/api/uploadposts/users",
+
+        # ESTRATEGIA 1: Endpoint específico del usuario (más preciso)
+        perfil = None
+        resp_individual = http_requests.get(
+            f"https://api.upload-post.com/api/uploadposts/users/{username}",
             headers=headers,
             timeout=10
         )
-        print(f"[conexiones_estado] uploadpost status={resp.status_code}", flush=True)
-        
-        if resp.status_code != 200:
-            return Response({"success": True, "redes": [], "conectado": False})
-        
-        usuarios = resp.json()
-        
-        # Asegurar que usuarios sea una lista
-        if not isinstance(usuarios, list):
-            usuarios = usuarios.get('users', usuarios.get('data', []))
-            if not isinstance(usuarios, list):
-                usuarios = []
-        
-        perfil = next(
-            (u for u in usuarios if u.get("username") == username), 
-            None
-        )
-        
+        print(f"[conexiones_estado] GET /users/{username} → status={resp_individual.status_code}", flush=True)
+
+        if resp_individual.status_code == 200:
+            try:
+                perfil = resp_individual.json()
+                print(f"[conexiones_estado] perfil individual={perfil}", flush=True)
+            except Exception:
+                perfil = None
+
+        # ESTRATEGIA 2: Listar todos y buscar (fallback)
         if not perfil:
-            return Response({"success": True, "redes": [], "conectado": False})
-        
-        redes = perfil.get("accounts", [])
+            resp_list = http_requests.get(
+                "https://api.upload-post.com/api/uploadposts/users",
+                headers=headers,
+                timeout=10
+            )
+            print(f"[conexiones_estado] GET /users list → status={resp_list.status_code}", flush=True)
+            if resp_list.status_code == 200:
+                try:
+                    raw = resp_list.json()
+                    print(f"[conexiones_estado] raw list response (first 500 chars)={str(raw)[:500]}", flush=True)
+                    # Normalizar a lista
+                    if isinstance(raw, list):
+                        usuarios = raw
+                    elif isinstance(raw, dict):
+                        usuarios = raw.get('users') or raw.get('data') or raw.get('results') or []
+                    else:
+                        usuarios = []
+                    perfil = next(
+                        (u for u in usuarios if u.get("username") == username),
+                        None
+                    )
+                except Exception as parse_err:
+                    print(f"[conexiones_estado] Error parseando lista: {parse_err}", flush=True)
+
+        if not perfil:
+            print(f"[conexiones_estado] Perfil '{username}' no encontrado en UploadPost", flush=True)
+            return Response({"success": True, "redes": [], "conectado": False, "username": username})
+
+        # Detectar el campo de cuentas conectadas (UploadPost puede usar distintos nombres)
+        redes = (
+            perfil.get("accounts") or
+            perfil.get("social_accounts") or
+            perfil.get("platforms") or
+            perfil.get("connected_accounts") or
+            perfil.get("connected_platforms") or
+            []
+        )
+
+        print(f"[conexiones_estado] redes encontradas={redes}", flush=True)
+
+        # Normalizar cada red para que siempre tenga { platform, username, status }
+        redes_normalizadas = []
+        for r in redes:
+            if isinstance(r, str):
+                redes_normalizadas.append({"platform": r, "username": "", "status": "connected"})
+            elif isinstance(r, dict):
+                redes_normalizadas.append({
+                    "platform": r.get("platform") or r.get("network") or r.get("type") or "unknown",
+                    "username": r.get("username") or r.get("account_name") or r.get("handle") or "",
+                    "status": r.get("status") or "connected",
+                })
+
         return Response({
             "success": True,
-            "conectado": len(redes) > 0,
-            "redes": redes,
-            "username": username
+            "conectado": len(redes_normalizadas) > 0,
+            "redes": redes_normalizadas,
+            "username": username,
+            "total": len(redes_normalizadas)
         })
+
     except Exception as e:
         print(f"[conexiones_estado] EXCEPTION: {e}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -2076,6 +2133,7 @@ def conexiones_estado(request):
             "conectado": False,
             "error": f"Error interno: {str(e)[:200]}"
         }, status=500)
+
 
 
 # ============================================================
