@@ -108,6 +108,7 @@ urlpatterns = [
     # Debug / Diagnóstico
     path('debug/email-check/', views.debug_email_check, name='debug_email_check'),
     path('debug/email-send/',  views.debug_email_send,  name='debug_email_send'),
+    path('debug/uploadpost/<str:username>/', views.debug_uploadpost, name='debug_uploadpost'),
 
     # API Bundles
     path('admin/bundles/', admin_bundles_list),

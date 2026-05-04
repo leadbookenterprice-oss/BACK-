@@ -2121,7 +2121,8 @@ def conexiones_estado(request):
             "conectado": len(redes_normalizadas) > 0,
             "redes": redes_normalizadas,
             "username": username,
-            "total": len(redes_normalizadas)
+            "total": len(redes_normalizadas),
+            "debug_raw_perfil": perfil  # TEMPORAL PARA DEBUG
         })
 
     except Exception as e:
@@ -2140,6 +2141,66 @@ def conexiones_estado(request):
 # DEBUG / DIAGNÓSTICO — endpoints seguros (no exponen secretos)
 # Uso: curl https://tuback.up.railway.app/api/v1/debug/email-check/
 # ============================================================
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def debug_uploadpost(request, username):
+    """
+    Endpoint temporal para ver la estructura exacta que devuelve UploadPost
+    para un usuario específico.
+    """
+    import os
+    from django.conf import settings
+    
+    api_key = (
+        getattr(settings, 'UPLOADPOST_API_KEY', '') or
+        os.environ.get('UPLOADPOST_API_KEY', '') or
+        os.environ.get('UPLOAD_POST_API_KEY', '')
+    )
+    
+    if not api_key:
+        return Response({"error": "No global UPLOADPOST_API_KEY"}, status=500)
+        
+    headers = {
+        "Authorization": f"Apikey {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    # Probar endpoint individual
+    resp1 = http_requests.get(
+        f"https://api.upload-post.com/api/uploadposts/users/{username}",
+        headers=headers,
+        timeout=10
+    )
+    
+    # Probar endpoint lista
+    resp2 = http_requests.get(
+        "https://api.upload-post.com/api/uploadposts/users",
+        headers=headers,
+        timeout=10
+    )
+    
+    list_data = None
+    if resp2.status_code == 200:
+        try:
+            raw = resp2.json()
+            if isinstance(raw, list): usuarios = raw
+            elif isinstance(raw, dict): usuarios = raw.get('users') or raw.get('data') or raw.get('results') or []
+            else: usuarios = []
+            list_data = next((u for u in usuarios if u.get("username") == username), None)
+        except: pass
+        
+    return Response({
+        "target_username": username,
+        "strategy_1_individual": {
+            "status": resp1.status_code,
+            "data": resp1.json() if resp1.status_code == 200 else resp1.text[:200]
+        },
+        "strategy_2_list": {
+            "status": resp2.status_code,
+            "found_in_list": list_data
+        }
+    })
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
