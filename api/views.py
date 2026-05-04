@@ -1919,18 +1919,24 @@ def conexiones_init(request):
                 "error": f"Error al vincular: {err_text}"
             }, status=500)
         
-        # PASO 2: Generar JWT URL
+        platform = request.data.get('platform')
+        
+        jwt_payload = {
+            "username": username,
+            "redirect_url": f"{settings.FRONTEND_URL}/conexiones",
+            "logo_image": "https://res.cloudinary.com/dpqgbgilw/image/upload/leadbook_logo",
+            "connect_title": "Conectá tus redes sociales",
+            "connect_description": "Conectá tus cuentas para publicar automáticamente con LeadBook",
+            "show_calendar": True
+        }
+        # Si viene una plataforma específica, pre-seleccionarla en el wizard de UploadPost
+        if platform:
+            jwt_payload["platform"] = platform
+            
         jwt_resp = http_requests.post(
             "https://api.upload-post.com/api/uploadposts/users/generate-jwt",
             headers=headers,
-            json={
-                "username": username,
-                "redirect_url": f"{settings.FRONTEND_URL}/conexiones",
-                "logo_image": "https://res.cloudinary.com/dpqgbgilw/image/upload/leadbook_logo",
-                "connect_title": "Conectá tus redes sociales",
-                "connect_description": "Conectá tus cuentas para publicar automáticamente con LeadBook",
-                "show_calendar": True
-            },
+            json=jwt_payload,
             timeout=10
         )
         print(f"[conexiones_init] generate_jwt status={jwt_resp.status_code}", flush=True)
