@@ -1,6 +1,9 @@
 FROM python:3.12-slim
 
-# Install system dependencies (C++, Node.js repo, and Chrome for Puppeteer)
+# Enable non-free repos (needed for fonts-ubuntu which is non-free in Debian Trixie)
+RUN sed -i 's/^Components: main$/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
     gcc \
@@ -12,7 +15,7 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     libpq-dev \
     git \
-    # Chromium / Playwright dependencies
+    # Chromium / Playwright runtime dependencies
     libnss3 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
@@ -26,9 +29,11 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
-    # Fonts — Debian Trixie renamed these packages
+    # Fonts (verified available in Debian Trixie)
+    fonts-dejavu-core \
+    fonts-liberation \
+    fonts-freefont-ttf \
     fonts-ubuntu \
-    fonts-unifont \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
