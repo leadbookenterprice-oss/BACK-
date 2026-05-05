@@ -1069,11 +1069,18 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         from django.template.loader import render_to_string
         from weasyprint import HTML
 
-        html_string = render_to_string('pdf/property_brochure.html', context)
-        pdf_bytes = HTML(
-            string=html_string,
-            base_url=None
-        ).write_pdf()
+        try:
+            html_string = render_to_string('pdf/property_brochure.html', context)
+            print(f"[PDF] HTML generado OK, largo: {len(html_string)} chars")
+            pdf_bytes = HTML(
+                string=html_string,
+                base_url=None
+            ).write_pdf()
+            print(f"[PDF] PDF generado OK, tamaño: {len(pdf_bytes)} bytes")
+        except Exception as e:
+            import traceback
+            print(f"[PDF WEASYPRINT ERROR]\n{traceback.format_exc()}")
+            raise
 
         # ─── Limpiar archivos temporales de imágenes ─────────────────────────
         for f in temp_files:
@@ -1123,7 +1130,9 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
 
     except Exception as e:
         import traceback
-        return Response({"error": str(e), "trace": traceback.format_exc()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        error_completo = traceback.format_exc()
+        print(f"[PDF ERROR COMPLETO]\n{error_completo}")
+        return Response({"error": str(e), "trace": error_completo}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
