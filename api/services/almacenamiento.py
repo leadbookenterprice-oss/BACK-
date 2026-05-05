@@ -154,11 +154,13 @@ class AlmacenamientoCloudinary:
         # Construir public_id determinístico
         base_id = f'leadbook/{tipo}s/user_{user_id}'
         if listado_id:
-            # Quitamos la extensión del public_id para evitar duplicados (...pdf.pdf)
-            public_id = f'{base_id}/listado_{listado_id}'
+            # Para assets RAW (PDFs), Cloudinary requiere la extensión en el public_id
+            ext = '.pdf' if tipo == TIPO_PDF else ''
+            public_id = f'{base_id}/listado_{listado_id}{ext}'
         else:
             import uuid
-            public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}{sufijo}'
+            ext = '.pdf' if tipo == TIPO_PDF else ''
+            public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}{ext}'
 
         creds, key_id = cls.get_mejor_cuenta()
         extra_creds = creds if creds else {}
@@ -212,7 +214,8 @@ class AlmacenamientoCloudinary:
 
     @classmethod
     def guardar_pdf(cls, pdf_bytes: bytes, user_id: int, listado_id: int | None = None) -> str | None:
-        return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id, resource_type='auto')
+        # Forzamos resource_type='raw' para evitar problemas de ACL con el visor de imágenes
+        return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id, resource_type='raw')
 
     @classmethod
     def guardar_post(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
