@@ -35,10 +35,8 @@ def get_api_key(agente, servicio):
     ).first()
     if cuenta:
         return cuenta.api_key
-
-    # Fallback final: key global
-    return _get_global_key(servicio)
-
+    # Fallback final: No hay key asignada
+    return None
 
 def _get_global_key(servicio):
     """Retorna la key global configurada en el .env para el servicio dado."""

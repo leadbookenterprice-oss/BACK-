@@ -12,11 +12,10 @@ logger = logging.getLogger(__name__)
 @track_api_call(service='gemini')
 def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
     if agente is not None:
-        try:
-            from api.pool_manager import get_api_key
-            key = get_api_key(agente, 'gemini') or settings.GEMINI_API_KEY
-        except Exception:
-            key = settings.GEMINI_API_KEY
+        from api.pool_manager import get_api_key
+        key = get_api_key(agente, 'gemini')
+        if not key:
+            raise Exception("No tienes una API Key de Gemini asignada en el Pool.")
     else:
         key = settings.GEMINI_API_KEY
     print(f"[DEBUG] Gemini Key: {key[:10] if key else 'N/A'}... | Model: gemini-2.0-flash-lite")
@@ -129,11 +128,11 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
 def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
     """Genera audio MP3 usando ElevenLabs y el Pool de APIs."""
     if agente is not None:
-        try:
-            from api.pool_manager import get_api_key
-            key = get_api_key(agente, 'elevenlabs') or getattr(settings, 'ELEVENLABS_API_KEY', '')
-        except Exception:
-            key = getattr(settings, 'ELEVENLABS_API_KEY', '')
+        from api.pool_manager import get_api_key
+        key = get_api_key(agente, 'elevenlabs')
+        if not key:
+            print("[ERROR] No hay ElevenLabs API Key asignada para el usuario en el Pool.")
+            return None
     else:
         key = getattr(settings, 'ELEVENLABS_API_KEY', '')
 
@@ -199,11 +198,11 @@ def generar_html_gemini(context, agente):
     
     try:
         if agente is not None:
-            try:
-                from api.pool_manager import get_api_key
-                key = get_api_key(agente, 'gemini') or settings.GEMINI_API_KEY
-            except Exception:
-                key = settings.GEMINI_API_KEY
+            from api.pool_manager import get_api_key
+            key = get_api_key(agente, 'gemini')
+            if not key:
+                logger.error("No hay API Key de Gemini asignada para este usuario en el Pool.")
+                return None
         else:
             key = settings.GEMINI_API_KEY
             
