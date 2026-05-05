@@ -58,14 +58,34 @@ def mi_uso_apis(request):
     if not assignment or not assignment.bundle:
         from api.pool_manager import _asignar_bundle
         bundle_asignado = _asignar_bundle(user)
-        if not bundle_asignado:
-            return Response({
-                "success": False,
-                "error": "No hay bundles de APIs disponibles en este momento."
-            }, status=404)
         
-        # Recargar assignment
-        assignment = APIBundleAssignment.objects.filter(usuario=user, activo=True).select_related('bundle').first()
+        if bundle_asignado:
+            # Recargar assignment
+            assignment = APIBundleAssignment.objects.filter(usuario=user, activo=True).select_related('bundle').first()
+        else:
+            # Fallback a UserAPIQuota para usuarios free si no hay bundles disponibles
+            from api.models import UserAPIQuota
+            for svc in ['gemini', 'elevenlabs', 'uploadpost']:
+                quota, _ = UserAPIQuota.objects.get_or_create(user=user, service=svc)
+                limite = quota.monthly_limit or DEFAULT_LIMITS.get(svc, 100)
+                consumido = quota.requests_this_month
+                nombre_display = "ElevenLabs" if svc == 'elevenlabs' else "Gemini AI" if svc == 'gemini' else "UploadPost"
+                unidad_display = "caracteres" if svc == 'elevenlabs' else "peticiones" if svc == 'gemini' else "publicaciones"
+                
+                stats.append({
+                    "servicio": svc,
+                    "nombre": nombre_display,
+                    "consumido": consumido,
+                    "limite": limite,
+                    "unidad": unidad_display,
+                    "porcentaje": min(100, int((consumido / limite) * 100)) if limite else 0
+                })
+                
+            return Response({
+                "success": True,
+                "bundle_nombre": "Asignación Pendiente (Global Fallback)",
+                "stats": stats
+            })
         
     bundle = assignment.bundle
     keys = {
