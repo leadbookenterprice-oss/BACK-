@@ -852,6 +852,221 @@ def generar_video(request, pk):
     except Listado.DoesNotExist:
         return Response({"error": "Listado no encontrado"}, status=404)
 
+def construir_contexto_pdf(data, user, request=None):
+    # ─── Helpers de imágenes para WeasyPrint ─────────────────────────────
+    temp_files = []
+
+    def save_temp_image(b64_or_url):
+        """
+        Acepta base64 (con o sin header data:image/...) o URL http/https.
+        Descarga/decodifica la imagen y la guarda en /tmp/ como archivo local.
+        Retorna el path absoluto local, o None si falla.
+        WeasyPrint requiere rutas locales (file://) — no puede acceder a /tmp/ via HTTP.
+        """
+        if not b64_or_url or not isinstance(b64_or_url, str):
+            return None
+        val = b64_or_url.strip()
+
+        # Si es URL HTTP/HTTPS: descargar al disco local
+        if val.startswith('http://') or val.startswith('https://'):
+            try:
+                import requests as req_lib
+                resp = req_lib.get(val, timeout=15, stream=True)
+                if resp.status_code == 200:
+                    ct = resp.headers.get('content-type', '')
+                    ext = 'jpg'
+                    if 'png' in ct:
+                        ext = 'png'
+                    elif 'gif' in ct:
+                        ext = 'gif'
+                    elif 'webp' in ct:
+                        ext = 'webp'
+                    filename = os.path.join(tempfile.gettempdir(), f"lb_{uuid.uuid4().hex}.{ext}")
+                    with open(filename, 'wb') as f:
+                        for chunk in resp.iter_content(8192):
+                            f.write(chunk)
+                    temp_files.append(filename)
+                    return filename
+            except Exception as e:
+                print(f"[PDF] Error descargando imagen URL: {e}")
+            return None
+
+        # Si es base64 (con o sin header data:...)
+        try:
+            if ',' in val and val.startswith('data:'):
+                val = val.split(',', 1)[1]
+            val += '=' * ((4 - len(val) % 4) % 4)
+            img_data = base64.b64decode(val)
+            # Detectar formato por magic bytes
+            ext = 'jpg'
+            if img_data[:8] == b'\x89PNG\r\n\x1a\n':
+                ext = 'png'
+            elif img_data[:2] == b'\xff\xd8':
+                ext = 'jpg'
+            elif img_data[:6] in (b'GIF87a', b'GIF89a'):
+                ext = 'gif'
+            filename = os.path.join(tempfile.gettempdir(), f"lb_{uuid.uuid4().hex}.{ext}")
+            with open(filename, 'wb') as f:
+                f.write(img_data)
+            temp_files.append(filename)
+            return filename
+        except Exception as e:
+            print(f"[PDF] Error decodificando imagen base64: {e}")
+            return None
+
+    def imagen_a_base64(ruta):
+        """Convierte una imagen (ruta local o URL http) a data URI base64 para embeber en HTML."""
+        if not ruta or not isinstance(ruta, str):
+            return ''
+        # Si ya es una data URI, retornarla tal cual
+        if ruta.startswith('data:'):
+            return ruta
+        # Si es URL HTTP: descargar en memoria
+        if ruta.startswith('http://') or ruta.startswith('https://'):
+            try:
+                import urllib.request
+                with urllib.request.urlopen(ruta, timeout=10) as r:
+                    data = r.read()
+                ext = ruta.split('.')[-1].lower().split('?')[0]
+                mime = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                        'png': 'image/png', 'gif': 'image/gif',
+                        'webp': 'image/webp'}.get(ext, 'image/jpeg')
+                return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+            except Exception as e:
+                print(f"[PDF] Error descargando imagen {ruta}: {e}")
+                return ''
+        # Si es un file:// URL, extraer el path
+        if ruta.startswith('file://'):
+            ruta = ruta[7:]
+        # Si es ruta local
+        if os.path.exists(ruta):
+            try:
+                with open(ruta, 'rb') as f:
+                    data = f.read()
+                ext = ruta.split('.')[-1].lower()
+                mime = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                        'png': 'image/png', 'gif': 'image/gif',
+                        'webp': 'image/webp'}.get(ext, 'image/jpeg')
+                return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+            except Exception as e:
+                print(f"[PDF] Error leyendo imagen {ruta}: {e}")
+                return ''
+        return ''
+
+    # ─── Extraer campos normalizados ──────────────────────────────────────
+    listado_id_hint  = data.get('listado_id') or data.get('listadoId')  # para Almacenamiento
+    tipo_propiedad   = data.get('tipoPropiedad', data.get('tipo_propiedad', 'Propiedad'))
+    ciudad           = data.get('ciudad', '')
+    precio           = str(data.get('precio', ''))
+    moneda           = data.get('moneda', 'USD')
+    operacion        = data.get('operacion', 'Venta')
+    recamaras        = data.get('recamaras', '')
+    banos            = data.get('banos', '')
+    superficie_cubierta = data.get('superficieCubierta', data.get('superficieConstruida', ''))
+    superficie_total = data.get('superficieTotal', data.get('superficieTerreno', ''))
+    estacionamientos = data.get('estacionamientos', '')
+    amenidades       = data.get('amenidades', [])
+    if not isinstance(amenidades, list):
+        amenidades = []
+
+    # Datos de agente / agencia
+    agente_nombre = data.get('agenteNombre', '') or user.nombre or ''
+    agente_email = data.get('agenteEmail', '') or user.email or ''
+    agencia_nombre = data.get('agenciaNombre', '') or user.nombre_inmobiliaria or 'LeadBook'
+    agente_telefono = data.get('agenteTelefono', '') or user.telefono or ''
+
+    # ─── Procesar imágenes (base64 Y URLs) ───────────────────────────────
+    logo_val_raw = data.get('logoAgenciaUrl', data.get('logo_url', ''))
+    logo_url = save_temp_image(logo_val_raw) or ''
+
+    portada_val_raw = data.get('portadaUrl', '')
+    fotos_raw = data.get('fotosRecorrido', [])
+
+    # Filtrar el logo de las fotos del recorrido
+    fotos_limpias = []
+    for f in fotos_raw:
+        fv = f.get('url') or f.get('base64') or '' if isinstance(f, dict) else f or ''
+        if fv and fv != logo_val_raw:
+            fotos_limpias.append(fv)
+
+    # Si la portada viene vacía o es igual al logo, usar la primera foto real de la propiedad
+    if not portada_val_raw or portada_val_raw == logo_val_raw:
+        if fotos_limpias:
+            portada_val_raw = fotos_limpias[0]
+
+    portada_url = save_temp_image(portada_val_raw) or ''
+
+    fotos_recorrido = []
+    for fv in fotos_limpias:
+        path = save_temp_image(fv)
+        if path:
+            fotos_recorrido.append(path)
+
+    # ─── Procesar escenas si las hay ─────────────────────────────────────
+    escenas = data.get('escenas', [])
+    if isinstance(escenas, list):
+        escenas_procesadas = []
+        for escena in escenas:
+            if isinstance(escena, dict) and escena.get('fotoUrl'):
+                path = save_temp_image(escena['fotoUrl'])
+                escena = {**escena, 'fotoUrl': path}
+            escenas_procesadas.append(escena)
+        data['escenas'] = escenas_procesadas
+
+    # ─── Descripción IA (si no viene en el payload) ──────────────────────
+    descripcion = data.get('descripcion', '')
+    if not descripcion:
+        amenidades_str = ', '.join(amenidades) if amenidades else 'no especificadas'
+        prompt_desc = f"""Generá una descripción inmobiliaria profesional de 2 párrafos para:
+{tipo_propiedad} en {operacion} en {ciudad}.
+Precio: {moneda} {precio}.
+Recámaras: {recamaras}. Baños: {banos}.
+Superficie construida: {superficie_cubierta}m².
+Terreno: {superficie_total}m².
+Amenidades: {amenidades_str}.
+
+Párrafo 1: Descripción general de la propiedad y ubicación (3-4 oraciones).
+Párrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
+Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
+        descripcion = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribís en español, con tono sofisticado y persuasivo.", agente=user)
+        if descripcion:
+            from .plan_utils import registrar_uso
+            registrar_uso(user, 'ai')
+        if not descripcion:
+            descripcion = f"Esta {tipo_propiedad} en {operacion} ubicada en {ciudad} representa una oportunidad única en el mercado inmobiliario. Con una superficie de {superficie_cubierta}m² y acabados de primera calidad, ofrece el equilibrio perfecto entre confort y diseño.\n\nSu distribución inteligente permite aprovechar cada espacio al máximo, mientras que las amenidades incluidas elevan la experiencia de vida. Precio: {moneda} {precio}. No pierda la oportunidad de conocerla."
+
+
+    # QR Code del agente
+    qr_data    = f"Tel: {agente_telefono} | Email: {agente_email} | {agencia_nombre}"
+    qr_base64_ = generar_qr_base64(qr_data)
+
+    # ─── Construir contexto del template ─────────────────────────────────
+    context = {
+        'tipo_propiedad':     tipo_propiedad,
+        'ciudad':             ciudad,
+        'precio':             precio,
+        'moneda':             moneda,
+        'operacion':          operacion,
+        'recamaras':          recamaras,
+        'banos':              banos,
+        'superficie_cubierta': superficie_cubierta,
+        'superficie_total':   superficie_total,
+        'estacionamientos':   estacionamientos,
+        'descripcion':        descripcion,
+        'amenidades':         amenidades,
+        'portada_url':        imagen_a_base64(portada_url),
+        'fotos_recorrido':    [imagen_a_base64(f) for f in fotos_recorrido],
+        'logo_url':           imagen_a_base64(logo_url),
+        'agente_nombre':      agente_nombre,
+        'agente_telefono':    agente_telefono,
+        'agente_email':       agente_email,
+        'agencia_nombre':     agencia_nombre,
+        'qr_code':            qr_base64_,
+    }
+
+
+    return context, temp_files, listado_id_hint, tipo_propiedad, ciudad
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_pdf(request):
@@ -865,218 +1080,9 @@ def generar_pdf(request):
     try:
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
 
-        # ─── Helpers de imágenes para WeasyPrint ─────────────────────────────
-        temp_files = []
+        context, temp_files, listado_id_hint, tipo_propiedad, ciudad = construir_contexto_pdf(data, request.user, request)
 
-        def save_temp_image(b64_or_url):
-            """
-            Acepta base64 (con o sin header data:image/...) o URL http/https.
-            Descarga/decodifica la imagen y la guarda en /tmp/ como archivo local.
-            Retorna el path absoluto local, o None si falla.
-            WeasyPrint requiere rutas locales (file://) — no puede acceder a /tmp/ via HTTP.
-            """
-            if not b64_or_url or not isinstance(b64_or_url, str):
-                return None
-            val = b64_or_url.strip()
-
-            # Si es URL HTTP/HTTPS: descargar al disco local
-            if val.startswith('http://') or val.startswith('https://'):
-                try:
-                    import requests as req_lib
-                    resp = req_lib.get(val, timeout=15, stream=True)
-                    if resp.status_code == 200:
-                        ct = resp.headers.get('content-type', '')
-                        ext = 'jpg'
-                        if 'png' in ct:
-                            ext = 'png'
-                        elif 'gif' in ct:
-                            ext = 'gif'
-                        elif 'webp' in ct:
-                            ext = 'webp'
-                        filename = os.path.join(tempfile.gettempdir(), f"lb_{uuid.uuid4().hex}.{ext}")
-                        with open(filename, 'wb') as f:
-                            for chunk in resp.iter_content(8192):
-                                f.write(chunk)
-                        temp_files.append(filename)
-                        return filename
-                except Exception as e:
-                    print(f"[PDF] Error descargando imagen URL: {e}")
-                return None
-
-            # Si es base64 (con o sin header data:...)
-            try:
-                if ',' in val and val.startswith('data:'):
-                    val = val.split(',', 1)[1]
-                val += '=' * ((4 - len(val) % 4) % 4)
-                img_data = base64.b64decode(val)
-                # Detectar formato por magic bytes
-                ext = 'jpg'
-                if img_data[:8] == b'\x89PNG\r\n\x1a\n':
-                    ext = 'png'
-                elif img_data[:2] == b'\xff\xd8':
-                    ext = 'jpg'
-                elif img_data[:6] in (b'GIF87a', b'GIF89a'):
-                    ext = 'gif'
-                filename = os.path.join(tempfile.gettempdir(), f"lb_{uuid.uuid4().hex}.{ext}")
-                with open(filename, 'wb') as f:
-                    f.write(img_data)
-                temp_files.append(filename)
-                return filename
-            except Exception as e:
-                print(f"[PDF] Error decodificando imagen base64: {e}")
-                return None
-
-        def imagen_a_base64(ruta):
-            """Convierte una imagen (ruta local o URL http) a data URI base64 para embeber en HTML."""
-            if not ruta or not isinstance(ruta, str):
-                return ''
-            # Si ya es una data URI, retornarla tal cual
-            if ruta.startswith('data:'):
-                return ruta
-            # Si es URL HTTP: descargar en memoria
-            if ruta.startswith('http://') or ruta.startswith('https://'):
-                try:
-                    import urllib.request
-                    with urllib.request.urlopen(ruta, timeout=10) as r:
-                        data = r.read()
-                    ext = ruta.split('.')[-1].lower().split('?')[0]
-                    mime = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-                            'png': 'image/png', 'gif': 'image/gif',
-                            'webp': 'image/webp'}.get(ext, 'image/jpeg')
-                    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
-                except Exception as e:
-                    print(f"[PDF] Error descargando imagen {ruta}: {e}")
-                    return ''
-            # Si es un file:// URL, extraer el path
-            if ruta.startswith('file://'):
-                ruta = ruta[7:]
-            # Si es ruta local
-            if os.path.exists(ruta):
-                try:
-                    with open(ruta, 'rb') as f:
-                        data = f.read()
-                    ext = ruta.split('.')[-1].lower()
-                    mime = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-                            'png': 'image/png', 'gif': 'image/gif',
-                            'webp': 'image/webp'}.get(ext, 'image/jpeg')
-                    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
-                except Exception as e:
-                    print(f"[PDF] Error leyendo imagen {ruta}: {e}")
-                    return ''
-            return ''
-
-        # ─── Extraer campos normalizados ──────────────────────────────────────
-        listado_id_hint  = data.get('listado_id') or data.get('listadoId')  # para Almacenamiento
-        tipo_propiedad   = data.get('tipoPropiedad', data.get('tipo_propiedad', 'Propiedad'))
-        ciudad           = data.get('ciudad', '')
-        precio           = str(data.get('precio', ''))
-        moneda           = data.get('moneda', 'USD')
-        operacion        = data.get('operacion', 'Venta')
-        recamaras        = data.get('recamaras', '')
-        banos            = data.get('banos', '')
-        superficie_cubierta = data.get('superficieCubierta', data.get('superficieConstruida', ''))
-        superficie_total = data.get('superficieTotal', data.get('superficieTerreno', ''))
-        estacionamientos = data.get('estacionamientos', '')
-        amenidades       = data.get('amenidades', [])
-        if not isinstance(amenidades, list):
-            amenidades = []
-
-        # Datos de agente / agencia
-        agente_nombre = data.get('agenteNombre', '') or request.user.nombre or ''
-        agente_email = data.get('agenteEmail', '') or request.user.email or ''
-        agencia_nombre = data.get('agenciaNombre', '') or request.user.nombre_inmobiliaria or 'LeadBook'
-        agente_telefono = data.get('agenteTelefono', '') or request.user.telefono or ''
-
-        # ─── Procesar imágenes (base64 Y URLs) ───────────────────────────────
-        logo_val_raw = data.get('logoAgenciaUrl', data.get('logo_url', ''))
-        logo_url = save_temp_image(logo_val_raw) or ''
-
-        portada_val_raw = data.get('portadaUrl', '')
-        fotos_raw = data.get('fotosRecorrido', [])
-
-        # Filtrar el logo de las fotos del recorrido
-        fotos_limpias = []
-        for f in fotos_raw:
-            fv = f.get('url') or f.get('base64') or '' if isinstance(f, dict) else f or ''
-            if fv and fv != logo_val_raw:
-                fotos_limpias.append(fv)
-
-        # Si la portada viene vacía o es igual al logo, usar la primera foto real de la propiedad
-        if not portada_val_raw or portada_val_raw == logo_val_raw:
-            if fotos_limpias:
-                portada_val_raw = fotos_limpias[0]
-
-        portada_url = save_temp_image(portada_val_raw) or ''
-
-        fotos_recorrido = []
-        for fv in fotos_limpias:
-            path = save_temp_image(fv)
-            if path:
-                fotos_recorrido.append(path)
-
-        # ─── Procesar escenas si las hay ─────────────────────────────────────
-        escenas = data.get('escenas', [])
-        if isinstance(escenas, list):
-            escenas_procesadas = []
-            for escena in escenas:
-                if isinstance(escena, dict) and escena.get('fotoUrl'):
-                    path = save_temp_image(escena['fotoUrl'])
-                    escena = {**escena, 'fotoUrl': path}
-                escenas_procesadas.append(escena)
-            data['escenas'] = escenas_procesadas
-
-        # ─── Descripción IA (si no viene en el payload) ──────────────────────
-        descripcion = data.get('descripcion', '')
-        if not descripcion:
-            amenidades_str = ', '.join(amenidades) if amenidades else 'no especificadas'
-            prompt_desc = f"""Generá una descripción inmobiliaria profesional de 2 párrafos para:
-{tipo_propiedad} en {operacion} en {ciudad}.
-Precio: {moneda} {precio}.
-Recámaras: {recamaras}. Baños: {banos}.
-Superficie construida: {superficie_cubierta}m².
-Terreno: {superficie_total}m².
-Amenidades: {amenidades_str}.
-
-Párrafo 1: Descripción general de la propiedad y ubicación (3-4 oraciones).
-Párrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
-Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
-            descripcion = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribís en español, con tono sofisticado y persuasivo.", agente=request.user)
-            if descripcion:
-                from .plan_utils import registrar_uso
-                registrar_uso(request.user, 'ai')
-            if not descripcion:
-                descripcion = f"Esta {tipo_propiedad} en {operacion} ubicada en {ciudad} representa una oportunidad única en el mercado inmobiliario. Con una superficie de {superficie_cubierta}m² y acabados de primera calidad, ofrece el equilibrio perfecto entre confort y diseño.\n\nSu distribución inteligente permite aprovechar cada espacio al máximo, mientras que las amenidades incluidas elevan la experiencia de vida. Precio: {moneda} {precio}. No pierda la oportunidad de conocerla."
-
-
-        # QR Code del agente
-        qr_data    = f"Tel: {agente_telefono} | Email: {agente_email} | {agencia_nombre}"
-        qr_base64_ = generar_qr_base64(qr_data)
-
-        # ─── Construir contexto del template ─────────────────────────────────
-        context = {
-            'tipo_propiedad':     tipo_propiedad,
-            'ciudad':             ciudad,
-            'precio':             precio,
-            'moneda':             moneda,
-            'operacion':          operacion,
-            'recamaras':          recamaras,
-            'banos':              banos,
-            'superficie_cubierta': superficie_cubierta,
-            'superficie_total':   superficie_total,
-            'estacionamientos':   estacionamientos,
-            'descripcion':        descripcion,
-            'amenidades':         amenidades,
-            'portada_url':        imagen_a_base64(portada_url),
-            'fotos_recorrido':    [imagen_a_base64(f) for f in fotos_recorrido],
-            'logo_url':           imagen_a_base64(logo_url),
-            'agente_nombre':      agente_nombre,
-            'agente_telefono':    agente_telefono,
-            'agente_email':       agente_email,
-            'agencia_nombre':     agencia_nombre,
-            'qr_code':            qr_base64_,
-        }
-
-        print(f"\n[PDF] Generando para {tipo_propiedad} en {ciudad} | portada: {bool(portada_url)} | fotos: {len(fotos_recorrido)} | QR: sí")
+        print(f"\n[PDF] Generando para {tipo_propiedad} en {ciudad} | portada: {bool(context.get('portada_url'))} | fotos: {len(context.get('fotos_recorrido', []))} | QR: sí")
 
         from django.template.loader import render_to_string
         from weasyprint import HTML
@@ -2791,3 +2797,35 @@ def proxy_pdf_thumbnail_view(request, listado_id):
 
     except Exception as e:
         return Response({"error": str(e)}, status=500)
+
+from django.shortcuts import get_object_or_404
+from django.http import HttpResponse
+
+@api_view(['GET'])
+def generar_html(request, pk):
+    from .models import Listado
+    listado = get_object_or_404(Listado, pk=pk)
+    data = listado.datos or {}
+    context, temp_files, _, _, _ = construir_contexto_pdf(data, listado.agente, request)
+    
+    from django.template.loader import render_to_string
+    try:
+        html_string = render_to_string('pdf/property_brochure_html.html', context)
+        # Limpiar temp files ya que no generamos PDF
+        import os
+        for f in temp_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except Exception:
+                pass
+        return HttpResponse(html_string, content_type='text/html')
+    except Exception as e:
+        import traceback
+        for f in temp_files:
+            try:
+                if os.path.exists(f):
+                    os.remove(f)
+            except Exception:
+                pass
+        return HttpResponse(f"Error generando HTML: {str(e)}<br><pre>{traceback.format_exc()}</pre>", content_type='text/html', status=500)
