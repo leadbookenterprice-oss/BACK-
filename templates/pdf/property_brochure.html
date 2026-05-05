@@ -3,194 +3,544 @@
 <head>
 <meta charset="UTF-8"/>
 <style>
-  @page { margin: 0mm; size: A4; }
-  body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+  /* ─── Page Setup ─────────────────────────────── */
+  @page {
+    margin: 0mm;
+    size: A4;
+  }
+  @page page2 {
+    margin: 0mm;
+    size: A4;
+  }
 
-  .cover-img { width: 100%; height: 260px; display: block; }
+  body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+    color: #1a1a2e;
+  }
 
-  .badge-row { background: #e53e3e; padding: 8px 16px; }
-  .badge-text { color: white; font-size: 12px; font-weight: bold; letter-spacing: 2px; }
+  /* ─── PAGE 1 ─────────────────────────────────── */
 
-  .precio-row { background: #111111; padding: 16px 24px; }
-  .precio-text { color: white; font-size: 26px; font-weight: bold; }
-  .ciudad-text { color: #aaaaaa; font-size: 12px; margin-top: 4px; }
+  /* Hero image — full width, fixed height, no distortion */
+  .hero-wrap {
+    width: 100%;
+    height: 270px;
+    overflow: hidden;
+    display: block;
+  }
+  .hero-img {
+    width: 100%;
+    height: 270px;
+    display: block;
+    -pdf-image-fit: contain-or-clip; /* xhtml2pdf hint */
+  }
 
-  .stats-table { width: 100%; border-collapse: collapse; background: #1e3a5f; }
-  .stat-cell { 
-    text-align: center; padding: 12px 4px; 
-    border-right: 1px solid #2d5080; 
+  /* Operacion badge */
+  .op-strip {
+    background: #c0392b;
+    padding: 7px 20px;
+  }
+  .op-text {
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 3px;
+  }
+
+  /* Price + Location block */
+  .price-block {
+    background: #0d1b2a;
+    padding: 14px 24px 12px 24px;
+    border-bottom: 3px solid #c0392b;
+  }
+  .price-label {
+    color: #94afc7;
+    font-size: 8px;
+    letter-spacing: 2px;
+    margin-bottom: 3px;
+  }
+  .price-value {
+    color: #ffffff;
+    font-size: 28px;
+    font-weight: bold;
+    line-height: 1;
+  }
+  .price-location {
+    color: #94afc7;
+    font-size: 10px;
+    margin-top: 5px;
+    letter-spacing: 1px;
+  }
+
+  /* Stats bar */
+  .stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #16324f;
+  }
+  .stat-cell {
+    text-align: center;
+    padding: 11px 4px;
+    border-right: 1px solid #1e4060;
     width: 20%;
   }
-  .stat-value { color: white; font-size: 20px; font-weight: bold; display: block; }
-  .stat-label { color: #94b8d8; font-size: 9px; margin-top: 3px; display: block; }
-
-  .content-area { padding: 20px 24px; background: white; }
-  .section-title { 
-    font-size: 15px; font-weight: bold; 
-    color: #1e3a5f; margin-bottom: 10px; 
-    margin-top: 16px;
+  .stat-cell-last { border-right: none; }
+  .stat-num {
+    color: #ffffff;
+    font-size: 18px;
+    font-weight: bold;
+    display: block;
   }
-  .descripcion-text { 
-    font-size: 10.5px; line-height: 1.5; 
-    color: #333333; text-align: justify;
+  .stat-lbl {
+    color: #7aafd4;
+    font-size: 8px;
+    letter-spacing: 1px;
+    margin-top: 2px;
+    display: block;
   }
-  .descripcion-text p { margin-bottom: 10px; }
 
-  .chip { 
+  /* Content area */
+  .content {
+    padding: 18px 24px 10px 24px;
+    background: #ffffff;
+  }
+
+  /* Section title with left accent bar */
+  .sec-title {
+    font-size: 12px;
+    font-weight: bold;
+    color: #0d1b2a;
+    letter-spacing: 1px;
+    border-left: 3px solid #c0392b;
+    padding-left: 8px;
+    margin-bottom: 8px;
+    margin-top: 14px;
+  }
+
+  .desc-text {
+    font-size: 9.5px;
+    line-height: 1.65;
+    color: #3d3d3d;
+    text-align: justify;
+  }
+  .desc-text p { margin: 0 0 8px 0; }
+
+  /* Amenidades chips */
+  .chips-table {
+    border-collapse: separate;
+    border-spacing: 3px 3px;
+    margin-top: 4px;
+  }
+  .chip-td {
+    border: 1px solid #c0392b;
+    border-radius: 10px;
+    padding: 3px 10px;
+    font-size: 8.5px;
+    color: #0d1b2a;
+    white-space: nowrap;
+    background: #fff5f5;
+  }
+
+  /* Agent + QR footer strip */
+  .agent-strip {
+    background: #0d1b2a;
+    margin-top: 14px;
+  }
+  .agent-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .agent-info-td {
+    padding: 12px 20px;
+    vertical-align: middle;
+    width: 70%;
+  }
+  .agent-name {
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: bold;
+  }
+  .agent-agency {
+    color: #7aafd4;
+    font-size: 9px;
+    margin-top: 2px;
+  }
+  .agent-contact {
+    color: #94afc7;
+    font-size: 8.5px;
+    margin-top: 3px;
+  }
+  .agent-qr-td {
+    padding: 10px 20px 10px 0;
+    text-align: right;
+    vertical-align: middle;
+    width: 30%;
+  }
+  .agent-qr-img {
+    width: 55px;
+    height: 55px;
     display: inline-block;
-    border: 1px solid #cccccc; border-radius: 12px;
-    padding: 3px 10px; font-size: 9.5px; 
-    color: #444444; margin: 2px;
+    border: 2px solid #c0392b;
+    border-radius: 4px;
+  }
+  .agent-qr-label {
+    color: #7aafd4;
+    font-size: 7px;
+    text-align: right;
+    margin-top: 3px;
+    letter-spacing: 1px;
   }
 
-  .agente-table { 
-    width: 100%; border-collapse: collapse; 
-    border-top: 1px solid #eeeeee; 
-    margin-top: 16px;
-  }
-  .agente-cell { padding: 14px 24px; vertical-align: middle; }
-  .agente-nombre { font-size: 12px; font-weight: bold; color: #111; }
-  .agente-sub { font-size: 10px; color: #666666; margin-top: 2px; }
-  .generado-cell { 
-    text-align: right; padding: 14px 24px; 
-    vertical-align: middle; color: #999999; font-size: 9px;
+  /* ─── PAGE 2 – Gallery ───────────────────────── */
+  .page2 {
+    page-break-before: always;
+    background: #ffffff;
   }
 
-  .galeria-page { padding: 24px; page-break-before: always; }
-  .foto-main { width: 100%; height: 200px; display: block; margin-bottom: 6px; }
-  .fotos-table { width: 100%; border-collapse: separate; border-spacing: 4px; }
-  .foto-thumb { width: 100%; height: 130px; display: block; }
+  /* Page 2 header bar */
+  .p2-header {
+    background: #0d1b2a;
+    padding: 14px 24px;
+    border-bottom: 3px solid #c0392b;
+  }
+  .p2-header-table { width: 100%; border-collapse: collapse; }
+  .p2-title-td { vertical-align: middle; }
+  .p2-title {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+  .p2-subtitle {
+    color: #7aafd4;
+    font-size: 9px;
+    margin-top: 2px;
+    letter-spacing: 2px;
+  }
+  .p2-badge-td {
+    text-align: right;
+    vertical-align: middle;
+  }
+  .p2-badge {
+    background: #c0392b;
+    color: #ffffff;
+    font-size: 8px;
+    letter-spacing: 2px;
+    padding: 4px 10px;
+    border-radius: 2px;
+  }
+
+  /* Gallery grid — using tables for xhtml2pdf compatibility */
+  .gallery-area {
+    padding: 18px 20px;
+  }
+
+  /* Main large photo */
+  .main-photo-wrap {
+    width: 100%;
+    height: 240px;
+    overflow: hidden;
+    margin-bottom: 8px;
+    border-radius: 3px;
+  }
+  .main-photo {
+    width: 100%;
+    height: 240px;
+    display: block;
+  }
+
+  /* Thumbs grid */
+  .thumbs-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 5px;
+  }
+  .thumb-wrap {
+    height: 130px;
+    overflow: hidden;
+    border-radius: 3px;
+  }
+  .thumb-img {
+    width: 100%;
+    height: 130px;
+    display: block;
+  }
+
+  /* Page 2 agent footer */
+  .p2-footer {
+    background: #0d1b2a;
+    margin-top: 14px;
+  }
+  .p2-footer-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .p2-footer-info {
+    padding: 10px 20px;
+    vertical-align: middle;
+    width: 60%;
+  }
+  .p2-footer-name {
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: bold;
+  }
+  .p2-footer-sub {
+    color: #7aafd4;
+    font-size: 8.5px;
+    margin-top: 2px;
+  }
+  .p2-footer-qr {
+    padding: 8px 20px 8px 0;
+    text-align: right;
+    vertical-align: middle;
+    width: 40%;
+  }
+  .p2-qr-block-table {
+    display: inline-table;
+    border-collapse: collapse;
+  }
+  .p2-qr-img {
+    width: 50px;
+    height: 50px;
+    display: inline-block;
+    border: 2px solid #c0392b;
+    border-radius: 4px;
+    vertical-align: middle;
+  }
+  .p2-qr-right {
+    vertical-align: middle;
+    padding-left: 8px;
+  }
+  .p2-qr-cta {
+    color: #ffffff;
+    font-size: 8px;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+  .p2-qr-hint {
+    color: #7aafd4;
+    font-size: 7px;
+    margin-top: 2px;
+  }
+  .p2-leadbook {
+    color: #c0392b;
+    font-size: 7px;
+    margin-top: 4px;
+    letter-spacing: 1px;
+  }
 </style>
 </head>
 <body>
 
+<!-- ═══════════════════════════════════════════════════════════════
+     PAGE 1 — Property Summary
+════════════════════════════════════════════════════════════════ -->
+
 {% if portada_url %}
-<img class="cover-img" src="{{ portada_url }}" />
+<div class="hero-wrap">
+  <img class="hero-img" src="{{ portada_url }}" />
+</div>
 {% endif %}
 
-<div class="badge-row">
-  <span class="badge-text">{{ operacion|upper }}</span>
+<div class="op-strip">
+  <span class="op-text">{{ operacion|upper }}</span>
 </div>
 
-<div class="precio-row">
-  <div class="precio-text">{{ moneda }} {{ precio }}</div>
-  <div class="ciudad-text">{{ ciudad }}</div>
+<div class="price-block">
+  <div class="price-label">PRECIO</div>
+  <div class="price-value">{{ moneda }} {{ precio }}</div>
+  <div class="price-location">📍 {{ ciudad }}</div>
 </div>
 
+<!-- Stats bar -->
 <table class="stats-table">
   <tr>
     {% if recamaras %}
     <td class="stat-cell">
-      <span class="stat-value">{{ recamaras }}</span>
-      <span class="stat-label">Recámaras</span>
+      <span class="stat-num">{{ recamaras }}</span>
+      <span class="stat-lbl">RECÁMARAS</span>
     </td>
     {% endif %}
     {% if banos %}
     <td class="stat-cell">
-      <span class="stat-value">{{ banos }}</span>
-      <span class="stat-label">Baños</span>
+      <span class="stat-num">{{ banos }}</span>
+      <span class="stat-lbl">BAÑOS</span>
     </td>
     {% endif %}
     {% if superficie_cubierta %}
     <td class="stat-cell">
-      <span class="stat-value">{{ superficie_cubierta }}</span>
-      <span class="stat-label">m² Construidos</span>
+      <span class="stat-num">{{ superficie_cubierta }}</span>
+      <span class="stat-lbl">M² CUBIERTOS</span>
     </td>
     {% endif %}
     {% if superficie_total %}
     <td class="stat-cell">
-      <span class="stat-value">{{ superficie_total }}</span>
-      <span class="stat-label">m² Terreno</span>
+      <span class="stat-num">{{ superficie_total }}</span>
+      <span class="stat-lbl">M² TERRENO</span>
     </td>
     {% endif %}
     {% if estacionamientos %}
-    <td class="stat-cell" style="border-right:none;">
-      <span class="stat-value">{{ estacionamientos }}</span>
-      <span class="stat-label">Estacion.</span>
+    <td class="stat-cell stat-cell-last">
+      <span class="stat-num">{{ estacionamientos }}</span>
+      <span class="stat-lbl">GARAJE</span>
     </td>
     {% endif %}
   </tr>
 </table>
 
-<div class="content-area">
-
-  <div class="section-title">Descripción</div>
-  <div class="descripcion-text">
+<!-- Description -->
+<div class="content">
+  <div class="sec-title">DESCRIPCIÓN</div>
+  <div class="desc-text">
     {{ descripcion|linebreaks }}
   </div>
 
-{% if amenidades %}
-<div style="font-size:14px;font-weight:bold;color:#1e3a5f;margin:14px 0 8px 0;">
-  Amenidades
-</div>
-<table style="border-collapse:separate; border-spacing:4px 4px;">
-  <tr>
-  {% for a in amenidades %}
-    <td style="border:1px solid #999999; border-radius:10px; padding:4px 12px; 
-               font-size:9.5px; color:#444444; white-space:nowrap;
-               background-color:#ffffff;">
-      {{ a }}
-    </td>
-    {% if forloop.counter|divisibleby:5 and not forloop.last %}</tr><tr>{% endif %}
-  {% endfor %}
-  </tr>
-</table>
-{% endif %}
-
-  <table class="agente-table">
+  {% if amenidades %}
+  <div class="sec-title">AMENIDADES</div>
+  <table class="chips-table">
     <tr>
-      <td class="agente-cell">
-        <div class="agente-nombre">{{ agente_nombre }}</div>
-        <div class="agente-sub">{{ agencia_nombre }}</div>
-        <div class="agente-sub">{{ agente_telefono }} | {{ agente_email }}</div>
+    {% for a in amenidades %}
+      <td class="chip-td">{{ a }}</td>
+      {% if forloop.counter|divisibleby:6 and not forloop.last %}</tr><tr>{% endif %}
+    {% endfor %}
+    </tr>
+  </table>
+  {% endif %}
+</div>
+
+<!-- Agent strip -->
+<div class="agent-strip">
+  <table class="agent-table">
+    <tr>
+      <td class="agent-info-td">
+        <div class="agent-name">{{ agente_nombre }}</div>
+        <div class="agent-agency">{{ agencia_nombre }}</div>
+        <div class="agent-contact">{{ agente_telefono }} &nbsp;|&nbsp; {{ agente_email }}</div>
       </td>
-      <td class="generado-cell">
+      <td class="agent-qr-td">
         {% if qr_code %}
-        <img src="{{ qr_code }}" style="width:60px;height:60px;display:block;margin-left:auto;" />
+        <img class="agent-qr-img" src="{{ qr_code }}" />
+        <div class="agent-qr-label">ESCANEAR</div>
         {% endif %}
-        <div style="font-size:9px;color:#999999;text-align:right;margin-top:4px;">
-          Generado con LeadBook
-        </div>
       </td>
     </tr>
   </table>
-
 </div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════
+     PAGE 2 — Photo Gallery
+════════════════════════════════════════════════════════════════ -->
 
 {% if fotos_recorrido %}
-<div class="galeria-page">
-  <div class="section-title">Galería de Fotos</div>
-  
-  {% if fotos_recorrido.0 %}
-  <img class="foto-main" src="{{ fotos_recorrido.0 }}" />
-  {% endif %}
+<div class="page2">
 
-  <table class="fotos-table">
-    {% if fotos_recorrido|length > 1 %}
-    <tr>
-      <td style="width:50%; padding:2px;">
-        <img class="foto-thumb" src="{{ fotos_recorrido.1 }}" />
-      </td>
-      <td style="width:50%; padding:2px;">
-        {% if fotos_recorrido|length > 2 %}
-        <img class="foto-thumb" src="{{ fotos_recorrido.2 }}" />
-        {% endif %}
-      </td>
-    </tr>
+  <!-- Header -->
+  <div class="p2-header">
+    <table class="p2-header-table">
+      <tr>
+        <td class="p2-title-td">
+          <div class="p2-title">GALERÍA DE FOTOS</div>
+          <div class="p2-subtitle">{{ ciudad|upper }} &nbsp;·&nbsp; {{ operacion|upper }}</div>
+        </td>
+        <td class="p2-badge-td">
+          <span class="p2-badge">{{ moneda }} {{ precio }}</span>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- Photos -->
+  <div class="gallery-area">
+
+    {% if fotos_recorrido.0 %}
+    <div class="main-photo-wrap">
+      <img class="main-photo" src="{{ fotos_recorrido.0 }}" />
+    </div>
     {% endif %}
-    {% if fotos_recorrido|length > 3 %}
-    <tr>
-      <td style="padding:2px;">
-        <img class="foto-thumb" src="{{ fotos_recorrido.3 }}" />
-      </td>
-      <td style="padding:2px;">
-        {% if fotos_recorrido|length > 4 %}
-        <img class="foto-thumb" src="{{ fotos_recorrido.4 }}" />
-        {% endif %}
-      </td>
-    </tr>
-    {% endif %}
-  </table>
+
+    <table class="thumbs-table">
+      {% if fotos_recorrido|length > 1 %}
+      <tr>
+        <td style="width:33%; padding:2px;">
+          <div class="thumb-wrap">
+            <img class="thumb-img" src="{{ fotos_recorrido.1 }}" />
+          </div>
+        </td>
+        <td style="width:33%; padding:2px;">
+          {% if fotos_recorrido|length > 2 %}
+          <div class="thumb-wrap">
+            <img class="thumb-img" src="{{ fotos_recorrido.2 }}" />
+          </div>
+          {% endif %}
+        </td>
+        <td style="width:33%; padding:2px;">
+          {% if fotos_recorrido|length > 3 %}
+          <div class="thumb-wrap">
+            <img class="thumb-img" src="{{ fotos_recorrido.3 }}" />
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endif %}
+      {% if fotos_recorrido|length > 4 %}
+      <tr>
+        <td style="width:33%; padding:2px;">
+          <div class="thumb-wrap">
+            <img class="thumb-img" src="{{ fotos_recorrido.4 }}" />
+          </div>
+        </td>
+        <td style="width:33%; padding:2px;">
+          {% if fotos_recorrido|length > 5 %}
+          <div class="thumb-wrap">
+            <img class="thumb-img" src="{{ fotos_recorrido.5 }}" />
+          </div>
+          {% endif %}
+        </td>
+        <td style="width:33%; padding:2px;">
+          {% if fotos_recorrido|length > 6 %}
+          <div class="thumb-wrap">
+            <img class="thumb-img" src="{{ fotos_recorrido.6 }}" />
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endif %}
+    </table>
+
+  </div>
+
+  <!-- Footer with agent + QR -->
+  <div class="p2-footer">
+    <table class="p2-footer-table">
+      <tr>
+        <td class="p2-footer-info">
+          <div class="p2-footer-name">{{ agente_nombre }}</div>
+          <div class="p2-footer-sub">{{ agencia_nombre }} &nbsp;·&nbsp; {{ agente_telefono }}</div>
+          <div class="p2-leadbook">GENERADO CON LEADBOOK AI</div>
+        </td>
+        <td class="p2-footer-qr">
+          {% if qr_code %}
+          <table class="p2-qr-block-table">
+            <tr>
+              <td>
+                <img class="p2-qr-img" src="{{ qr_code }}" />
+              </td>
+              <td class="p2-qr-right">
+                <div class="p2-qr-cta">VER FICHA</div>
+                <div class="p2-qr-hint">Escaneá con tu cámara</div>
+              </td>
+            </tr>
+          </table>
+          {% endif %}
+        </td>
+      </tr>
+    </table>
+  </div>
+
 </div>
 {% endif %}
 
