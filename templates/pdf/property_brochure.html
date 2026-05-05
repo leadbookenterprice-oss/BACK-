@@ -176,7 +176,6 @@
   .amenidades-wrap {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
     margin-top: 4px;
   }
   .chip {
@@ -186,6 +185,8 @@
     padding: 5px 14px;
     border-radius: 20px;
     background: white;
+    margin-right: 8px;
+    margin-bottom: 8px;
   }
 
   /* FOOTER CONTACTO */
@@ -194,7 +195,6 @@
     padding: 16px 32px;
     display: flex;
     align-items: center;
-    gap: 18px;
     margin-top: 8px;
     background: #FAFAFA;
   }
@@ -205,6 +205,7 @@
     object-fit: cover;
     border: 2px solid #1B3068;
     flex-shrink: 0;
+    margin-right: 18px;
   }
   .agente-avatar-inicial {
     width: 60px;
@@ -218,6 +219,7 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    margin-right: 18px;
   }
   .agente-datos { flex: 1; }
   .agente-nombre {
@@ -301,19 +303,20 @@
 <div class="page1">
 
   <!-- TOP BAR -->
-  <div class="top-bar">
-    <div class="top-bar-left">
-      <span class="badge-operacion">{{ operacion|upper }}</span>
-      <span class="badge-tipo">{{ tipo_propiedad }}</span>
-    </div>
-    <div class="logo-wrap">
-      {% if logo_url %}
-        <img src="{{ logo_url }}" alt="Logo agencia" />
-      {% else %}
-        <span class="logo-texto">{{ agencia_nombre }}</span>
-      {% endif %}
-    </div>
-  </div>
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#111111;">
+    <tr>
+      <td style="padding:10px 20px; width:50%;">
+        <span style="background-color:#CC0000; color:white; font-weight:700; font-size:12px; padding:5px 12px; border-radius:3px; letter-spacing:1px;">{{ operacion|upper }}</span>
+      </td>
+      <td style="padding:10px 20px; text-align:right; width:50%;">
+        {% if logo_url %}
+          <img src="{{ logo_url }}" style="max-height:36px; max-width:130px;" />
+        {% else %}
+          <span style="color:white; font-weight:700; font-size:12px;">{{ agencia_nombre }}</span>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
 
   <!-- FOTO HERO -->
   {% if portada_url %}
@@ -334,38 +337,30 @@
   </div>
 
   <!-- STATS BAR -->
-  <div class="stats-bar">
-    {% if recamaras %}
-    <div class="stat-item">
-      <div class="stat-numero">{{ recamaras }}</div>
-      <div class="stat-label">Recámaras</div>
-    </div>
-    {% endif %}
-    {% if banos %}
-    <div class="stat-item">
-      <div class="stat-numero">{{ banos }}</div>
-      <div class="stat-label">Baños</div>
-    </div>
-    {% endif %}
-    {% if superficie_cubierta %}
-    <div class="stat-item">
-      <div class="stat-numero">{{ superficie_cubierta }}</div>
-      <div class="stat-label">M² Construidos</div>
-    </div>
-    {% endif %}
-    {% if superficie_total %}
-    <div class="stat-item">
-      <div class="stat-numero">{{ superficie_total }}</div>
-      <div class="stat-label">M² Terreno</div>
-    </div>
-    {% endif %}
-    {% if estacionamientos %}
-    <div class="stat-item">
-      <div class="stat-numero">{{ estacionamientos }}</div>
-      <div class="stat-label">Estacionamientos</div>
-    </div>
-    {% endif %}
-  </div>
+  <table width="100%" cellpadding="14" cellspacing="0" style="background-color:#1B3068;">
+    <tr>
+      <td style="text-align:center; border-right:1px solid #2a4a8a; width:20%;">
+        <div style="color:white; font-size:26px; font-weight:800; margin:0;">{{ recamaras }}</div>
+        <div style="color:#8899CC; font-size:9px; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px;">Recámaras</div>
+      </td>
+      <td style="text-align:center; border-right:1px solid #2a4a8a; width:20%;">
+        <div style="color:white; font-size:26px; font-weight:800; margin:0;">{{ banos }}</div>
+        <div style="color:#8899CC; font-size:9px; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px;">Baños</div>
+      </td>
+      <td style="text-align:center; border-right:1px solid #2a4a8a; width:20%;">
+        <div style="color:white; font-size:26px; font-weight:800; margin:0;">{{ superficie_cubierta }}</div>
+        <div style="color:#8899CC; font-size:9px; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px;">M² Construidos</div>
+      </td>
+      <td style="text-align:center; border-right:1px solid #2a4a8a; width:20%;">
+        <div style="color:white; font-size:26px; font-weight:800; margin:0;">{{ superficie_total }}</div>
+        <div style="color:#8899CC; font-size:9px; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px;">M² Terreno</div>
+      </td>
+      <td style="text-align:center; width:20%;">
+        <div style="color:white; font-size:26px; font-weight:800; margin:0;">{{ estacionamientos }}</div>
+        <div style="color:#8899CC; font-size:9px; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px;">Estac.</div>
+      </td>
+    </tr>
+  </table>
 
   <!-- DESCRIPCIÓN -->
   <div class="seccion">
@@ -419,30 +414,105 @@
     <span class="galeria-subtitulo">{{ ciudad }} &nbsp;|&nbsp; {{ moneda }} {{ precio }}</span>
   </div>
 
-  <!-- Foto principal -->
-  {% if fotos_recorrido.0 %}
-    <img class="foto-principal" src="{{ fotos_recorrido.0 }}" alt="Foto 1" />
+  <!-- FOTO PRINCIPAL -->
+  {% if fotos_recorrido %}
+  <img src="{{ fotos_recorrido.0 }}" width="100%" style="height:280px; object-fit:cover; display:block; border-radius:4px;" />
   {% endif %}
 
-  <!-- Fila 1: fotos 1 y 2 -->
+  <!-- FILA 1 -->
   {% if fotos_recorrido|length > 1 %}
-  <div class="foto-fila">
-    <img class="foto-miniatura" src="{{ fotos_recorrido.1 }}" alt="Foto 2" />
-    {% if fotos_recorrido|length > 2 %}
-    <img class="foto-miniatura" src="{{ fotos_recorrido.2 }}" alt="Foto 3" />
-    {% endif %}
-  </div>
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+    <tr>
+      <td width="49%" style="padding-right:4px;">
+        <img src="{{ fotos_recorrido.1 }}" width="100%" style="height:190px; object-fit:cover; border-radius:4px; display:block;" />
+      </td>
+      <td width="49%" style="padding-left:4px;">
+        {% if fotos_recorrido|length > 2 %}
+        <img src="{{ fotos_recorrido.2 }}" width="100%" style="height:190px; object-fit:cover; border-radius:4px; display:block;" />
+        {% endif %}
+      </td>
+    </tr>
+  </table>
   {% endif %}
 
-  <!-- Fila 2: fotos 3 y 4 -->
+  <!-- FILA 2 -->
   {% if fotos_recorrido|length > 3 %}
-  <div class="foto-fila">
-    <img class="foto-miniatura" src="{{ fotos_recorrido.3 }}" alt="Foto 4" />
-    {% if fotos_recorrido|length > 4 %}
-    <img class="foto-miniatura" src="{{ fotos_recorrido.4 }}" alt="Foto 5" />
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">
+    <tr>
+      <td width="49%" style="padding-right:4px;">
+        <img src="{{ fotos_recorrido.3 }}" width="100%" style="height:190px; object-fit:cover; border-radius:4px; display:block;" />
+      </td>
+      <td width="49%" style="padding-left:4px;">
+        {% if fotos_recorrido|length > 4 %}
+        <img src="{{ fotos_recorrido.4 }}" width="100%" style="height:190px; object-fit:cover; border-radius:4px; display:block;" />
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+  {% endif %}
+
+  <!-- ESPECIFICACIONES (PÁGINA 2) -->
+  <div style="padding:24px 32px 0px 32px;">
+    <div style="color:#1B3068; font-size:16px; font-weight:700; padding-bottom:6px; border-bottom:2px solid #1B3068; margin-bottom:16px;">Especificaciones</div>
+    <table width="100%" cellpadding="10" cellspacing="0" style="border-collapse:collapse;">
+      <tr style="background-color:#F5F7FF;">
+        <td style="color:#888; font-size:11px; width:40%; border-bottom:1px solid #EEEEEE;">Tipo de propiedad</td>
+        <td style="color:#333; font-size:12px; font-weight:600; border-bottom:1px solid #EEEEEE;">{{ tipo_propiedad }}</td>
+      </tr>
+      <tr>
+        <td style="color:#888; font-size:11px; border-bottom:1px solid #EEEEEE;">Operación</td>
+        <td style="color:#333; font-size:12px; font-weight:600; border-bottom:1px solid #EEEEEE;">{{ operacion }}</td>
+      </tr>
+      <tr style="background-color:#F5F7FF;">
+        <td style="color:#888; font-size:11px; border-bottom:1px solid #EEEEEE;">Precio</td>
+        <td style="color:#333; font-size:12px; font-weight:600; border-bottom:1px solid #EEEEEE;">{{ precio }} {{ moneda }}</td>
+      </tr>
+      <tr>
+        <td style="color:#888; font-size:11px; border-bottom:1px solid #EEEEEE;">Ubicación</td>
+        <td style="color:#333; font-size:12px; font-weight:600; border-bottom:1px solid #EEEEEE;">{{ ciudad }}</td>
+      </tr>
+      <tr style="background-color:#F5F7FF;">
+        <td style="color:#888; font-size:11px; border-bottom:1px solid #EEEEEE;">Recámaras</td>
+        <td style="color:#333; font-size:12px; font-weight:600; border-bottom:1px solid #EEEEEE;">{{ recamaras }}</td>
+      </tr>
+      <tr>
+        <td style="color:#888; font-size:11px; border-bottom:1px solid #EEEEEE;">Baños</td>
+        <td style="color:#333; font-size:12px; font-weight:600; border-bottom:1px solid #EEEEEE;">{{ banos }}</td>
+      </tr>
+      <tr style="background-color:#F5F7FF;">
+        <td style="color:#888; font-size:11px; border-bottom:1px solid #EEEEEE;">Sup. Construida</td>
+        <td style="color:#333; font-size:12px; font-weight:600; border-bottom:1px solid #EEEEEE;">{{ superficie_cubierta }} m²</td>
+      </tr>
+      <tr>
+        <td style="color:#888; font-size:11px; border-bottom:1px solid #EEEEEE;">Sup. Terreno</td>
+        <td style="color:#333; font-size:12px; font-weight:600; border-bottom:1px solid #EEEEEE;">{{ superficie_total }} m²</td>
+      </tr>
+      <tr style="background-color:#F5F7FF;">
+        <td style="color:#888; font-size:11px;">Estacionamientos</td>
+        <td style="color:#333; font-size:12px; font-weight:600;">{{ estacionamientos }}</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- FOOTER CONTACTO (PÁGINA 2) -->
+  <div class="footer-contacto" style="margin-top: 20px;">
+    {% if agente_foto %}
+      <img class="agente-avatar" src="{{ agente_foto }}" alt="Foto agente" />
+    {% else %}
+      <div class="agente-avatar-inicial">{{ agente_nombre|first|upper }}</div>
+    {% endif %}
+    <div class="agente-datos">
+      <div class="agente-nombre">{{ agente_nombre }}</div>
+      <div class="agente-agencia">{{ agencia_nombre }}</div>
+      <div class="agente-contacto">{{ agente_telefono }} &nbsp;·&nbsp; {{ agente_email }}</div>
+      <div class="generado-con">Generado con LeadBook</div>
+    </div>
+    {% if qr_code %}
+    <div class="qr-codigo">
+      <img src="{{ qr_code }}" alt="QR Contacto" />
+    </div>
     {% endif %}
   </div>
-  {% endif %}
 
 </div><!-- /page2 -->
 {% endif %}

@@ -988,17 +988,29 @@ def generar_pdf(request):
         agente_telefono = data.get('agenteTelefono', '') or request.user.telefono or ''
 
         # ─── Procesar imágenes (base64 Y URLs) ───────────────────────────────
-        portada_url = save_temp_image(data.get('portadaUrl', '')) or ''
-        logo_url    = save_temp_image(data.get('logoAgenciaUrl', data.get('logo_url', ''))) or ''
+        logo_val_raw = data.get('logoAgenciaUrl', data.get('logo_url', ''))
+        logo_url = save_temp_image(logo_val_raw) or ''
 
+        portada_val_raw = data.get('portadaUrl', '')
         fotos_raw = data.get('fotosRecorrido', [])
+
+        # Filtrar el logo de las fotos del recorrido
+        fotos_limpias = []
+        for f in fotos_raw:
+            fv = f.get('url') or f.get('base64') or '' if isinstance(f, dict) else f or ''
+            if fv and fv != logo_val_raw:
+                fotos_limpias.append(fv)
+
+        # Si la portada viene vacía o es igual al logo, usar la primera foto real de la propiedad
+        if not portada_val_raw or portada_val_raw == logo_val_raw:
+            if fotos_limpias:
+                portada_val_raw = fotos_limpias[0]
+
+        portada_url = save_temp_image(portada_val_raw) or ''
+
         fotos_recorrido = []
-        for foto in fotos_raw:
-            if isinstance(foto, dict):
-                foto_val = foto.get('url') or foto.get('base64') or ''
-            else:
-                foto_val = foto or ''
-            path = save_temp_image(foto_val)
+        for fv in fotos_limpias:
+            path = save_temp_image(fv)
             if path:
                 fotos_recorrido.append(path)
 
