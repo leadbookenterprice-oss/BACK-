@@ -12,7 +12,7 @@ from .views import (
     generar_video, obtener_terminos, obtener_politica_privacidad,
     plan_status, seleccionar_plan_free, test_upload_avatar, generar_carrusel,
     amenidades_presets, recuperar_password, confirmar_recuperacion,
-    publicar_redes_sociales
+    publicar_redes_sociales, proxy_pdf_view, proxy_pdf_thumbnail_view
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -49,6 +49,8 @@ urlpatterns = [
     path('listados/', ListadosView.as_view(), name='listados'),
     path('listados/<int:pk>/', ListadoDetalleView.as_view(), name='listado_detalle'),
     path('listados/<int:pk>/generar-video/', generar_video, name='generar_video'),
+    path('listados/<int:listado_id>/pdf-proxy/', proxy_pdf_view, name='pdf_proxy'),
+    path('listados/<int:listado_id>/pdf-thumbnail/', proxy_pdf_thumbnail_view, name='pdf_thumbnail'),
 
     path('', include(router.urls)),
     path('generar-guion/', generar_guion, name='generar_guion'),
