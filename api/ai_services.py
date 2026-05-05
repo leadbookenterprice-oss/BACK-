@@ -24,11 +24,30 @@ def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
     system_prompt = kwargs.get('system_prompt', '')
     full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
     
-    response = client.models.generate_content(
-        model='gemini-2.0-flash-lite',
-        contents=full_prompt,
-    )
-    return response.text
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-lite',
+            contents=full_prompt,
+        )
+        return response.text
+    except Exception as e:
+        error_msg = str(e).lower()
+        if '429' in error_msg or 'quota' in error_msg or 'exhausted' in error_msg:
+            if agente:
+                try:
+                    from api.pool_manager import get_api_key
+                    from api.models import APIKey
+                    key_str = get_api_key(agente, 'gemini')
+                    if key_str:
+                        k = APIKey.objects.filter(api_key=key_str).first()
+                        if k:
+                            k.status = 'exhausted'
+                            k.requests_this_month = k.monthly_limit or 1500
+                            k.save()
+                except Exception as ex:
+                    logger.error(f"Error marcando Gemini como agotada: {ex}")
+            raise Exception("Llegaste al límite mensual de tu API de Inteligencia Artificial (Gemini).")
+        raise e
 
 def call_groq_api(prompt: str, **kwargs) -> str:
     """
@@ -153,6 +172,20 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
             if agente and response.status_code in [401, 429]:
                  from api.pool_manager import marcar_agotada
                  marcar_agotada(agente, 'elevenlabs')
+                 # Forzar cuota al maximo para que la UI marque 100% consumido
+                 try:
+                     from api.pool_manager import get_api_key
+                     from api.models import APIKey
+                     key_str = get_api_key(agente, 'elevenlabs')
+                     if key_str:
+                         k = APIKey.objects.filter(api_key=key_str).first()
+                         if k:
+                             k.status = 'exhausted'
+                             k.requests_this_month = k.monthly_limit or 10000
+                             k.save()
+                 except Exception as e:
+                     logger.error(f"Error marcando ElevenLabs como agotada: {e}")
+                 raise Exception("Llegaste al límite mensual de tu API de Audio (ElevenLabs).")
             return None
     except Exception as e:
         print(f"[ERROR] Exception in ElevenLabs call: {str(e)}")

@@ -286,6 +286,30 @@ def publicar_media_upload_api(
         else:
             error_text = response.text[:500]
             print(f"[UploadPost] Error HTTP {response.status_code}: {error_text}")
+            
+            # --- MANEJO DE LIMITES REALES ---
+            is_limit_error = response.status_code == 429 or 'limit' in error_text.lower() or 'quota' in error_text.lower()
+            if is_limit_error and agente:
+                try:
+                    from api.pool_manager import get_api_key
+                    from api.models import APIKey
+                    key_str = get_api_key(agente, 'uploadpost')
+                    if key_str:
+                        k = APIKey.objects.filter(api_key=key_str).first()
+                        if k:
+                            k.status = 'exhausted'
+                            # Forzamos el límite al máximo para que la UI marque 100% gastado
+                            k.requests_this_month = k.monthly_limit or 10
+                            k.save()
+                except Exception as e:
+                    print(f"Error marcando UploadPost key como agotada: {e}")
+                    
+                return {
+                    "success": False,
+                    "error": "Llegaste al límite mensual de tu API de UploadPost."
+                }
+            # --------------------------------
+            
             return {
                 "success": False,
                 "error": f"Error de Upload Post ({response.status_code}): {error_text}"
