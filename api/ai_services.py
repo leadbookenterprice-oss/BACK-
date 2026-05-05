@@ -299,5 +299,20 @@ REGLAS DE RESPUESTA:
             
         return html_output.strip()
     except Exception as e:
+        error_msg = str(e).lower()
+        if '429' in error_msg or 'quota' in error_msg or 'exhausted' in error_msg:
+            if agente:
+                try:
+                    from api.pool_manager import get_api_key
+                    from api.models import APIKey
+                    key_str = get_api_key(agente, 'gemini')
+                    if key_str:
+                        k = APIKey.objects.filter(api_key=key_str).first()
+                        if k:
+                            k.status = 'exhausted'
+                            k.requests_this_month = k.monthly_limit or 1500
+                            k.save()
+                except Exception as ex:
+                    logger.error(f"Error marcando Gemini como agotada en generar_html_gemini: {ex}")
         logger.error(f"Error en generar_html_gemini: {e}")
         return None
