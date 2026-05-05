@@ -581,20 +581,20 @@ def generar_carrusel(request):
             
             # Subir a Cloudinary via Almacenamiento centralizado
             try:
-                print(f"[DEBUG] Subiendo slide {i+1} al Almacenamiento...")
                 image_stream.seek(0)
                 listado_id_val = data.get('listado_id')
                 url = AlmacenamientoCloudinary.guardar_slide_carrusel(
-                    image_stream, user_id=user.id, listado_id=listado_id_val, indice=i
+                    image_stream, 
+                    user_id=request.user.id, 
+                    listado_id=listado_id_val,
+                    slide_index=i + 1
                 )
-                if url:
-                    slides_urls.append(url)
-                    print(f"[DEBUG] Slide {i+1} OK: {url}")
-                else:
+                if not url:
                     raise Exception('Almacenamiento devolvió None')
+                slides_urls.append(url)
             except Exception as cloud_err:
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
-                raise cloud_err
+                return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
         # Generar Caption con Gemini (con fallback a Groq)
         prompt_text = f"Escribí un caption para un carrusel de Instagram de una propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Enfocado en vender el estilo de vida y llamar a la acción. Usá emojis y hashtags."
@@ -1094,13 +1094,15 @@ def generar_imagen_post(request):
             img_url = AlmacenamientoCloudinary.guardar_post(
                 image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
-            public_id = None  # El public_id lo gestiona el servicio internamente
-        except Exception as cloud_err:
-            print(f"[Cloudinary] Error subiendo imagen: {cloud_err} — devolviendo base64")
-            image_stream.seek(0)
-            img_base64 = base64.b64encode(image_stream.getvalue()).decode('utf-8')
-            img_url = f"data:image/png;base64,{img_base64}"
             public_id = None
+            if not img_url:
+                raise Exception("Cloudinary no devolvió una URL válida")
+        except Exception as cloud_err:
+            print(f"[Cloudinary] Error crítico subiendo imagen: {cloud_err}")
+            return Response({
+                "error": "error_subida",
+                "mensaje": "No se pudo subir la imagen a la nube. Reintentá en unos segundos."
+            }, status=500)
 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'image')
@@ -1163,16 +1165,14 @@ def generar_imagen_story(request):
             img_url = AlmacenamientoCloudinary.guardar_story(
                 image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
-            public_id = None
-            # También generamos base64 por si el frontend lo necesita de inmediato
-            image_stream.seek(0)
-            img_base64 = base64.b64encode(image_stream.getvalue()).decode('utf-8')
+            if not img_url:
+                raise Exception("Cloudinary no devolvió una URL válida")
         except Exception as cloud_err:
-            print(f"[Cloudinary] Error subiendo story: {cloud_err} — devolviendo base64")
-            image_stream.seek(0)
-            img_base64 = base64.b64encode(image_stream.getvalue()).decode('utf-8')
-            img_url   = f"data:image/png;base64,{img_base64}"
-            public_id = None
+            print(f"[Cloudinary] Error crítico subiendo story: {cloud_err}")
+            return Response({
+                "error": "error_subida",
+                "mensaje": "No se pudo subir la historia a la nube."
+            }, status=500)
 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'image')
