@@ -926,10 +926,43 @@ def generar_pdf(request):
                 print(f"[PDF] Error decodificando imagen base64: {e}")
                 return None
 
-        def ruta_a_file_url(path):
-            """Convierte un path local /tmp/archivo.jpg a file:///tmp/archivo.jpg para WeasyPrint."""
-            if path and isinstance(path, str) and os.path.exists(path):
-                return f"file://{path}"
+        def imagen_a_base64(ruta):
+            """Convierte una imagen (ruta local o URL http) a data URI base64 para embeber en HTML."""
+            if not ruta or not isinstance(ruta, str):
+                return ''
+            # Si ya es una data URI, retornarla tal cual
+            if ruta.startswith('data:'):
+                return ruta
+            # Si es URL HTTP: descargar en memoria
+            if ruta.startswith('http://') or ruta.startswith('https://'):
+                try:
+                    import urllib.request
+                    with urllib.request.urlopen(ruta, timeout=10) as r:
+                        data = r.read()
+                    ext = ruta.split('.')[-1].lower().split('?')[0]
+                    mime = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                            'png': 'image/png', 'gif': 'image/gif',
+                            'webp': 'image/webp'}.get(ext, 'image/jpeg')
+                    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+                except Exception as e:
+                    print(f"[PDF] Error descargando imagen {ruta}: {e}")
+                    return ''
+            # Si es un file:// URL, extraer el path
+            if ruta.startswith('file://'):
+                ruta = ruta[7:]
+            # Si es ruta local
+            if os.path.exists(ruta):
+                try:
+                    with open(ruta, 'rb') as f:
+                        data = f.read()
+                    ext = ruta.split('.')[-1].lower()
+                    mime = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                            'png': 'image/png', 'gif': 'image/gif',
+                            'webp': 'image/webp'}.get(ext, 'image/jpeg')
+                    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+                except Exception as e:
+                    print(f"[PDF] Error leyendo imagen {ruta}: {e}")
+                    return ''
             return ''
 
         # ─── Extraer campos normalizados ──────────────────────────────────────
@@ -1021,9 +1054,9 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
             'estacionamientos':   estacionamientos,
             'descripcion':        descripcion,
             'amenidades':         amenidades,
-            'portada_url':        ruta_a_file_url(portada_url),
-            'fotos_recorrido':    [ruta_a_file_url(f) for f in fotos_recorrido],
-            'logo_url':           ruta_a_file_url(logo_url),
+            'portada_url':        imagen_a_base64(portada_url),
+            'fotos_recorrido':    [imagen_a_base64(f) for f in fotos_recorrido],
+            'logo_url':           imagen_a_base64(logo_url),
             'agente_nombre':      agente_nombre,
             'agente_telefono':    agente_telefono,
             'agente_email':       agente_email,
@@ -1039,7 +1072,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         html_string = render_to_string('pdf/property_brochure.html', context)
         pdf_bytes = HTML(
             string=html_string,
-            base_url='file:///'
+            base_url=None
         ).write_pdf()
 
         # ─── Limpiar archivos temporales de imágenes ─────────────────────────
