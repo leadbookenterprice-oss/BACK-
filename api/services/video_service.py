@@ -113,20 +113,36 @@ No incluyas preámbulos, solo el texto en español neutro."""
                     with open(audio_path, 'wb') as f_audio:
                         f_audio.write(audio_bytes)
                     
-                    # Transcribe for word-level timing
-                    transcribe_cmd = [
-                        "npx.cmd" if os.name == 'nt' else "npx", 
-                        "hyperframes", "transcribe", audio_path
-                    ]
-                    subprocess.run(transcribe_cmd, cwd=engine_dir, shell=True if os.name == 'nt' else False)
-                    
-                    transcript_path = audio_path.replace('.mp3', '.json')
-                    if not os.path.exists(transcript_path):
-                        # Create a dummy transcript if transcription failed
-                        words = script_vo.split()
+                    # Transcribe for word-level timing using Local Whisper
+                    try:
+                        import whisper
+                        # Load the base model (downloads automatically if not cached)
+                        model = whisper.load_model("base")
+                        result = model.transcribe(audio_path, word_timestamps=True)
+                        
+                        words = []
+                        for segment in result.get('segments', []):
+                            for word_data in segment.get('words', []):
+                                words.append({
+                                    "word": word_data['word'].strip(),
+                                    "start": word_data['start'],
+                                    "end": word_data['end']
+                                })
+                                
+                        transcript_path = audio_path.replace('.mp3', '.json')
+                        with open(transcript_path, 'w', encoding='utf-8') as f:
+                            json.dump(words, f)
+                            
+                        if words:
+                            vo_duration = words[-1]['end'] + 0.5
+                    except Exception as e:
+                        logging.error(f"Local Whisper transcription failed: {e}")
+                        # Fallback to dummy transcript if whisper fails
+                        transcript_path = audio_path.replace('.mp3', '.json')
+                        words_list = script_vo.split()
                         dummy_transcript = []
-                        step = vo_duration / len(words) if words else 1
-                        for i, w in enumerate(words):
+                        step = vo_duration / len(words_list) if words_list else 1
+                        for i, w in enumerate(words_list):
                             dummy_transcript.append({
                                 "word": w,
                                 "start": i * step,
@@ -134,12 +150,6 @@ No incluyas preámbulos, solo el texto en español neutro."""
                             })
                         with open(transcript_path, 'w', encoding='utf-8') as f_dummy:
                             json.dump(dummy_transcript, f_dummy)
-
-                    if os.path.exists(transcript_path):
-                        with open(transcript_path, 'r', encoding='utf-8') as f_trans:
-                            transcript_data = json.load(f_trans)
-                            if transcript_data:
-                                vo_duration = transcript_data[-1]['end'] + 0.5
         except Exception as e:
             logging.error(f"Voiceover/Transcription failed: {e}")
 

@@ -103,3 +103,5 @@ channels==4.0.0
 channels-redis==4.2.0
 daphne==4.0.0
 django-ratelimit==4.1.0
+openai-whisper==20231117
+playwright==1.42.0
