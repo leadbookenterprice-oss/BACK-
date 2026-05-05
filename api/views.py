@@ -21,8 +21,9 @@ from .serializers import (
 )
 from .tasks import run_asset_generation
 from .ai_services import call_groq_api, call_gemini_api, smart_call
+from django.template.loader import render_to_string
+from .services.render_engine import render_html_to_image
 from .plan_utils import puede_generar, incrementar_uso
-from .image_generator import generate_social_image
 
 LIMITES_PLAN = {
     'free':     {'listados_mes': 10},
@@ -555,19 +556,28 @@ def generar_carrusel(request):
             images_to_use.append(images_to_use[len(images_to_use) % len(images_to_use)])
             
         slides_urls = []
-        titles = [
-            "Descubrí esta oportunidad única",
-            "Espacios amplios y luminosos",
-            "Detalles de categoría y confort",
-            "Ubicación privilegiada en la ciudad",
-            "Tu próximo hogar te espera"
+        slides_content = [
+            {"headline": data.get('tipoPropiedad', 'Propiedad'), "subheadline": f"Una oportunidad única en {data.get('ciudad', '')}"},
+            {"headline": "Espacios", "subheadline": "Diseño y amplitud pensados para tu máximo confort."},
+            {"headline": "Detalles", "subheadline": "Terminaciones de calidad que marcan la diferencia."},
+            {"headline": "Inversión", "subheadline": f"Tu próximo hogar por solo {data.get('moneda', 'USD')} {data.get('precio', '')}"},
+            {"headline": "Contacto", "subheadline": "No dejes pasar esta oportunidad. Contactanos hoy."}
         ]
 
         for i in range(5):
-            slide_data = data.copy()
-            slide_data['portadaUrl'] = images_to_use[i]
+            # Preparar contexto para el slide actual
+            context = {
+                "portada_url": images_to_use[i],
+                "headline": slides_content[i]["headline"],
+                "subheadline": slides_content[i]["subheadline"],
+                "slide_number": i + 1,
+                "total_slides": 5,
+                "logo_url": data.get('logoAgenciaUrl')
+            }
             
-            image_stream = generate_social_image(slide_data, is_story=False, headline=titles[i])
+            # Renderizar el slide con Playwright
+            html_content = render_to_string('renders/carousel.html', context)
+            image_stream = render_html_to_image(html_content, 1080, 1350)
             
             # Subir a Cloudinary via Almacenamiento centralizado
             try:
@@ -1051,7 +1061,27 @@ def generar_imagen_post(request):
             }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
-        image_stream = generate_social_image(data, is_story=False)
+        
+        # Preparar contexto para la plantilla premium
+        context = {
+            "portada_url": data.get('portadaUrl'),
+            "operacion": data.get('operacion', 'Venta'),
+            "tipoPropiedad": data.get('tipoPropiedad', 'Propiedad'),
+            "ciudad": data.get('ciudad', ''),
+            "precio": data.get('precio', ''),
+            "moneda": data.get('moneda', 'USD'),
+            "logo_url": data.get('logoAgenciaUrl'),
+            "caracteristicas": [
+                {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
+                {"label": "Hab", "valor": data.get('recamaras')},
+                {"label": "Baños", "valor": data.get('banos')},
+            ]
+        }
+        context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
+
+        # Renderizar HTML y luego convertir a imagen PNG con Playwright
+        html_content = render_to_string('renders/post.html', context)
+        image_stream = render_html_to_image(html_content, 1080, 1080)
 
         # Generar caption con IA (con fallback)
         prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres, usá hashtags y emojis."
@@ -1101,7 +1131,27 @@ def generar_imagen_story(request):
             }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
-        image_stream = generate_social_image(data, is_story=True)
+        
+        # Preparar contexto para la plantilla premium
+        context = {
+            "portada_url": data.get('portadaUrl'),
+            "operacion": data.get('operacion', 'Venta'),
+            "tipoPropiedad": data.get('tipoPropiedad', 'Propiedad'),
+            "ciudad": data.get('ciudad', ''),
+            "precio": data.get('precio', ''),
+            "moneda": data.get('moneda', 'USD'),
+            "logo_url": data.get('logoAgenciaUrl'),
+            "caracteristicas": [
+                {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
+                {"label": "Hab", "valor": data.get('recamaras')},
+                {"label": "Baños", "valor": data.get('banos')},
+            ]
+        }
+        context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
+
+        # Renderizar HTML y luego convertir a imagen PNG con Playwright (Formato vertical 9:16)
+        html_content = render_to_string('renders/story.html', context)
+        image_stream = render_html_to_image(html_content, 1080, 1920)
 
         prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
@@ -1191,6 +1241,23 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
                 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'ai')
+
+        # Inyectar en plantilla premium para que no sea solo texto pelado
+        context = {
+            "asunto": parsed.get("asunto", "Propiedad destacada"),
+            "tipoPropiedad": data.get('tipoPropiedad', 'Propiedad'),
+            "ciudad": data.get('ciudad', ''),
+            "precio": data.get('precio', ''),
+            "moneda": data.get('moneda', 'USD'),
+            "operacion": data.get('operacion', 'Venta'),
+            "agenteNombre": data.get('agenteNombre', request.user.first_name if request.user.first_name else request.user.username),
+            "agenciaNombre": data.get('agenciaNombre', ''),
+            "portada_url": data.get('portadaUrl'),
+            "logo_url": data.get('logoAgenciaUrl'),
+            "html_content": parsed.get("html", "")
+        }
+        premium_html = render_to_string('emails/marketing.html', context)
+        parsed["html"] = premium_html
             
         return Response(parsed, status=status.HTTP_200_OK)
     except Exception as e:

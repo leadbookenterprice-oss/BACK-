@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;700&display=swap');
+  
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  :root {
+    --black: #080808;
+    --white: #F5F3EE;
+    --accent: #C8FF00;
+  }
+  
+  body {
+    width: 1080px;
+    height: 1080px;
+    background: var(--black);
+    font-family: 'DM Sans', sans-serif;
+    color: var(--white);
+    overflow: hidden;
+    position: relative;
+  }
+  
+  .bg-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+  }
+  
+  .overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(0deg, rgba(8,8,8,0.95) 0%, rgba(8,8,8,0.6) 40%, rgba(8,8,8,0.2) 100%);
+    z-index: 2;
+  }
+  
+  .content {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    padding: 80px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  
+  /* Top Section */
+  .top-section {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  
+  .logo {
+    max-width: 250px;
+    max-height: 120px;
+    object-fit: contain;
+    filter: brightness(0) invert(1);
+  }
+  
+  .badge {
+    background: var(--accent);
+    color: var(--black);
+    font-family: 'Space Mono', monospace;
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    padding: 16px 32px;
+    text-transform: uppercase;
+  }
+  
+  /* Bottom Section */
+  .bottom-section {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  
+  .title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 140px;
+    line-height: 0.9;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--white);
+    text-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+  
+  .title span {
+    color: var(--accent);
+  }
+  
+  .price-box {
+    display: inline-block;
+    align-self: flex-start;
+    border: 2px solid var(--white);
+    padding: 16px 32px;
+    font-family: 'Space Mono', monospace;
+    font-size: 48px;
+    font-weight: 700;
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(10px);
+  }
+  
+  .stats-grid {
+    display: flex;
+    gap: 2px;
+    margin-top: 16px;
+    background: rgba(255,255,255,0.2);
+  }
+  
+  .stat-item {
+    flex: 1;
+    background: rgba(8,8,8,0.85);
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .stat-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 56px;
+    color: var(--accent);
+    line-height: 1;
+  }
+  
+  .stat-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 18px;
+    color: rgba(255,255,255,0.6);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+  {% if portada_url %}
+    <img src="{{ portada_url }}" class="bg-image" />
+  {% endif %}
+  <div class="overlay"></div>
+  
+  <div class="content">
+    <div class="top-section">
+      {% if logo_url %}
+        <img src="{{ logo_url }}" class="logo" />
+      {% else %}
+        <div></div>
+      {% endif %}
+      <div class="badge">{{ operacion }}</div>
+    </div>
+    
+    <div class="bottom-section">
+      <div class="title">{{ tipoPropiedad }}<br><span>{{ ciudad }}</span></div>
+      <div class="price-box">{{ moneda }} {{ precio }}</div>
+      
+      {% if caracteristicas %}
+      <div class="stats-grid">
+        {% for stat in caracteristicas|slice:":3" %}
+        <div class="stat-item">
+          <div class="stat-value">{{ stat.valor }}</div>
+          <div class="stat-label">{{ stat.label }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

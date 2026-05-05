@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ asunto }}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #000000; font-family: 'DM Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333333;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #000000;">
+        <tr>
+            <td align="center" style="padding: 40px 0;">
+                <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #F5F3EE; border-radius: 0; overflow: hidden; border: 1px solid #1a1a1a;">
+                    <!-- Black Header -->
+                    <tr>
+                        <td align="center" style="padding: 30px 20px; background-color: #080808;">
+                            {% if logo_url %}
+                                <img src="{{ logo_url }}" alt="Logo" width="140" style="display: block; filter: brightness(1);">
+                            {% else %}
+                                <div style="color: #C8FF00; font-family: 'Helvetica', Arial, sans-serif; font-size: 24px; font-weight: bold; letter-spacing: 5px;">LEADBOOK</div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    
+                    <!-- Property Title Section -->
+                    <tr>
+                        <td style="padding: 40px 40px 0 40px; background-color: #F5F3EE;">
+                            <div style="font-family: 'Helvetica', Arial, sans-serif; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 3px; margin-bottom: 10px;">PROPUESTA EXCLUSIVA</div>
+                            <h1 style="font-family: 'Arial Black', Arial, sans-serif; font-size: 42px; color: #080808; margin: 0 0 10px 0; letter-spacing: -1px; text-transform: uppercase; line-height: 1;">
+                                {{ tipoPropiedad }}<br><span style="color: #888;">{{ ciudad }}</span>
+                            </h1>
+                            <div style="width: 60px; height: 4px; background-color: #C8FF00; margin-bottom: 30px;"></div>
+                        </td>
+                    </tr>
+
+                    <!-- Main Cover Image -->
+                    {% if portada_url %}
+                    <tr>
+                        <td style="padding: 0 40px;">
+                            <div style="border: 1px solid #080808;">
+                                <img src="{{ portada_url }}" alt="Imagen de la propiedad" width="520" style="display: block; width: 100%; max-height: 350px; object-fit: cover;">
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+
+                    <!-- Content Section -->
+                    <tr>
+                        <td style="padding: 40px; background-color: #F5F3EE;">
+                            <div style="font-size: 16px; line-height: 1.8; color: #333333; margin-bottom: 30px;">
+                                {{ html_content|safe }}
+                            </div>
+
+                            <!-- CTA Button -->
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                <tr>
+                                    <td align="left">
+                                        <div style="background-color: #C8FF00; display: inline-block; padding: 15px 30px; border: 1px solid #080808;">
+                                            <a href="#" style="color: #080808; text-decoration: none; font-family: 'Helvetica', Arial, sans-serif; font-size: 13px; font-weight: bold; letter-spacing: 2px; text-transform: uppercase;">MÁS INFORMACIÓN</a>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Property Summary Grid -->
+                    <tr>
+                        <td style="padding: 0 40px 40px 40px;">
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #080808; color: #ffffff;">
+                                <tr>
+                                    <td width="50%" style="padding: 25px; border-right: 1px solid #1a1a1a;">
+                                        <div style="font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 5px;">PRECIO</div>
+                                        <div style="font-size: 24px; color: #C8FF00; font-weight: bold;">{{ moneda }} {{ precio }}</div>
+                                    </td>
+                                    <td width="50%" style="padding: 25px;">
+                                        <div style="font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 5px;">ESTADO</div>
+                                        <div style="font-size: 20px; color: #ffffff; font-weight: bold; text-transform: uppercase;">{{ operacion }}</div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Agent Section -->
+                    <tr>
+                        <td style="padding: 0 40px 40px 40px;">
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #EBEBEB; padding-top: 20px;">
+                                <tr>
+                                    <td style="font-size: 13px; color: #555;">
+                                        Presentado por:<br>
+                                        <strong style="color: #080808; font-size: 15px;">{{ agenteNombre|default:"Tu Agente Leadbook" }}</strong><br>
+                                        {{ agenciaNombre|default:"" }}
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Footer Section -->
+                    <tr>
+                        <td style="padding: 40px; background-color: #000000; text-align: center;">
+                            <div style="font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px;">
+                                GENERADO POR LEADBOOK AI MARKETING
+                            </div>
+                            <div style="color: #333; font-size: 11px;">
+                                Este es un correo automatizado de prueba. Los datos de la propiedad son referenciales.<br>
+                                © 2026 Todos los derechos reservados.
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

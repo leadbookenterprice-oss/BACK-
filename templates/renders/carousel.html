@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;700&display=swap');
+  
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  :root {
+    --black: #080808;
+    --white: #F5F3EE;
+    --accent: #C8FF00;
+  }
+  
+  body {
+    width: 1080px;
+    height: 1350px;
+    background: var(--black);
+    font-family: 'DM Sans', sans-serif;
+    color: var(--white);
+    overflow: hidden;
+    position: relative;
+  }
+  
+  .bg-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 1;
+  }
+  
+  .overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(0deg, rgba(8,8,8,0.95) 0%, rgba(8,8,8,0.6) 40%, rgba(8,8,8,0.3) 100%);
+    z-index: 2;
+  }
+  
+  .content {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    padding: 100px 80px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  
+  /* Top Section */
+  .top-section {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  
+  .logo {
+    max-width: 250px;
+    max-height: 100px;
+    object-fit: contain;
+    filter: brightness(0) invert(1);
+  }
+  
+  .slide-counter {
+    background: rgba(255,255,255,0.1);
+    backdrop-filter: blur(10px);
+    border: 2px solid rgba(255,255,255,0.2);
+    color: var(--white);
+    font-family: 'Space Mono', monospace;
+    font-size: 28px;
+    font-weight: 700;
+    padding: 12px 24px;
+    border-radius: 100px;
+  }
+  
+  .slide-counter span {
+    color: var(--accent);
+  }
+  
+  /* Middle Section */
+  .middle-section {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    margin-bottom: 40px;
+  }
+  
+  .headline {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 150px;
+    line-height: 0.9;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    text-shadow: 0 4px 32px rgba(0,0,0,0.5);
+  }
+  
+  .subheadline {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 48px;
+    line-height: 1.3;
+    color: var(--white);
+    font-weight: 400;
+    max-width: 900px;
+  }
+  
+  /* Bottom Section */
+  .bottom-section {
+    display: flex;
+    justify-content: flex-end;
+  }
+  
+  .swipe-indicator {
+    font-family: 'Space Mono', monospace;
+    font-size: 24px;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 4px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+</style>
+</head>
+<body>
+  {% if portada_url %}
+    <img src="{{ portada_url }}" class="bg-image" />
+  {% endif %}
+  <div class="overlay"></div>
+  
+  <div class="content">
+    <div class="top-section">
+      {% if logo_url %}
+        <img src="{{ logo_url }}" class="logo" />
+      {% else %}
+        <div></div>
+      {% endif %}
+      <div class="slide-counter"><span>{{ slide_number }}</span> / {{ total_slides }}</div>
+    </div>
+    
+    <div class="middle-section">
+      <div class="headline">{{ headline }}</div>
+      <div class="subheadline">{{ subheadline }}</div>
+    </div>
+    
+    <div class="bottom-section">
+      {% if slide_number < total_slides %}
+        <div class="swipe-indicator">DESLIZÁ PARA VER MÁS →</div>
+      {% else %}
+        <div class="swipe-indicator" style="color: var(--accent)">GUARDÁ ESTE POST ↓</div>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>
