@@ -1002,10 +1002,33 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
                 pass
 
         if not pdf.err:
-            pdf_uuid = uuid.uuid4().hex
-            pdf_path = os.path.join(tempfile.gettempdir(), f"lb_pdf_{pdf_uuid}.pdf")
-            with open(pdf_path, 'wb') as f:
-                f.write(result.getvalue())
+            pdf_bytes = result.getvalue()
+
+            # Intentar subir el PDF a Cloudinary para que sea accesible desde el iframe
+            pdf_url = None
+            try:
+                creds = CloudinaryPoolService.get_best_credentials() or {}
+                pdf_uuid = uuid.uuid4().hex
+                cloud_pdf = cloudinary.uploader.upload(
+                    pdf_bytes,
+                    resource_type='raw',
+                    folder=f"leadbook/pdfs/{request.user.id}",
+                    public_id=f"ficha_{request.user.id}_{pdf_uuid}",
+                    format='pdf',
+                    **creds
+                )
+                pdf_url = cloud_pdf.get('secure_url')
+                print(f"[PDF] Subido a Cloudinary: {pdf_url}")
+            except Exception as cloud_err:
+                print(f"[PDF] Cloudinary upload failed ({cloud_err}), falling back to temp file")
+
+            # Fallback: si Cloudinary falla, guardar en /tmp/ y servir por Railway
+            if not pdf_url:
+                pdf_uuid = uuid.uuid4().hex
+                pdf_path = os.path.join(tempfile.gettempdir(), f"lb_pdf_{pdf_uuid}.pdf")
+                with open(pdf_path, 'wb') as f:
+                    f.write(pdf_bytes)
+                pdf_url = f"/api/pdf/{pdf_uuid}/"
 
             from .models import Listado
             listado, created = Listado.objects.get_or_create(
@@ -1019,7 +1042,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
                 }
             )
 
-            return Response({"url": f"/api/pdf/{pdf_uuid}/", "listado_id": listado.id}, status=status.HTTP_200_OK)
+            return Response({"url": pdf_url, "listado_id": listado.id}, status=status.HTTP_200_OK)
 
         return Response({"error": "Error al generar el PDF"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
