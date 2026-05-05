@@ -1,0 +1,13 @@
+[phases.setup]
+nixPkgs = [
+  "pango",
+  "cairo",
+  "glib",
+  "libffi",
+  "fontconfig",
+  "freetype",
+  "harfbuzz",
+  "zlib",
+  "libjpeg",
+  "libpng",
+]
