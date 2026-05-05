@@ -9,7 +9,7 @@ import requests
 DEFAULT_LIMITS = {
     'gemini': 1500,       # Peticiones al mes estimadas
     'elevenlabs': 10000,  # Caracteres al mes
-    'uploadpost': 50      # Posteos al mes estimados
+    'uploadpost': 10      # Posteos al mes estimados
 }
 
 @api_view(['GET'])

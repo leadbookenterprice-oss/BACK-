@@ -287,7 +287,7 @@ def admin_apikeys_pool(request):
     DEFAULT_LIMITS = {
         'gemini': 1500,
         'elevenlabs': 10000,
-        'uploadpost': 50
+        'uploadpost': 10
     }
     
     data = []
