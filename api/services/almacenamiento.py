@@ -150,14 +150,15 @@ class AlmacenamientoCloudinary:
         - Si no hay pool, usa la config global del .env.
         - Devuelve la secure_url del archivo subido, o None si falla.
         """
-        # Construir public_id determinístico
+        # Construir public_id determinístico pero con un hash único para evitar caches de permisos (401)
+        import uuid
+        unique_hash = uuid.uuid4().hex[:6]
         base_id = f'leadbook/{tipo}s/user_{user_id}'
+        
         if listado_id:
-            # Con 'auto', Cloudinary maneja la extensión. Evitamos ponerla en el public_id
-            # para prevenir duplicaciones como .pdf.pdf o problemas de ACL.
-            public_id = f'{base_id}/listado_{listado_id}'
+            # Con 'auto', Cloudinary maneja la extensión.
+            public_id = f'{base_id}/listado_{listado_id}_{unique_hash}'
         else:
-            import uuid
             public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}'
 
         creds, key_id = cls.get_mejor_cuenta()
@@ -170,11 +171,11 @@ class AlmacenamientoCloudinary:
 
             resultado = cloudinary.uploader.upload(
                 contenido,
-                resource_type='auto',  # Dejar que Cloudinary detecte (PDF, Imagen, Video)
+                resource_type='auto',
                 public_id=public_id,
-                type='upload',         # Forzar tipo 'upload' (Público)
+                type='upload',         # Público
                 overwrite=True,
-                invalidate=True,       # Forzar invalidación de caché en CDN
+                invalidate=True,
                 **extra_creds,
             )
             url = resultado.get('secure_url')
