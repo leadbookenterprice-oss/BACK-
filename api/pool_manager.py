@@ -5,19 +5,11 @@ from django.utils import timezone
 
 def get_api_key(agente, servicio):
     """
-    Devuelve la API key string correcta según el plan del agente.
-
-    Lógica:
-      1. Planes de pago (no-free) → key global del .env
-      2. Plan free → buscar bundle asignado y extraer la key del servicio
-      3. Fallback → key global del .env (para no bloquear el sistema)
+    Devuelve la API key string correcta desde el pool asignado al usuario.
+    Si el usuario no tiene un bundle, se le asigna uno.
+    Como fallback final, se usa la key global del .env.
     """
-    plan = getattr(agente, 'plan_nombre', 'free') or 'free'
-
-    if plan != 'free':
-        return _get_global_key(servicio)
-
-    # Plan free: buscar bundle asignado y activo
+    # Buscar bundle asignado y activo
     try:
         asig = APIBundleAssignment.objects.select_related('bundle__key_gemini',
                                                            'bundle__key_elevenlabs',
