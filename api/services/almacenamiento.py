@@ -172,7 +172,7 @@ class AlmacenamientoCloudinary:
                 contenido,
                 resource_type=resource_type,
                 public_id=public_id,
-                overwrite=False,       # No re-sube si ya existe
+                overwrite=True,        # Permite actualizar el archivo al regenerar
                 invalidate=False,
                 **extra_creds,
             )
