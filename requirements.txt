@@ -97,7 +97,7 @@ wcwidth==0.6.0
 webencodings==0.5.1
 websockets==16.0
 whitenoise==6.12.0
-weasyprint==62.3
+weasyprint==60.2
 gunicorn==21.2.0
 channels==4.0.0
 channels-redis==4.2.0
