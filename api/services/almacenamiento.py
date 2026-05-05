@@ -224,7 +224,10 @@ class AlmacenamientoCloudinary:
 
     @classmethod
     def guardar_pdf(cls, pdf_bytes: bytes, user_id: int, listado_id: int | None = None) -> str | None:
-        return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id)
+        # Bypass Cloudinary debido a restricciones de ACL en formatos Raw (PDF).
+        # Esto forzará el mecanismo de "fallback" local en views.py
+        logger.info("[Almacenamiento] Bypass Cloudinary para PDFs activado (ACL Fix)")
+        return None
 
     @classmethod
     def guardar_post(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
