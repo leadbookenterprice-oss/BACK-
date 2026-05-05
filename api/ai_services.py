@@ -190,3 +190,114 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
     except Exception as e:
         print(f"[ERROR] Exception in ElevenLabs call: {str(e)}")
         return None
+
+def generar_html_gemini(context, agente):
+    import base64
+    from google.genai import types
+    from django.conf import settings
+    from google import genai
+    
+    try:
+        if agente is not None:
+            try:
+                from api.pool_manager import get_api_key
+                key = get_api_key(agente, 'gemini') or settings.GEMINI_API_KEY
+            except Exception:
+                key = settings.GEMINI_API_KEY
+        else:
+            key = settings.GEMINI_API_KEY
+            
+        client = genai.Client(api_key=key)
+        
+        # Procesar imágenes del contexto
+        contents = []
+        
+        # Helper para extraer base64 y mimetype
+        def add_image_part(data_url):
+            if not data_url or not data_url.startswith('data:'):
+                return
+            try:
+                header, b64_data = data_url.split(',', 1)
+                mime = header.split(':')[1].split(';')[0]
+                raw_bytes = base64.b64decode(b64_data)
+                contents.append(types.Part.from_bytes(data=raw_bytes, mime_type=mime))
+            except Exception as e:
+                logger.error(f"Error parseando imagen base64 para Gemini: {e}")
+                
+        # Agregar imágenes en orden: logo, portada, fotos galería
+        if context.get('logo_url'):
+            add_image_part(context['logo_url'])
+            
+        if context.get('portada_url'):
+            add_image_part(context['portada_url'])
+            
+        if context.get('fotos_recorrido'):
+            for f in context['fotos_recorrido']:
+                add_image_part(f)
+                
+        # Armar el prompt de texto
+        prompt = f"""Sos un desarrollador frontend experto. Generá un HTML puro y autónomo (una sola página, sin dependencias externas excepto Google Fonts) para una ficha inmobiliaria profesional premium.
+
+DATOS DE LA PROPIEDAD:
+Tipo: {context.get('tipo_propiedad')}
+Operación: {context.get('operacion')}
+Precio: {context.get('moneda')} {context.get('precio')}
+Ciudad/Ubicación: {context.get('ciudad')}
+Recámaras: {context.get('recamaras', 'N/A')}
+Baños: {context.get('banos', 'N/A')}
+Superficie Cubierta: {context.get('superficie_cubierta', 'N/A')}
+Superficie Total: {context.get('superficie_total', 'N/A')}
+Estacionamientos: {context.get('estacionamientos', 'N/A')}
+
+DESCRIPCIÓN:
+{context.get('descripcion')}
+
+AMENIDADES:
+{', '.join(context.get('amenidades', []))}
+
+DATOS DE CONTACTO:
+Agente: {context.get('agente_nombre')}
+Agencia: {context.get('agencia_nombre')}
+Teléfono: {context.get('agente_telefono')}
+Email: {context.get('agente_email')}
+QR base64 (opcional): {context.get('qr_code')}
+
+REGLAS DE DISEÑO ESTRICTAS:
+1. Fuente: Inter (de Google Fonts).
+2. Paleta de colores: Adaptala al tipo de propiedad. Si es "Casa" usa navy (#1B3068), si es "Departamento" usa azul claro (#1565C0), si es "Terreno" usa verde (#2E7D32), si es "Local" u "Oficina" usa gris oscuro (#37474F).
+3. Estructura visual:
+   - Top bar: negro, con badge de operación en rojo y logo de agencia (usando las imágenes adjuntas, si están disponibles).
+   - Hero photo: full width (420px height) con un overlay gradiente oscuro en la parte inferior para que resalte el texto.
+   - Barra de precio: negra, número de precio inmenso y destacado.
+   - Barra de stats (recámaras, etc.): color principal (navy/verde/etc) con íconos SVG inline limpios para cada stat.
+   - Sección descripción: fondo levemente diferenciado (ej. gris muy clarito o tintado) para que no parezca un documento word plano.
+   - Amenidades: Chips con bordes redondeados e íconos SVG inline mapeados lógicamente (ej. ícono de agua para alberca/piscina).
+   - Galería: La primera foto full width, el resto en grid de 2 columnas. Usa las imágenes adjuntas.
+   - Footer: Logo circular de la agencia (si no hay, la letra inicial), datos del agente alineados y el QR (usa data:image/png;base64,{context.get('qr_code', '')} si el QR fue dado) a la derecha.
+   - Usa los bytes de imagen provistos para rellenar las etiquetas <img> en lugar de usar src vacíos.
+
+REGLAS DE RESPUESTA:
+- DEVOLVER SOLO CÓDIGO HTML VÁLIDO.
+- NO INCLUIR markdown, ni backticks (```html), ni explicaciones antes o después. 
+- Todo el CSS debe estar en un tag <style> en el <head> o inline.
+"""
+        contents.append(prompt)
+        
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-lite',
+            contents=contents,
+        )
+        
+        # Limpiar posibles backticks si la IA desobedece
+        html_output = response.text.strip()
+        if html_output.startswith('```html'):
+            html_output = html_output[7:]
+        if html_output.startswith('```'):
+            html_output = html_output[3:]
+        if html_output.endswith('```'):
+            html_output = html_output[:-3]
+            
+        return html_output.strip()
+    except Exception as e:
+        logger.error(f"Error en generar_html_gemini: {e}")
+        return None
