@@ -1085,20 +1085,9 @@ def generar_pdf(request):
         print(f"\n[PDF] Generando para {tipo_propiedad} en {ciudad} | portada: {bool(context.get('portada_url'))} | fotos: {len(context.get('fotos_recorrido', []))} | QR: sí")
 
         from django.template.loader import render_to_string
-        from weasyprint import HTML
+        from django.http import HttpResponse
 
-        try:
-            html_string = render_to_string('pdf/property_brochure.html', context)
-            print(f"[PDF] HTML generado OK, largo: {len(html_string)} chars")
-            pdf_bytes = HTML(
-                string=html_string,
-                base_url=None
-            ).write_pdf()
-            print(f"[PDF] PDF generado OK, tamaño: {len(pdf_bytes)} bytes")
-        except Exception as e:
-            import traceback
-            print(f"[PDF WEASYPRINT ERROR]\n{traceback.format_exc()}")
-            raise
+        html_string = render_to_string('pdf/property_brochure_html.html', context)
 
         # ─── Limpiar archivos temporales de imágenes ─────────────────────────
         for f in temp_files:
@@ -1108,43 +1097,7 @@ def generar_pdf(request):
             except Exception:
                 pass
 
-        if pdf_bytes:
-            # Subir PDF al Almacenamiento Cloudinary
-            pdf_url = AlmacenamientoCloudinary.guardar_pdf(
-                pdf_bytes, user_id=request.user.id, listado_id=listado_id_hint
-            )
-
-            # Fallback: si Cloudinary falla, guardar en /tmp/ y servir por Railway
-            if not pdf_url:
-                pdf_uuid = uuid.uuid4().hex
-                pdf_path = os.path.join(tempfile.gettempdir(), f"lb_pdf_{pdf_uuid}.pdf")
-                with open(pdf_path, 'wb') as f:
-                    f.write(pdf_bytes)
-                pdf_url = f"/api/pdf/{pdf_uuid}/"
-
-            from .models import Listado
-            listado = None
-            if listado_id_hint:
-                listado = Listado.objects.filter(id=listado_id_hint, agente=request.user).first()
-            
-            if not listado:
-                listado, created = Listado.objects.get_or_create(
-                    agente=request.user,
-                    tipo_propiedad=tipo_propiedad,
-                    ciudad=ciudad,
-                    defaults={
-                        'titulo': data.get('titulo') or f"{tipo_propiedad} en {ciudad}",
-                        'precio': precio,
-                        'datos': data
-                    }
-                )
-
-            # PERSISTENCIA: Guardar el PDF en los resultados del listado
-            actualizar_resultados_listado(listado, 'pdf', {"url": pdf_url})
-
-            return Response({"url": pdf_url, "listado_id": listado.id}, status=status.HTTP_200_OK)
-
-        return Response({"error": "Error al generar el PDF"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return HttpResponse(html_string, content_type='text/html; charset=utf-8')
 
     except Exception as e:
         import traceback
