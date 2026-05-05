@@ -865,21 +865,44 @@ def generar_pdf(request):
     try:
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
 
-        # ─── Helper: convierte base64 o URL en path local para xhtml2pdf ────
+        # ─── Helpers de imágenes para WeasyPrint ─────────────────────────────
         temp_files = []
 
         def save_temp_image(b64_or_url):
             """
             Acepta base64 (con o sin header data:image/...) o URL http/https.
-            Guarda en /tmp/ y retorna el path absoluto para xhtml2pdf.
-            Retorna None si falla.
+            Descarga/decodifica la imagen y la guarda en /tmp/ como archivo local.
+            Retorna el path absoluto local, o None si falla.
+            WeasyPrint requiere rutas locales (file://) — no puede acceder a /tmp/ via HTTP.
             """
             if not b64_or_url or not isinstance(b64_or_url, str):
                 return None
             val = b64_or_url.strip()
-            # Si es URL directa, devolverla tal cual (xhtml2pdf puede fetchearla)
+
+            # Si es URL HTTP/HTTPS: descargar al disco local
             if val.startswith('http://') or val.startswith('https://'):
-                return val
+                try:
+                    import requests as req_lib
+                    resp = req_lib.get(val, timeout=15, stream=True)
+                    if resp.status_code == 200:
+                        ct = resp.headers.get('content-type', '')
+                        ext = 'jpg'
+                        if 'png' in ct:
+                            ext = 'png'
+                        elif 'gif' in ct:
+                            ext = 'gif'
+                        elif 'webp' in ct:
+                            ext = 'webp'
+                        filename = os.path.join(tempfile.gettempdir(), f"lb_{uuid.uuid4().hex}.{ext}")
+                        with open(filename, 'wb') as f:
+                            for chunk in resp.iter_content(8192):
+                                f.write(chunk)
+                        temp_files.append(filename)
+                        return filename
+                except Exception as e:
+                    print(f"[PDF] Error descargando imagen URL: {e}")
+                return None
+
             # Si es base64 (con o sin header data:...)
             try:
                 if ',' in val and val.startswith('data:'):
@@ -903,17 +926,11 @@ def generar_pdf(request):
                 print(f"[PDF] Error decodificando imagen base64: {e}")
                 return None
 
-        def link_callback(uri, rel):
-            """Permite a xhtml2pdf leer archivos locales en /tmp/ y URLs externas."""
-            if os.path.isabs(uri) and os.path.exists(uri):
-                return uri
-            if uri.startswith('file://'):
-                path = uri[7:]
-                if os.path.exists(path):
-                    return path
-            if uri.startswith('http://') or uri.startswith('https://'):
-                return uri
-            return uri
+        def ruta_a_file_url(path):
+            """Convierte un path local /tmp/archivo.jpg a file:///tmp/archivo.jpg para WeasyPrint."""
+            if path and isinstance(path, str) and os.path.exists(path):
+                return f"file://{path}"
+            return ''
 
         # ─── Extraer campos normalizados ──────────────────────────────────────
         listado_id_hint  = data.get('listado_id') or data.get('listadoId')  # para Almacenamiento
@@ -1004,9 +1021,9 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
             'estacionamientos':   estacionamientos,
             'descripcion':        descripcion,
             'amenidades':         amenidades,
-            'portada_url':        portada_url,
-            'fotos_recorrido':    fotos_recorrido,
-            'logo_url':           logo_url,
+            'portada_url':        ruta_a_file_url(portada_url),
+            'fotos_recorrido':    [ruta_a_file_url(f) for f in fotos_recorrido],
+            'logo_url':           ruta_a_file_url(logo_url),
             'agente_nombre':      agente_nombre,
             'agente_telefono':    agente_telefono,
             'agente_email':       agente_email,
@@ -1022,7 +1039,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         html_string = render_to_string('pdf/property_brochure.html', context)
         pdf_bytes = HTML(
             string=html_string,
-            base_url=request.build_absolute_uri('/')
+            base_url='file:///'
         ).write_pdf()
 
         # ─── Limpiar archivos temporales de imágenes ─────────────────────────
