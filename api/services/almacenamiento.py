@@ -173,13 +173,24 @@ class AlmacenamientoCloudinary:
                 contenido,
                 resource_type='auto',
                 public_id=public_id,
-                type='upload',         # Público
+                type='upload',
                 overwrite=True,
                 invalidate=True,
                 **extra_creds,
             )
-            url = resultado.get('secure_url')
-            logger.info(f'[Almacenamiento] ✓ {tipo} subido para user {user_id}: {url}')
+            
+            # Generar URL FIRMADA para saltar restricciones de ACL/Strict Transformations
+            from cloudinary.utils import cloudinary_url
+            url, _ = cloudinary_url(
+                public_id,
+                resource_type=resultado.get('resource_type', 'auto'),
+                type='upload',
+                sign_url=True,
+                secure=True,
+                **extra_creds
+            )
+            
+            logger.info(f'[Almacenamiento] ✓ {tipo} subido y firmado para user {user_id}: {url}')
 
             # Invalida caché de stats de la cuenta usada
             if key_id:
