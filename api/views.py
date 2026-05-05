@@ -9,7 +9,7 @@ from django.db.models import Sum
 from decouple import config
 import cloudinary
 import cloudinary.uploader
-from api.services.cloudinary_pool_service import CloudinaryPoolService
+from api.services.almacenamiento import AlmacenamientoCloudinary
 
 from .models import (
     Property, GeneratedAsset, Listado, OTPCode,
@@ -569,22 +569,21 @@ def generar_carrusel(request):
             
             image_stream = generate_social_image(slide_data, is_story=False, headline=titles[i])
             
-            # Subir a Cloudinary
+            # Subir a Cloudinary via Almacenamiento centralizado
             try:
-                print(f"[DEBUG] Subiendo slide {i+1} a Cloudinary...")
+                print(f"[DEBUG] Subiendo slide {i+1} al Almacenamiento...")
                 image_stream.seek(0)
-                creds = CloudinaryPoolService.get_best_credentials() or {}
-                cloud_response = cloudinary.uploader.upload(
-                    image_stream.getvalue(),
-                    folder=f"leadbook/carousels/{user.id}",
-                    resource_type="image",
-                    public_id=f"carousel_{user.id}_{int(time.time())}_{i}",
-                    **creds
+                listado_id_val = data.get('listado_id')
+                url = AlmacenamientoCloudinary.guardar_slide_carrusel(
+                    image_stream, user_id=user.id, listado_id=listado_id_val, indice=i
                 )
-                slides_urls.append(cloud_response['secure_url'])
-                print(f"[DEBUG] Slide {i+1} subida OK: {cloud_response['secure_url']}")
+                if url:
+                    slides_urls.append(url)
+                    print(f"[DEBUG] Slide {i+1} OK: {url}")
+                else:
+                    raise Exception('Almacenamiento devolvió None')
             except Exception as cloud_err:
-                print(f"[DEBUG] ERROR Cloudinary Slide {i+1}: {str(cloud_err)}")
+                print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 raise cloud_err
 
         # Generar Caption con Gemini (con fallback a Groq)
@@ -606,14 +605,14 @@ def generar_carrusel(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def test_upload_avatar(request):
-    import cloudinary.uploader
     try:
         file = request.FILES.get('file')
         if not file:
             return Response({'error': 'No file provided'}, status=400)
-        creds = CloudinaryPoolService.get_best_credentials() or {}
-        result = cloudinary.uploader.upload(file, folder='leadbook/avatars', **creds)
-        return Response({'url': result['secure_url']})
+        url = AlmacenamientoCloudinary.guardar_avatar(file, user_id=request.user.id)
+        if not url:
+            return Response({'error': 'Error al subir imagen'}, status=500)
+        return Response({'url': url})
     except Exception as e:
         return Response({'error': str(e)}, status=500)
 
@@ -884,6 +883,7 @@ def generar_pdf(request):
             return uri
 
         # ─── Extraer campos normalizados ──────────────────────────────────────
+        listado_id_hint  = data.get('listado_id') or data.get('listadoId')  # para Almacenamiento
         tipo_propiedad   = data.get('tipoPropiedad', data.get('tipo_propiedad', 'Propiedad'))
         ciudad           = data.get('ciudad', '')
         precio           = str(data.get('precio', ''))
@@ -1004,23 +1004,10 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         if not pdf.err:
             pdf_bytes = result.getvalue()
 
-            # Intentar subir el PDF a Cloudinary para que sea accesible desde el iframe
-            pdf_url = None
-            try:
-                creds = CloudinaryPoolService.get_best_credentials() or {}
-                pdf_uuid = uuid.uuid4().hex
-                cloud_pdf = cloudinary.uploader.upload(
-                    pdf_bytes,
-                    resource_type='raw',
-                    folder=f"leadbook/pdfs/{request.user.id}",
-                    public_id=f"ficha_{request.user.id}_{pdf_uuid}",
-                    format='pdf',
-                    **creds
-                )
-                pdf_url = cloud_pdf.get('secure_url')
-                print(f"[PDF] Subido a Cloudinary: {pdf_url}")
-            except Exception as cloud_err:
-                print(f"[PDF] Cloudinary upload failed ({cloud_err}), falling back to temp file")
+            # Subir PDF al Almacenamiento Cloudinary
+            pdf_url = AlmacenamientoCloudinary.guardar_pdf(
+                pdf_bytes, user_id=request.user.id, listado_id=listado_id_hint
+            )
 
             # Fallback: si Cloudinary falla, guardar en /tmp/ y servir por Railway
             if not pdf_url:
@@ -1070,19 +1057,14 @@ def generar_imagen_post(request):
         prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres, usá hashtags y emojis."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
 
-        # Intentar subir a Cloudinary; si falla, devolver base64
+        # Intentar subir a Cloudinary via Almacenamiento
         try:
             image_stream.seek(0)
-            creds = CloudinaryPoolService.get_best_credentials() or {}
-            cloud_response = cloudinary.uploader.upload(
-                image_stream,
-                folder="leadbook/posts",
-                resource_type="image",
-                public_id=f"post_{request.user.id}_{int(time.time())}",
-                **creds
+            listado_id_val = data.get('listado_id')
+            img_url = AlmacenamientoCloudinary.guardar_post(
+                image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
-            img_url = cloud_response['secure_url']
-            public_id = cloud_response.get('public_id')
+            public_id = None  # El public_id lo gestiona el servicio internamente
         except Exception as cloud_err:
             print(f"[Cloudinary] Error subiendo imagen: {cloud_err} — devolviendo base64")
             image_stream.seek(0)
@@ -1124,19 +1106,14 @@ def generar_imagen_story(request):
         prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
 
-        # Intentar subir a Cloudinary; si falla, devolver base64
+        # Intentar subir a Cloudinary via Almacenamiento
         try:
             image_stream.seek(0)
-            creds = CloudinaryPoolService.get_best_credentials() or {}
-            cloud_response = cloudinary.uploader.upload(
-                image_stream,
-                folder="leadbook/stories",
-                resource_type="image",
-                public_id=f"story_{request.user.id}_{int(time.time())}",
-                **creds
+            listado_id_val = data.get('listado_id')
+            img_url = AlmacenamientoCloudinary.guardar_story(
+                image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
-            img_url   = cloud_response['secure_url']
-            public_id = cloud_response.get('public_id')
+            public_id = None
             # También generamos base64 por si el frontend lo necesita de inmediato
             image_stream.seek(0)
             img_base64 = base64.b64encode(image_stream.getvalue()).decode('utf-8')
