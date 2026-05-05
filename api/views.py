@@ -730,6 +730,22 @@ class ListadosView(APIView):
 class ListadoDetalleView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def get(self, request, pk):
+        try:
+            listado = Listado.objects.get(pk=pk, agente=request.user)
+            return Response({
+                "id": listado.id,
+                "titulo": listado.titulo,
+                "tipo_propiedad": listado.tipo_propiedad,
+                "ciudad": listado.ciudad,
+                "precio": listado.precio,
+                "video_url": listado.video_url,
+                "video_status": listado.video_status,
+                "datos": listado.datos
+            }, status=status.HTTP_200_OK)
+        except Listado.DoesNotExist:
+            return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
     def delete(self, request, pk):
         try:
             listado = Listado.objects.get(pk=pk)
