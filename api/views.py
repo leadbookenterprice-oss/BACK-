@@ -321,7 +321,7 @@ class DashboardView(APIView):
         videos_creados = listados.aggregate(total_videos=Sum('videos_creados'))['total_videos'] or 0
 
         listados_recientes = listados.order_by('-creado_en')[:5].values(
-            'id', 'titulo', 'tipo_propiedad', 'ciudad', 'precio', 'creado_en'
+            'id', 'titulo', 'tipo_propiedad', 'ciudad', 'precio', 'creado_en', 'datos', 'video_url', 'video_status'
         )
 
         susc = get_suscripcion(user)
@@ -674,6 +674,8 @@ class ListadosView(APIView):
                 'precio': listado.precio,
                 'creado_en': listado.creado_en,
                 'videos_creados': listado.videos_creados,
+                'video_url': listado.video_url,
+                'video_status': listado.video_status,
                 'datos': listado.datos
             })
         return Response(data)
@@ -739,6 +741,26 @@ class ListadoDetalleView(APIView):
             
         listado.delete()
         return Response({"mensaje": "Listado eliminado"}, status=status.HTTP_200_OK)
+
+    def put(self, request, pk):
+        try:
+            listado = Listado.objects.get(pk=pk)
+        except Listado.DoesNotExist:
+            return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+            
+        if listado.agente.id != request.user.id:
+            return Response({"error": "No tienes permiso para modificar este listado"}, status=status.HTTP_403_FORBIDDEN)
+            
+        data = request.data
+        if 'datos' in data:
+            listado.datos = data['datos']
+        if 'video_url' in data:
+            listado.video_url = data['video_url']
+        if 'video_status' in data:
+            listado.video_status = data['video_status']
+        
+        listado.save()
+        return Response({"mensaje": "Listado actualizado"}, status=status.HTTP_200_OK)
 
 
 # ---- Celery task + endpoint para generación de video ----

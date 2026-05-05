@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8"/>
 <style>
-  /* ─── Page Setup ─────────────────────────────── */
   @page {
     margin: 0mm;
     size: A4;
@@ -14,330 +13,265 @@
   }
 
   body {
-    font-family: Arial, sans-serif;
+    font-family: Helvetica, Arial, sans-serif;
     margin: 0;
     padding: 0;
-    background: #ffffff;
-    color: #1a1a2e;
+    background: #FFFFFF;
+    color: #111827;
   }
 
-  /* ─── PAGE 1 ─────────────────────────────────── */
+  /* ─── Typography & Colors ─── */
+  .text-brand { color: #000000; }
+  .text-accent { color: #C5A059; }
+  .text-muted { color: #6B7280; }
+  .bg-dark { background: #0A0A0B; color: #FFFFFF; }
+  .bg-accent { background: #C5A059; color: #FFFFFF; }
+  .bg-light { background: #F3F4F6; }
 
-  /* Hero image — full width, fixed height, no distortion */
+  /* ─── PAGE 1 ─────────────────────────────────── */
+  /* Hero image */
   .hero-wrap {
     width: 100%;
-    height: 270px;
-    overflow: hidden;
-    display: block;
+    margin-bottom: 0px;
+    background: #F3F4F6;
   }
   .hero-img {
     width: 100%;
-    height: 270px;
+    /* NO height limit to prevent squishing */
     display: block;
-    -pdf-image-fit: contain-or-clip; /* xhtml2pdf hint */
   }
 
-  /* Operacion badge */
+  /* Operacion Strip */
   .op-strip {
-    background: #c0392b;
-    padding: 7px 20px;
+    background: #0A0A0B;
+    padding: 10px 24px;
+    text-align: right;
   }
   .op-text {
-    color: #ffffff;
-    font-size: 10px;
+    color: #C5A059;
+    font-size: 11px;
     font-weight: bold;
-    letter-spacing: 3px;
+    letter-spacing: 4px;
   }
 
-  /* Price + Location block */
-  .price-block {
-    background: #0d1b2a;
-    padding: 14px 24px 12px 24px;
-    border-bottom: 3px solid #c0392b;
-  }
-  .price-label {
-    color: #94afc7;
-    font-size: 8px;
-    letter-spacing: 2px;
-    margin-bottom: 3px;
-  }
-  .price-value {
-    color: #ffffff;
-    font-size: 28px;
-    font-weight: bold;
-    line-height: 1;
-  }
-  .price-location {
-    color: #94afc7;
-    font-size: 10px;
-    margin-top: 5px;
-    letter-spacing: 1px;
-  }
-
-  /* Stats bar */
-  .stats-table {
+  /* Header Block (Title / Price) */
+  .header-table {
     width: 100%;
     border-collapse: collapse;
-    background: #16324f;
+    padding: 24px 24px 16px 24px;
+  }
+  .title-td {
+    width: 60%;
+    vertical-align: bottom;
+  }
+  .prop-title {
+    font-size: 26px;
+    font-weight: bold;
+    color: #0A0A0B;
+    line-height: 1.1;
+    text-transform: uppercase;
+  }
+  .prop-location {
+    font-size: 11px;
+    color: #6B7280;
+    margin-top: 6px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .price-td {
+    width: 40%;
+    text-align: right;
+    vertical-align: bottom;
+  }
+  .price-label {
+    font-size: 9px;
+    color: #6B7280;
+    letter-spacing: 2px;
+    margin-bottom: 4px;
+  }
+  .price-value {
+    font-size: 28px;
+    font-weight: bold;
+    color: #C5A059;
+  }
+
+  /* Separator */
+  .separator {
+    margin: 0 24px;
+    border-bottom: 1px solid #E5E7EB;
+  }
+
+  /* Stats row */
+  .stats-table {
+    width: 100%;
+    margin: 16px 0;
+    padding: 0 24px;
+    border-collapse: collapse;
   }
   .stat-cell {
-    text-align: center;
-    padding: 11px 4px;
-    border-right: 1px solid #1e4060;
+    text-align: left;
     width: 20%;
   }
-  .stat-cell-last { border-right: none; }
   .stat-num {
-    color: #ffffff;
     font-size: 18px;
     font-weight: bold;
+    color: #0A0A0B;
     display: block;
   }
   .stat-lbl {
-    color: #7aafd4;
     font-size: 8px;
+    color: #6B7280;
     letter-spacing: 1px;
     margin-top: 2px;
     display: block;
+    text-transform: uppercase;
   }
 
   /* Content area */
   .content {
-    padding: 18px 24px 10px 24px;
-    background: #ffffff;
+    padding: 10px 24px 20px 24px;
   }
-
-  /* Section title with left accent bar */
   .sec-title {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: bold;
-    color: #0d1b2a;
-    letter-spacing: 1px;
-    border-left: 3px solid #c0392b;
-    padding-left: 8px;
-    margin-bottom: 8px;
-    margin-top: 14px;
+    color: #0A0A0B;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    margin-top: 20px;
+    border-bottom: 2px solid #C5A059;
+    padding-bottom: 4px;
+    display: inline-block;
   }
-
   .desc-text {
-    font-size: 9.5px;
-    line-height: 1.65;
-    color: #3d3d3d;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #374151;
     text-align: justify;
   }
-  .desc-text p { margin: 0 0 8px 0; }
+  .desc-text p { margin: 0 0 10px 0; }
 
   /* Amenidades chips */
   .chips-table {
     border-collapse: separate;
-    border-spacing: 3px 3px;
-    margin-top: 4px;
+    border-spacing: 6px 6px;
+    margin-top: 10px;
   }
   .chip-td {
-    border: 1px solid #c0392b;
-    border-radius: 10px;
-    padding: 3px 10px;
-    font-size: 8.5px;
-    color: #0d1b2a;
+    border: 1px solid #E5E7EB;
+    background: #F9FAFB;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 9px;
+    color: #111827;
     white-space: nowrap;
-    background: #fff5f5;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 
-  /* Agent + QR footer strip */
+  /* Footer / Agent Strip */
   .agent-strip {
-    background: #0d1b2a;
-    margin-top: 14px;
+    background: #0A0A0B;
+    margin-top: 24px;
   }
   .agent-table {
     width: 100%;
     border-collapse: collapse;
   }
   .agent-info-td {
-    padding: 12px 20px;
+    padding: 24px;
     vertical-align: middle;
     width: 70%;
   }
   .agent-name {
-    color: #ffffff;
-    font-size: 11px;
+    color: #FFFFFF;
+    font-size: 14px;
     font-weight: bold;
+    letter-spacing: 1px;
   }
   .agent-agency {
-    color: #7aafd4;
-    font-size: 9px;
-    margin-top: 2px;
+    color: #C5A059;
+    font-size: 10px;
+    margin-top: 4px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
   }
   .agent-contact {
-    color: #94afc7;
-    font-size: 8.5px;
-    margin-top: 3px;
+    color: #9CA3AF;
+    font-size: 10px;
+    margin-top: 6px;
+    letter-spacing: 0.5px;
   }
   .agent-qr-td {
-    padding: 10px 20px 10px 0;
+    padding: 20px 24px 20px 0;
     text-align: right;
     vertical-align: middle;
     width: 30%;
   }
   .agent-qr-img {
-    width: 55px;
-    height: 55px;
+    width: 70px;
     display: inline-block;
-    border: 2px solid #c0392b;
-    border-radius: 4px;
-  }
-  .agent-qr-label {
-    color: #7aafd4;
-    font-size: 7px;
-    text-align: right;
-    margin-top: 3px;
-    letter-spacing: 1px;
+    border: 2px solid #C5A059;
+    padding: 2px;
+    background: #FFFFFF;
   }
 
-  /* ─── PAGE 2 – Gallery ───────────────────────── */
+  /* ─── PAGE 2 ─────────────────────────────────── */
   .page2 {
     page-break-before: always;
-    background: #ffffff;
+    background: #FFFFFF;
   }
 
-  /* Page 2 header bar */
   .p2-header {
-    background: #0d1b2a;
-    padding: 14px 24px;
-    border-bottom: 3px solid #c0392b;
+    background: #0A0A0B;
+    padding: 20px 24px;
   }
   .p2-header-table { width: 100%; border-collapse: collapse; }
-  .p2-title-td { vertical-align: middle; }
   .p2-title {
-    color: #ffffff;
-    font-size: 16px;
+    color: #FFFFFF;
+    font-size: 18px;
     font-weight: bold;
-    letter-spacing: 1px;
+    letter-spacing: 2px;
   }
   .p2-subtitle {
-    color: #7aafd4;
-    font-size: 9px;
-    margin-top: 2px;
+    color: #C5A059;
+    font-size: 10px;
+    margin-top: 4px;
     letter-spacing: 2px;
-  }
-  .p2-badge-td {
-    text-align: right;
-    vertical-align: middle;
-  }
-  .p2-badge {
-    background: #c0392b;
-    color: #ffffff;
-    font-size: 8px;
-    letter-spacing: 2px;
-    padding: 4px 10px;
-    border-radius: 2px;
+    text-transform: uppercase;
   }
 
-  /* Gallery grid — using tables for xhtml2pdf compatibility */
+  /* Gallery grid */
   .gallery-area {
-    padding: 18px 20px;
+    padding: 24px;
   }
-
-  /* Main large photo */
   .main-photo-wrap {
     width: 100%;
-    height: 240px;
-    overflow: hidden;
-    margin-bottom: 8px;
-    border-radius: 3px;
+    margin-bottom: 16px;
+    background: #F3F4F6;
   }
   .main-photo {
     width: 100%;
-    height: 240px;
     display: block;
   }
 
-  /* Thumbs grid */
   .thumbs-table {
     width: 100%;
     border-collapse: separate;
-    border-spacing: 5px;
+    border-spacing: 8px;
   }
   .thumb-wrap {
-    height: 130px;
-    overflow: hidden;
-    border-radius: 3px;
+    background: #F3F4F6;
   }
   .thumb-img {
     width: 100%;
-    height: 130px;
     display: block;
-  }
-
-  /* Page 2 agent footer */
-  .p2-footer {
-    background: #0d1b2a;
-    margin-top: 14px;
-  }
-  .p2-footer-table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-  .p2-footer-info {
-    padding: 10px 20px;
-    vertical-align: middle;
-    width: 60%;
-  }
-  .p2-footer-name {
-    color: #ffffff;
-    font-size: 10px;
-    font-weight: bold;
-  }
-  .p2-footer-sub {
-    color: #7aafd4;
-    font-size: 8.5px;
-    margin-top: 2px;
-  }
-  .p2-footer-qr {
-    padding: 8px 20px 8px 0;
-    text-align: right;
-    vertical-align: middle;
-    width: 40%;
-  }
-  .p2-qr-block-table {
-    display: inline-table;
-    border-collapse: collapse;
-  }
-  .p2-qr-img {
-    width: 50px;
-    height: 50px;
-    display: inline-block;
-    border: 2px solid #c0392b;
-    border-radius: 4px;
-    vertical-align: middle;
-  }
-  .p2-qr-right {
-    vertical-align: middle;
-    padding-left: 8px;
-  }
-  .p2-qr-cta {
-    color: #ffffff;
-    font-size: 8px;
-    font-weight: bold;
-    letter-spacing: 1px;
-  }
-  .p2-qr-hint {
-    color: #7aafd4;
-    font-size: 7px;
-    margin-top: 2px;
-  }
-  .p2-leadbook {
-    color: #c0392b;
-    font-size: 7px;
-    margin-top: 4px;
-    letter-spacing: 1px;
   }
 </style>
 </head>
 <body>
 
-<!-- ═══════════════════════════════════════════════════════════════
-     PAGE 1 — Property Summary
-════════════════════════════════════════════════════════════════ -->
+<!-- ════════════════ PAGE 1 ════════════════ -->
 
 {% if portada_url %}
 <div class="hero-wrap">
@@ -349,113 +283,108 @@
   <span class="op-text">{{ operacion|upper }}</span>
 </div>
 
-<div class="price-block">
-  <div class="price-label">PRECIO</div>
-  <div class="price-value">{{ moneda }} {{ precio }}</div>
-  <div class="price-location">📍 {{ ciudad }}</div>
-</div>
+<table class="header-table">
+  <tr>
+    <td class="title-td">
+      <div class="prop-title">{{ tipo }} EN {{ operacion }}</div>
+      <div class="prop-location">{{ ciudad }}</div>
+    </td>
+    <td class="price-td">
+      <div class="price-label">VALOR</div>
+      <div class="price-value">{{ moneda }} {{ precio }}</div>
+    </td>
+  </tr>
+</table>
 
-<!-- Stats bar -->
+<div class="separator"></div>
+
 <table class="stats-table">
   <tr>
     {% if recamaras %}
     <td class="stat-cell">
       <span class="stat-num">{{ recamaras }}</span>
-      <span class="stat-lbl">RECÁMARAS</span>
+      <span class="stat-lbl">Recámaras</span>
     </td>
     {% endif %}
     {% if banos %}
     <td class="stat-cell">
       <span class="stat-num">{{ banos }}</span>
-      <span class="stat-lbl">BAÑOS</span>
+      <span class="stat-lbl">Baños</span>
     </td>
     {% endif %}
     {% if superficie_cubierta %}
     <td class="stat-cell">
       <span class="stat-num">{{ superficie_cubierta }}</span>
-      <span class="stat-lbl">M² CUBIERTOS</span>
+      <span class="stat-lbl">M² Cubiertos</span>
     </td>
     {% endif %}
     {% if superficie_total %}
     <td class="stat-cell">
       <span class="stat-num">{{ superficie_total }}</span>
-      <span class="stat-lbl">M² TERRENO</span>
+      <span class="stat-lbl">M² Total</span>
     </td>
     {% endif %}
     {% if estacionamientos %}
-    <td class="stat-cell stat-cell-last">
+    <td class="stat-cell">
       <span class="stat-num">{{ estacionamientos }}</span>
-      <span class="stat-lbl">GARAJE</span>
+      <span class="stat-lbl">Garaje</span>
     </td>
     {% endif %}
   </tr>
 </table>
 
-<!-- Description -->
 <div class="content">
-  <div class="sec-title">DESCRIPCIÓN</div>
+  <div class="sec-title">Descripción Exclusiva</div>
   <div class="desc-text">
     {{ descripcion|linebreaks }}
   </div>
 
   {% if amenidades %}
-  <div class="sec-title">AMENIDADES</div>
+  <div class="sec-title">Características y Amenidades</div>
   <table class="chips-table">
     <tr>
     {% for a in amenidades %}
       <td class="chip-td">{{ a }}</td>
-      {% if forloop.counter|divisibleby:6 and not forloop.last %}</tr><tr>{% endif %}
+      {% if forloop.counter|divisibleby:4 and not forloop.last %}</tr><tr>{% endif %}
     {% endfor %}
     </tr>
   </table>
   {% endif %}
 </div>
 
-<!-- Agent strip -->
 <div class="agent-strip">
   <table class="agent-table">
     <tr>
       <td class="agent-info-td">
         <div class="agent-name">{{ agente_nombre }}</div>
         <div class="agent-agency">{{ agencia_nombre }}</div>
-        <div class="agent-contact">{{ agente_telefono }} &nbsp;|&nbsp; {{ agente_email }}</div>
+        <div class="agent-contact">{{ agente_telefono }} &nbsp;&bull;&nbsp; {{ agente_email }}</div>
       </td>
       <td class="agent-qr-td">
         {% if qr_code %}
         <img class="agent-qr-img" src="{{ qr_code }}" />
-        <div class="agent-qr-label">ESCANEAR</div>
         {% endif %}
       </td>
     </tr>
   </table>
 </div>
 
-
-<!-- ═══════════════════════════════════════════════════════════════
-     PAGE 2 — Photo Gallery
-════════════════════════════════════════════════════════════════ -->
+<!-- ════════════════ PAGE 2 ════════════════ -->
 
 {% if fotos_recorrido %}
 <div class="page2">
-
-  <!-- Header -->
   <div class="p2-header">
     <table class="p2-header-table">
       <tr>
-        <td class="p2-title-td">
-          <div class="p2-title">GALERÍA DE FOTOS</div>
-          <div class="p2-subtitle">{{ ciudad|upper }} &nbsp;·&nbsp; {{ operacion|upper }}</div>
-        </td>
-        <td class="p2-badge-td">
-          <span class="p2-badge">{{ moneda }} {{ precio }}</span>
+        <td>
+          <div class="p2-title">GALERÍA DE PROPIEDAD</div>
+          <div class="p2-subtitle">{{ ciudad }} &nbsp;|&nbsp; {{ moneda }} {{ precio }}</div>
         </td>
       </tr>
     </table>
   </div>
 
-  <!-- Photos -->
   <div class="gallery-area">
-
     {% if fotos_recorrido.0 %}
     <div class="main-photo-wrap">
       <img class="main-photo" src="{{ fotos_recorrido.0 }}" />
@@ -465,19 +394,19 @@
     <table class="thumbs-table">
       {% if fotos_recorrido|length > 1 %}
       <tr>
-        <td style="width:33%; padding:2px;">
+        <td style="width:33%; vertical-align: top;">
           <div class="thumb-wrap">
             <img class="thumb-img" src="{{ fotos_recorrido.1 }}" />
           </div>
         </td>
-        <td style="width:33%; padding:2px;">
+        <td style="width:33%; vertical-align: top;">
           {% if fotos_recorrido|length > 2 %}
           <div class="thumb-wrap">
             <img class="thumb-img" src="{{ fotos_recorrido.2 }}" />
           </div>
           {% endif %}
         </td>
-        <td style="width:33%; padding:2px;">
+        <td style="width:33%; vertical-align: top;">
           {% if fotos_recorrido|length > 3 %}
           <div class="thumb-wrap">
             <img class="thumb-img" src="{{ fotos_recorrido.3 }}" />
@@ -488,19 +417,19 @@
       {% endif %}
       {% if fotos_recorrido|length > 4 %}
       <tr>
-        <td style="width:33%; padding:2px;">
+        <td style="width:33%; vertical-align: top;">
           <div class="thumb-wrap">
             <img class="thumb-img" src="{{ fotos_recorrido.4 }}" />
           </div>
         </td>
-        <td style="width:33%; padding:2px;">
+        <td style="width:33%; vertical-align: top;">
           {% if fotos_recorrido|length > 5 %}
           <div class="thumb-wrap">
             <img class="thumb-img" src="{{ fotos_recorrido.5 }}" />
           </div>
           {% endif %}
         </td>
-        <td style="width:33%; padding:2px;">
+        <td style="width:33%; vertical-align: top;">
           {% if fotos_recorrido|length > 6 %}
           <div class="thumb-wrap">
             <img class="thumb-img" src="{{ fotos_recorrido.6 }}" />
@@ -510,37 +439,7 @@
       </tr>
       {% endif %}
     </table>
-
   </div>
-
-  <!-- Footer with agent + QR -->
-  <div class="p2-footer">
-    <table class="p2-footer-table">
-      <tr>
-        <td class="p2-footer-info">
-          <div class="p2-footer-name">{{ agente_nombre }}</div>
-          <div class="p2-footer-sub">{{ agencia_nombre }} &nbsp;·&nbsp; {{ agente_telefono }}</div>
-          <div class="p2-leadbook">GENERADO CON LEADBOOK AI</div>
-        </td>
-        <td class="p2-footer-qr">
-          {% if qr_code %}
-          <table class="p2-qr-block-table">
-            <tr>
-              <td>
-                <img class="p2-qr-img" src="{{ qr_code }}" />
-              </td>
-              <td class="p2-qr-right">
-                <div class="p2-qr-cta">VER FICHA</div>
-                <div class="p2-qr-hint">Escaneá con tu cámara</div>
-              </td>
-            </tr>
-          </table>
-          {% endif %}
-        </td>
-      </tr>
-    </table>
-  </div>
-
 </div>
 {% endif %}
 
