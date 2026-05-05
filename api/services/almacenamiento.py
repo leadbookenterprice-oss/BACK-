@@ -151,14 +151,14 @@ class AlmacenamientoCloudinary:
         - Si no hay pool, usa la config global del .env.
         - Devuelve la secure_url del archivo subido, o None si falla.
         """
-        ext = '.pdf' if tipo == TIPO_PDF else ''
         # Construir public_id determinístico
         base_id = f'leadbook/{tipo}s/user_{user_id}'
         if listado_id:
-            public_id = f'{base_id}/listado_{listado_id}_{tipo}{sufijo}{ext}'
+            # Quitamos la extensión del public_id para evitar duplicados (...pdf.pdf)
+            public_id = f'{base_id}/listado_{listado_id}'
         else:
             import uuid
-            public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}{sufijo}{ext}'
+            public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}{sufijo}'
 
         creds, key_id = cls.get_mejor_cuenta()
         extra_creds = creds if creds else {}
@@ -172,8 +172,9 @@ class AlmacenamientoCloudinary:
                 contenido,
                 resource_type=resource_type,
                 public_id=public_id,
-                overwrite=True,        # Permite actualizar el archivo al regenerar
-                invalidate=False,
+                overwrite=True,
+                invalidate=True,       # Forzar invalidación de caché en CDN
+                access_mode='public',  # Asegurar que sea accesible sin firma
                 **extra_creds,
             )
             url = resultado.get('secure_url')
@@ -211,7 +212,7 @@ class AlmacenamientoCloudinary:
 
     @classmethod
     def guardar_pdf(cls, pdf_bytes: bytes, user_id: int, listado_id: int | None = None) -> str | None:
-        return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id, resource_type='image')
+        return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id, resource_type='auto')
 
     @classmethod
     def guardar_post(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
