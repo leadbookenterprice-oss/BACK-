@@ -1,470 +1,450 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
-<meta charset="UTF-8"/>
+<meta charset="UTF-8">
 <style>
-  @page {
-    margin: 0mm;
-    size: A4;
-  }
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    font-family: Helvetica, Arial, sans-serif;
-    margin: 0;
-    padding: 0;
-    background: #FFFFFF;
+    font-family: 'Inter', Helvetica, Arial, sans-serif;
     color: #333333;
+    background: white;
   }
 
-  /* ─── HERO TOP BAR ─── */
-  .hero-bar-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: #111111;
+  /* ── PÁGINA 1 ── */
+  .page1 {
+    width: 210mm;
+    min-height: 297mm;
+    page-break-after: always;
+    background: white;
   }
-  .hero-bar-td {
+
+  /* TOP BAR */
+  .top-bar {
+    background-color: #111111;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     padding: 12px 20px;
-    vertical-align: middle;
   }
-  .op-badge {
-    background: #CC0000;
-    color: #FFFFFF;
-    font-size: 10px;
-    font-weight: bold;
+  .top-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .badge-operacion {
+    background-color: #CC0000;
+    color: white;
+    font-weight: 700;
+    font-size: 11px;
     padding: 5px 14px;
     border-radius: 4px;
     letter-spacing: 2px;
     text-transform: uppercase;
   }
-  .agency-logo-img {
-    height: 36px;
-    background: #FFFFFF;
-    border-radius: 4px;
-    padding: 3px 6px;
-    display: block;
-  }
-  .agency-name-badge {
-    background: #FFFFFF;
-    border-radius: 4px;
-    padding: 5px 12px;
-    font-size: 11px;
-    font-weight: bold;
-    color: #1B3068;
-  }
-
-  /* ─── HERO IMAGE ─── */
-  .hero-outer {
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    background: #222222;
-  }
-  .hero-img {
-    width: 100%;
-    height: 320px;
-    display: block;
-  }
-
-  /* ─── PRICE SECTION ─── */
-  .price-section {
-    background: #111111;
-    padding: 20px 24px;
-  }
-  .price-table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-  .price-value {
-    font-size: 34px;
-    font-weight: bold;
-    color: #FFFFFF;
-  }
-  .price-location {
-    font-size: 13px;
+  .badge-tipo {
     color: #AAAAAA;
-    margin-top: 4px;
-  }
-  .price-type-badge {
-    background: #1B3068;
-    color: #FFFFFF;
-    font-size: 10px;
-    font-weight: bold;
-    padding: 4px 12px;
-    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 400;
+    text-transform: uppercase;
     letter-spacing: 1px;
   }
-
-  /* ─── STATS BAR ─── */
-  .stats-outer {
-    background: #1B3068;
-    padding: 14px 0;
+  .logo-wrap {
+    background-color: white;
+    border-radius: 6px;
+    padding: 5px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
-  .stats-table {
-    width: 100%;
-    border-collapse: collapse;
+  .logo-wrap img {
+    max-height: 32px;
+    max-width: 130px;
+    object-fit: contain;
   }
-  .stat-cell {
-    text-align: center;
-    vertical-align: middle;
-    padding: 4px 8px;
-    border-right: 1px solid rgba(255,255,255,0.25);
-  }
-  .stat-cell-last {
-    text-align: center;
-    vertical-align: middle;
-    padding: 4px 8px;
-  }
-  .stat-num {
-    font-size: 20px;
-    font-weight: bold;
-    color: #FFFFFF;
-  }
-  .stat-lbl {
-    font-size: 8px;
-    color: #CCDDFF;
-    letter-spacing: 0.8px;
-    text-transform: uppercase;
-    margin-top: 3px;
-  }
-
-  /* ─── DESCRIPTION ─── */
-  .content-section {
-    padding: 18px 32px 8px 32px;
-    background: #FFFFFF;
-  }
-  .sec-title {
-    font-size: 15px;
-    font-weight: bold;
+  .logo-texto {
     color: #1B3068;
-    padding-bottom: 5px;
-    border-bottom: 2px solid #1B3068;
-    margin-bottom: 10px;
+    font-weight: 700;
+    font-size: 12px;
   }
-  .desc-text {
-    font-size: 10px;
-    line-height: 1.7;
-    color: #333333;
-    text-align: justify;
-  }
-  .desc-text p { margin: 0 0 6px 0; }
 
-  /* ─── AMENIDADES ─── */
-  .amenidades-section {
-    padding: 0 32px 16px 32px;
-    background: #FFFFFF;
+  /* HERO FOTO */
+  .hero-foto {
+    width: 100%;
+    height: 300px;
+    object-fit: cover;
+    display: block;
   }
-  .chips-table {
-    border-collapse: separate;
-    border-spacing: 5px 5px;
+  .hero-placeholder {
+    width: 100%;
+    height: 300px;
+    background: #222222;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* PRECIO */
+  .seccion-precio {
+    background-color: #111111;
+    padding: 22px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+  }
+  .precio-valor {
+    color: white;
+    font-size: 36px;
+    font-weight: 900;
+    line-height: 1;
+  }
+  .precio-moneda {
+    color: #AAAAAA;
+    font-size: 16px;
+    font-weight: 400;
+  }
+  .precio-ubicacion {
+    color: #888888;
+    font-size: 13px;
     margin-top: 6px;
   }
-  .chip-td {
-    border: 1px solid #CCCCCC;
-    background: #FFFFFF;
-    border-radius: 12px;
-    padding: 4px 12px;
-    font-size: 9px;
-    color: #555555;
-    white-space: nowrap;
-  }
-
-  /* ─── FOOTER AGENT ─── */
-  .agent-footer {
-    border-top: 3px solid #1B3068;
-    background: #FAFAFA;
-    padding: 16px 24px;
-    margin-top: 10px;
-  }
-  .agent-table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-  .agent-photo-td {
-    width: 74px;
-    vertical-align: middle;
-    padding-right: 14px;
-  }
-  .agent-photo-img {
-    width: 60px;
-    height: 60px;
-    border-radius: 30px;
-    border: 2px solid #1B3068;
-    display: block;
-  }
-  .agent-initials {
-    width: 60px;
-    height: 60px;
+  .precio-operacion-badge {
     background: #1B3068;
-    border-radius: 30px;
-    text-align: center;
-    font-size: 22px;
-    font-weight: bold;
-    color: #FFFFFF;
-    line-height: 60px;
-    display: block;
-  }
-  .agent-info-td {
-    vertical-align: middle;
-  }
-  .agent-name {
-    font-size: 13px;
-    font-weight: bold;
-    color: #1B3068;
-  }
-  .agent-agency {
+    color: white;
     font-size: 10px;
-    color: #777777;
-    margin-top: 2px;
-  }
-  .agent-contact {
-    font-size: 9px;
-    color: #999999;
+    font-weight: 700;
+    padding: 5px 14px;
+    border-radius: 4px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    align-self: flex-start;
     margin-top: 4px;
   }
-  .agent-powered {
-    font-size: 8px;
-    color: #CCCCCC;
-    font-style: italic;
-    margin-top: 6px;
+
+  /* STATS BAR */
+  .stats-bar {
+    background-color: #1B3068;
+    display: flex;
+    justify-content: space-around;
+    padding: 16px 0;
   }
-  .agent-qr-td {
-    width: 96px;
-    text-align: right;
-    vertical-align: middle;
+  .stat-item {
+    text-align: center;
+    flex: 1;
+    border-right: 1px solid rgba(255,255,255,0.2);
+    padding: 4px 8px;
   }
-  .agent-qr-img {
-    width: 80px;
-    height: 80px;
-    display: block;
-    margin-left: auto;
+  .stat-item:last-child { border-right: none; }
+  .stat-numero {
+    color: white;
+    font-size: 26px;
+    font-weight: 800;
+    line-height: 1;
+  }
+  .stat-label {
+    color: #8899CC;
+    font-size: 10px;
+    margin-top: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 
-  /* ─── PAGE 2 ─── */
-  .page2-wrap {
-    page-break-before: always;
-    padding: 28px 32px 32px 32px;
-    background: #FFFFFF;
+  /* DESCRIPCIÓN */
+  .seccion {
+    padding: 22px 32px;
+    background: white;
   }
-  .gallery-header-table {
-    width: 100%;
-    border-collapse: collapse;
-    border-bottom: 3px solid #1B3068;
-    margin-bottom: 18px;
-    padding-bottom: 8px;
-  }
-  .gallery-title {
-    font-size: 18px;
-    font-weight: bold;
+  .seccion-titulo {
     color: #1B3068;
-    padding-bottom: 8px;
+    font-size: 16px;
+    font-weight: 700;
+    padding-bottom: 7px;
+    border-bottom: 2px solid #1B3068;
+    display: inline-block;
+    margin-bottom: 14px;
   }
-  .gallery-subtitle {
+  .descripcion-texto {
+    color: #444444;
+    font-size: 11.5px;
+    line-height: 1.75;
+    text-align: justify;
+  }
+
+  /* AMENIDADES */
+  .amenidades-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .chip {
+    border: 1px solid #CCCCCC;
+    color: #555555;
     font-size: 10px;
-    color: #999999;
-    text-align: right;
-    vertical-align: bottom;
-    padding-bottom: 8px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    background: white;
   }
-  .gallery-main-img {
+
+  /* FOOTER CONTACTO */
+  .footer-contacto {
+    border-top: 3px solid #1B3068;
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-top: 8px;
+    background: #FAFAFA;
+  }
+  .agente-avatar {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #1B3068;
+    flex-shrink: 0;
+  }
+  .agente-avatar-inicial {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background-color: #1B3068;
+    color: white;
+    font-size: 24px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .agente-datos { flex: 1; }
+  .agente-nombre {
+    color: #1B3068;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .agente-agencia {
+    color: #888;
+    font-size: 11px;
+    margin-top: 3px;
+  }
+  .agente-contacto {
+    color: #888;
+    font-size: 10px;
+    margin-top: 4px;
+  }
+  .generado-con {
+    color: #CCCCCC;
+    font-size: 9px;
+    font-style: italic;
+    margin-top: 7px;
+  }
+  .qr-codigo img {
+    width: 80px;
+    height: 80px;
+    flex-shrink: 0;
+  }
+
+  /* ── PÁGINA 2 — GALERÍA ── */
+  .page2 {
+    width: 210mm;
+    padding: 30px 32px 32px 32px;
+    background: white;
+  }
+  .galeria-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 2px solid #1B3068;
+    padding-bottom: 10px;
+    margin-bottom: 18px;
+  }
+  .galeria-titulo {
+    color: #1B3068;
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .galeria-subtitulo {
+    color: #888;
+    font-size: 11px;
+  }
+  .foto-principal {
     width: 100%;
     height: 280px;
-    display: block;
+    object-fit: cover;
     border-radius: 4px;
-    margin-bottom: 8px;
+    display: block;
+    margin-bottom: 10px;
   }
-  .gallery-row-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 8px 0;
-    margin-bottom: 8px;
+  .foto-fila {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
   }
-  .gallery-thumb-img {
-    width: 100%;
+  .foto-miniatura {
+    flex: 1;
     height: 190px;
-    display: block;
+    object-fit: cover;
     border-radius: 4px;
+    display: block;
+    min-width: 0;
   }
 </style>
 </head>
 <body>
 
-<!-- ════════════════ PAGE 1 ════════════════ -->
+<!-- ══════════════════════════════════ -->
+<!--            PÁGINA 1               -->
+<!-- ══════════════════════════════════ -->
+<div class="page1">
 
-<!-- TOP BAR: Badge + Logo/Agency -->
-<table class="hero-bar-table" cellpadding="0" cellspacing="0">
-  <tr>
-    <td class="hero-bar-td" style="text-align:left;">
-      <span class="op-badge">{{ operacion|upper }}</span>
-      &nbsp;&nbsp;
-      <span style="color:#AAAAAA; font-size:11px;">{{ tipo_propiedad }}</span>
-    </td>
-    <td class="hero-bar-td" style="text-align:right;">
+  <!-- TOP BAR -->
+  <div class="top-bar">
+    <div class="top-bar-left">
+      <span class="badge-operacion">{{ operacion|upper }}</span>
+      <span class="badge-tipo">{{ tipo_propiedad }}</span>
+    </div>
+    <div class="logo-wrap">
       {% if logo_url %}
-        <img class="agency-logo-img" src="{{ logo_url }}" />
+        <img src="{{ logo_url }}" alt="Logo agencia" />
       {% else %}
-        <span class="agency-name-badge">{{ agencia_nombre }}</span>
+        <span class="logo-texto">{{ agencia_nombre }}</span>
       {% endif %}
-    </td>
-  </tr>
-</table>
+    </div>
+  </div>
 
-<!-- HERO IMAGE -->
-{% if portada_url %}
-<div class="hero-outer">
-  <img class="hero-img" src="{{ portada_url }}" />
-</div>
-{% endif %}
+  <!-- FOTO HERO -->
+  {% if portada_url %}
+    <img class="hero-foto" src="{{ portada_url }}" alt="Foto principal" />
+  {% else %}
+    <div class="hero-placeholder"></div>
+  {% endif %}
 
-<!-- PRICE SECTION -->
-<div class="price-section">
-  <table class="price-table">
-    <tr>
-      <td style="vertical-align:bottom;">
-        <div class="price-value">{{ moneda }} {{ precio }}</div>
-        <div class="price-location">{{ ciudad }}</div>
-      </td>
-      <td style="text-align:right; vertical-align:bottom;">
-        <span class="price-type-badge">{{ operacion|upper }}</span>
-      </td>
-    </tr>
-  </table>
-</div>
+  <!-- PRECIO -->
+  <div class="seccion-precio">
+    <div>
+      <div class="precio-valor">
+        <span class="precio-moneda">{{ moneda }} </span>{{ precio }}
+      </div>
+      <div class="precio-ubicacion">{{ ciudad }}</div>
+    </div>
+    <span class="precio-operacion-badge">{{ operacion|upper }}</span>
+  </div>
 
-<!-- STATS BAR -->
-<div class="stats-outer">
-  <table class="stats-table">
-    <tr>
-      {% if recamaras %}
-      <td class="stat-cell">
-        <div class="stat-num">{{ recamaras }}</div>
-        <div class="stat-lbl">Recámaras</div>
-      </td>
-      {% endif %}
-      {% if banos %}
-      <td class="stat-cell">
-        <div class="stat-num">{{ banos }}</div>
-        <div class="stat-lbl">Baños</div>
-      </td>
-      {% endif %}
-      {% if superficie_cubierta %}
-      <td class="stat-cell">
-        <div class="stat-num">{{ superficie_cubierta }}</div>
-        <div class="stat-lbl">M² Construidos</div>
-      </td>
-      {% endif %}
-      {% if superficie_total %}
-      <td class="stat-cell">
-        <div class="stat-num">{{ superficie_total }}</div>
-        <div class="stat-lbl">M² Terreno</div>
-      </td>
-      {% endif %}
-      {% if estacionamientos %}
-      <td class="stat-cell-last">
-        <div class="stat-num">{{ estacionamientos }}</div>
-        <div class="stat-lbl">Estacionamientos</div>
-      </td>
-      {% endif %}
-    </tr>
-  </table>
-</div>
+  <!-- STATS BAR -->
+  <div class="stats-bar">
+    {% if recamaras %}
+    <div class="stat-item">
+      <div class="stat-numero">{{ recamaras }}</div>
+      <div class="stat-label">Recámaras</div>
+    </div>
+    {% endif %}
+    {% if banos %}
+    <div class="stat-item">
+      <div class="stat-numero">{{ banos }}</div>
+      <div class="stat-label">Baños</div>
+    </div>
+    {% endif %}
+    {% if superficie_cubierta %}
+    <div class="stat-item">
+      <div class="stat-numero">{{ superficie_cubierta }}</div>
+      <div class="stat-label">M² Construidos</div>
+    </div>
+    {% endif %}
+    {% if superficie_total %}
+    <div class="stat-item">
+      <div class="stat-numero">{{ superficie_total }}</div>
+      <div class="stat-label">M² Terreno</div>
+    </div>
+    {% endif %}
+    {% if estacionamientos %}
+    <div class="stat-item">
+      <div class="stat-numero">{{ estacionamientos }}</div>
+      <div class="stat-label">Estacionamientos</div>
+    </div>
+    {% endif %}
+  </div>
 
-<!-- DESCRIPTION -->
-<div class="content-section">
-  <div class="sec-title">Descripción</div>
-  <div class="desc-text">{{ descripcion|linebreaks }}</div>
-</div>
+  <!-- DESCRIPCIÓN -->
+  <div class="seccion">
+    <div class="seccion-titulo">Descripción</div>
+    <p class="descripcion-texto">{{ descripcion }}</p>
+  </div>
 
-<!-- AMENIDADES -->
-{% if amenidades %}
-<div class="amenidades-section">
-  <div class="sec-title">Amenidades</div>
-  <table class="chips-table">
-    <tr>
-    {% for a in amenidades %}
-      <td class="chip-td">{{ a }}</td>
-      {% if forloop.counter|divisibleby:5 and not forloop.last %}</tr><tr>{% endif %}
-    {% endfor %}
-    </tr>
-  </table>
-</div>
-{% endif %}
+  <!-- AMENIDADES -->
+  {% if amenidades %}
+  <div class="seccion" style="padding-top: 0;">
+    <div class="seccion-titulo">Amenidades</div>
+    <div class="amenidades-wrap">
+      {% for amenidad in amenidades %}
+        <span class="chip">{{ amenidad }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 
-<!-- FOOTER AGENT -->
-<div class="agent-footer">
-  <table class="agent-table">
-    <tr>
-      <td class="agent-photo-td">
-        {% if agente_foto %}
-          <img class="agent-photo-img" src="{{ agente_foto }}" />
-        {% else %}
-          <div class="agent-initials">{{ agente_nombre|first|upper }}</div>
-        {% endif %}
-      </td>
-      <td class="agent-info-td">
-        <div class="agent-name">{{ agente_nombre }}</div>
-        <div class="agent-agency">{{ agencia_nombre }}</div>
-        <div class="agent-contact">{{ agente_telefono }} &nbsp;·&nbsp; {{ agente_email }}</div>
-        <div class="agent-powered">Generado con LeadBook</div>
-      </td>
-      <td class="agent-qr-td">
-        {% if qr_code %}
-        <img class="agent-qr-img" src="{{ qr_code }}" />
-        {% endif %}
-      </td>
-    </tr>
-  </table>
-</div>
+  <!-- FOOTER CONTACTO -->
+  <div class="footer-contacto">
+    {% if agente_foto %}
+      <img class="agente-avatar" src="{{ agente_foto }}" alt="Foto agente" />
+    {% else %}
+      <div class="agente-avatar-inicial">{{ agente_nombre|first|upper }}</div>
+    {% endif %}
+    <div class="agente-datos">
+      <div class="agente-nombre">{{ agente_nombre }}</div>
+      <div class="agente-agencia">{{ agencia_nombre }}</div>
+      <div class="agente-contacto">{{ agente_telefono }} &nbsp;·&nbsp; {{ agente_email }}</div>
+      <div class="generado-con">Generado con LeadBook</div>
+    </div>
+    {% if qr_code %}
+    <div class="qr-codigo">
+      <img src="{{ qr_code }}" alt="QR Contacto" />
+    </div>
+    {% endif %}
+  </div>
 
-<!-- ════════════════ PAGE 2 ════════════════ -->
+</div><!-- /page1 -->
 
+
+<!-- ══════════════════════════════════ -->
+<!--       PÁGINA 2 — GALERÍA          -->
+<!-- ══════════════════════════════════ -->
 {% if fotos_recorrido %}
-<div class="page2-wrap">
+<div class="page2">
 
-  <table class="gallery-header-table">
-    <tr>
-      <td class="gallery-title">Galería de Fotos</td>
-      <td class="gallery-subtitle">{{ ciudad }} &nbsp;|&nbsp; {{ moneda }} {{ precio }}</td>
-    </tr>
-  </table>
+  <div class="galeria-header">
+    <span class="galeria-titulo">Galería de Fotos</span>
+    <span class="galeria-subtitulo">{{ ciudad }} &nbsp;|&nbsp; {{ moneda }} {{ precio }}</span>
+  </div>
 
   <!-- Foto principal -->
   {% if fotos_recorrido.0 %}
-  <img class="gallery-main-img" src="{{ fotos_recorrido.0 }}" />
+    <img class="foto-principal" src="{{ fotos_recorrido.0 }}" alt="Foto 1" />
   {% endif %}
 
-  <!-- Fila 2: fotos 1 y 2 -->
+  <!-- Fila 1: fotos 1 y 2 -->
   {% if fotos_recorrido|length > 1 %}
-  <table class="gallery-row-table">
-    <tr>
-      <td style="width:50%; vertical-align:top;">
-        <img class="gallery-thumb-img" src="{{ fotos_recorrido.1 }}" />
-      </td>
-      <td style="width:50%; vertical-align:top;">
-        {% if fotos_recorrido|length > 2 %}
-        <img class="gallery-thumb-img" src="{{ fotos_recorrido.2 }}" />
-        {% endif %}
-      </td>
-    </tr>
-  </table>
+  <div class="foto-fila">
+    <img class="foto-miniatura" src="{{ fotos_recorrido.1 }}" alt="Foto 2" />
+    {% if fotos_recorrido|length > 2 %}
+    <img class="foto-miniatura" src="{{ fotos_recorrido.2 }}" alt="Foto 3" />
+    {% endif %}
+  </div>
   {% endif %}
 
-  <!-- Fila 3: fotos 3 y 4 -->
+  <!-- Fila 2: fotos 3 y 4 -->
   {% if fotos_recorrido|length > 3 %}
-  <table class="gallery-row-table">
-    <tr>
-      <td style="width:50%; vertical-align:top;">
-        <img class="gallery-thumb-img" src="{{ fotos_recorrido.3 }}" />
-      </td>
-      <td style="width:50%; vertical-align:top;">
-        {% if fotos_recorrido|length > 4 %}
-        <img class="gallery-thumb-img" src="{{ fotos_recorrido.4 }}" />
-        {% endif %}
-      </td>
-    </tr>
-  </table>
+  <div class="foto-fila">
+    <img class="foto-miniatura" src="{{ fotos_recorrido.3 }}" alt="Foto 4" />
+    {% if fotos_recorrido|length > 4 %}
+    <img class="foto-miniatura" src="{{ fotos_recorrido.4 }}" alt="Foto 5" />
+    {% endif %}
+  </div>
   {% endif %}
 
-</div>
+</div><!-- /page2 -->
 {% endif %}
 
 </body>

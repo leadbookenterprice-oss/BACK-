@@ -1016,15 +1016,14 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
 
         print(f"\n[PDF] Generando para {tipo_propiedad} en {ciudad} | portada: {bool(portada_url)} | fotos: {len(fotos_recorrido)} | QR: sí")
 
-        template = get_template('pdf/property_brochure.html')
-        html     = template.render(context)
+        from django.template.loader import render_to_string
+        from weasyprint import HTML
 
-        result = BytesIO()
-        pdf = pisa.pisaDocument(
-            BytesIO(html.encode('UTF-8')),
-            result,
-            link_callback=link_callback
-        )
+        html_string = render_to_string('pdf/property_brochure.html', context)
+        pdf_bytes = HTML(
+            string=html_string,
+            base_url=request.build_absolute_uri('/')
+        ).write_pdf()
 
         # ─── Limpiar archivos temporales de imágenes ─────────────────────────
         for f in temp_files:
@@ -1034,9 +1033,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
             except Exception:
                 pass
 
-        if not pdf.err:
-            pdf_bytes = result.getvalue()
-
+        if pdf_bytes:
             # Subir PDF al Almacenamiento Cloudinary
             pdf_url = AlmacenamientoCloudinary.guardar_pdf(
                 pdf_bytes, user_id=request.user.id, listado_id=listado_id_hint
