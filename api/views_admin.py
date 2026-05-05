@@ -718,7 +718,7 @@ def admin_apikeys_auto_repair(request):
     from api.models import Agent, APIKey, APIBundleAssignment
     from django.utils import timezone
     
-    users = Agent.objects.filter(plan='free')
+    users = Agent.objects.filter(is_active=True)
     fixed = 0
     details = []
     
@@ -734,7 +734,6 @@ def admin_apikeys_auto_repair(request):
         owned_services = list(keys.values_list('servicio', flat=True))
         missing_services = [s for s in ['gemini', 'elevenlabs', 'uploadpost'] if s not in owned_services]
         
-        success = True
         assigned_now = []
         for s in missing_services:
             key = APIKey.objects.filter(status='available', servicio=s).first()
@@ -744,10 +743,8 @@ def admin_apikeys_auto_repair(request):
                 key.assigned_at = timezone.now()
                 key.save()
                 assigned_now.append(s)
-            else:
-                success = False
                 
-        if missing_services and success:
+        if len(assigned_now) > 0:
             fixed += 1
             details.append({"email": user.email, "repaired": assigned_now})
             
