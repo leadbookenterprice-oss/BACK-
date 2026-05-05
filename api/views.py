@@ -2665,7 +2665,10 @@ def proxy_pdf_view(request, listado_id):
         # Si es URL local, redirigir directamente al endpoint que sirve el archivo
         if not pdf_url.startswith('http'):
             from django.shortcuts import redirect
-            return redirect(request.build_absolute_uri(pdf_url))
+            absolute_url = request.build_absolute_uri(pdf_url)
+            if 'localhost' not in absolute_url and '127.0.0.1' not in absolute_url:
+                absolute_url = absolute_url.replace('http://', 'https://')
+            return redirect(absolute_url)
 
         # Petición interna a Cloudinary
         response = requests.get(pdf_url, stream=True, timeout=30)
@@ -2702,7 +2705,7 @@ def proxy_pdf_thumbnail_view(request, listado_id):
 
         if not pdf_url or not pdf_url.startswith('http') or 'res.cloudinary.com' not in pdf_url:
             from django.shortcuts import redirect
-            return redirect('https://via.placeholder.com/400x600?text=Vista+Previa+No+Disponible')
+            return redirect('https://placehold.co/400x600/111111/FFFFFF/png?text=Vista+Previa\\nNo+Disponible')
 
         thumb_url = pdf_url.replace('.pdf', '.jpg')
         if '/upload/' in thumb_url:
