@@ -9,6 +9,7 @@ from django.db.models import Sum
 from decouple import config
 import cloudinary
 import cloudinary.uploader
+from api.services.cloudinary_pool_service import CloudinaryPoolService
 
 from .models import (
     Property, GeneratedAsset, Listado, OTPCode,
@@ -572,11 +573,13 @@ def generar_carrusel(request):
             try:
                 print(f"[DEBUG] Subiendo slide {i+1} a Cloudinary...")
                 image_stream.seek(0)
+                creds = CloudinaryPoolService.get_best_credentials() or {}
                 cloud_response = cloudinary.uploader.upload(
                     image_stream.getvalue(),
                     folder=f"leadbook/carousels/{user.id}",
                     resource_type="image",
-                    public_id=f"carousel_{user.id}_{int(time.time())}_{i}"
+                    public_id=f"carousel_{user.id}_{int(time.time())}_{i}",
+                    **creds
                 )
                 slides_urls.append(cloud_response['secure_url'])
                 print(f"[DEBUG] Slide {i+1} subida OK: {cloud_response['secure_url']}")
@@ -608,7 +611,8 @@ def test_upload_avatar(request):
         file = request.FILES.get('file')
         if not file:
             return Response({'error': 'No file provided'}, status=400)
-        result = cloudinary.uploader.upload(file, folder='leadbook/avatars')
+        creds = CloudinaryPoolService.get_best_credentials() or {}
+        result = cloudinary.uploader.upload(file, folder='leadbook/avatars', **creds)
         return Response({'url': result['secure_url']})
     except Exception as e:
         return Response({'error': str(e)}, status=500)
@@ -1008,11 +1012,13 @@ def generar_imagen_post(request):
         # Intentar subir a Cloudinary; si falla, devolver base64
         try:
             image_stream.seek(0)
+            creds = CloudinaryPoolService.get_best_credentials() or {}
             cloud_response = cloudinary.uploader.upload(
                 image_stream,
                 folder="leadbook/posts",
                 resource_type="image",
-                public_id=f"post_{request.user.id}_{int(time.time())}"
+                public_id=f"post_{request.user.id}_{int(time.time())}",
+                **creds
             )
             img_url = cloud_response['secure_url']
             public_id = cloud_response.get('public_id')
@@ -1060,11 +1066,13 @@ def generar_imagen_story(request):
         # Intentar subir a Cloudinary; si falla, devolver base64
         try:
             image_stream.seek(0)
+            creds = CloudinaryPoolService.get_best_credentials() or {}
             cloud_response = cloudinary.uploader.upload(
                 image_stream,
                 folder="leadbook/stories",
                 resource_type="image",
-                public_id=f"story_{request.user.id}_{int(time.time())}"
+                public_id=f"story_{request.user.id}_{int(time.time())}",
+                **creds
             )
             img_url   = cloud_response['secure_url']
             public_id = cloud_response.get('public_id')

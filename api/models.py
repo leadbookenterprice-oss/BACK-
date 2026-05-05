@@ -248,6 +248,7 @@ class APIKey(models.Model):
         ('anthropic', 'Anthropic'),
         ('stability', 'Stability AI'),
         ('replicate', 'Replicate'),
+        ('cloudinary', 'Cloudinary'),
         ('other', 'Otro'),
     ]
     STATUS_CHOICES = [

@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import views_cloudinary
 
 urlpatterns = [
     # ── Stats ─────────────────────────────────────────────────────────────────
@@ -25,6 +26,12 @@ urlpatterns = [
     path('pool/estado/', views.admin_api_keys_list, name='admin_pool_estado'),
     path('pool/listar/', views.admin_api_keys_list, name='admin_pool_listar'),
     path('pool/keys/<int:pk>/toggle/', views.admin_api_keys_detail, name='admin_pool_keys_toggle'),
+
+    # ── Cloudinary Storage Pool ───────────────────────────────────────────────
+    path('cloudinary/stats/', views_cloudinary.admin_cloudinary_stats, name='admin_cloudinary_stats'),
+    path('cloudinary/keys/', views_cloudinary.admin_cloudinary_keys, name='admin_cloudinary_keys'),
+    path('cloudinary/keys/add/', views_cloudinary.admin_cloudinary_keys_add, name='admin_cloudinary_keys_add'),
+    path('cloudinary/keys/<int:pk>/eliminar/', views_cloudinary.admin_cloudinary_keys_delete, name='admin_cloudinary_keys_delete'),
 
     # ── Bundles ───────────────────────────────────────────────────────────────
     path('bundles/', views.admin_bundles_list, name='admin_bundles_list'),

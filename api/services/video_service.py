@@ -11,6 +11,7 @@ import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 from api.ai_services import smart_call, call_elevenlabs_api
+from api.services.cloudinary_pool_service import CloudinaryPoolService
 
 cloudinary.config( 
   cloud_name = config('CLOUDINARY_CLOUD_NAME', default=''), 
@@ -249,11 +250,13 @@ No incluyas preámbulos, solo el texto en español neutro."""
 
         if process.returncode == 0:
             try:
-                if config('CLOUDINARY_API_KEY', default=''):
+                creds = CloudinaryPoolService.get_best_credentials() or {}
+                if creds or config('CLOUDINARY_API_KEY', default=''):
                     result = cloudinary.uploader.upload(
                         output_path, 
                         resource_type='video',
-                        folder='inmobiliaria_videos'
+                        folder='inmobiliaria_videos',
+                        **creds
                     )
                     listado.video_url = result.get('secure_url')
                 else:
