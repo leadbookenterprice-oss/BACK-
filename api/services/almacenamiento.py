@@ -142,7 +142,6 @@ class AlmacenamientoCloudinary:
         user_id: int,
         listado_id: int | None = None,
         sufijo: str = '',        # ej: "_slide_0" para carrusel
-        resource_type: str = 'auto',
     ) -> str | None:
         """
         Sube un archivo al Almacenamiento Cloudinary.
@@ -154,13 +153,12 @@ class AlmacenamientoCloudinary:
         # Construir public_id determinístico
         base_id = f'leadbook/{tipo}s/user_{user_id}'
         if listado_id:
-            # Para assets RAW (PDFs), Cloudinary requiere la extensión en el public_id
-            ext = '.pdf' if tipo == TIPO_PDF else ''
-            public_id = f'{base_id}/listado_{listado_id}{ext}'
+            # Con 'auto', Cloudinary maneja la extensión. Evitamos ponerla en el public_id
+            # para prevenir duplicaciones como .pdf.pdf o problemas de ACL.
+            public_id = f'{base_id}/listado_{listado_id}'
         else:
             import uuid
-            ext = '.pdf' if tipo == TIPO_PDF else ''
-            public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}{ext}'
+            public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}'
 
         creds, key_id = cls.get_mejor_cuenta()
         extra_creds = creds if creds else {}
@@ -172,11 +170,11 @@ class AlmacenamientoCloudinary:
 
             resultado = cloudinary.uploader.upload(
                 contenido,
-                resource_type=resource_type,
+                resource_type='auto',  # Dejar que Cloudinary detecte (PDF, Imagen, Video)
                 public_id=public_id,
+                type='upload',         # Forzar tipo 'upload' (Público)
                 overwrite=True,
                 invalidate=True,       # Forzar invalidación de caché en CDN
-                access_mode='public',  # Asegurar que sea accesible sin firma
                 **extra_creds,
             )
             url = resultado.get('secure_url')
@@ -214,32 +212,31 @@ class AlmacenamientoCloudinary:
 
     @classmethod
     def guardar_pdf(cls, pdf_bytes: bytes, user_id: int, listado_id: int | None = None) -> str | None:
-        # Forzamos resource_type='raw' para evitar problemas de ACL con el visor de imágenes
-        return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id, resource_type='raw')
+        return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id)
 
     @classmethod
     def guardar_post(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
-        return cls.subir(imagen_stream, TIPO_POST, user_id, listado_id, resource_type='image')
+        return cls.subir(imagen_stream, TIPO_POST, user_id, listado_id)
 
     @classmethod
     def guardar_story(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
-        return cls.subir(imagen_stream, TIPO_STORY, user_id, listado_id, resource_type='image')
+        return cls.subir(imagen_stream, TIPO_STORY, user_id, listado_id)
 
     @classmethod
     def guardar_slide_carrusel(cls, imagen_stream, user_id: int, listado_id: int | None = None, indice: int = 0) -> str | None:
-        return cls.subir(imagen_stream, TIPO_CARRUSEL, user_id, listado_id, sufijo=f'_slide_{indice}', resource_type='image')
+        return cls.subir(imagen_stream, TIPO_CARRUSEL, user_id, listado_id, sufijo=f'_slide_{indice}')
 
     @classmethod
     def guardar_video(cls, video_path_o_bytes, user_id: int, listado_id: int | None = None) -> str | None:
-        return cls.subir(video_path_o_bytes, TIPO_VIDEO, user_id, listado_id, resource_type='video')
+        return cls.subir(video_path_o_bytes, TIPO_VIDEO, user_id, listado_id)
 
     @classmethod
     def guardar_audio(cls, audio_bytes_o_path, user_id: int, listado_id: int | None = None, sufijo: str = '') -> str | None:
-        return cls.subir(audio_bytes_o_path, TIPO_AUDIO, user_id, listado_id, sufijo=sufijo, resource_type='raw')
+        return cls.subir(audio_bytes_o_path, TIPO_AUDIO, user_id, listado_id, sufijo=sufijo)
 
     @classmethod
     def guardar_avatar(cls, imagen, user_id: int) -> str | None:
-        return cls.subir(imagen, TIPO_AVATAR, user_id, resource_type='image')
+        return cls.subir(imagen, TIPO_AVATAR, user_id)
 
     # ── Estado del pool ───────────────────────────────────────────────────────
 
