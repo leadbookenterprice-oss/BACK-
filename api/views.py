@@ -1097,7 +1097,9 @@ def generar_pdf(request):
             except Exception:
                 pass
 
-        return HttpResponse(html_string, content_type='text/html; charset=utf-8')
+        response = HttpResponse(html_string, content_type='text/html; charset=utf-8')
+        response['X-Frame-Options'] = 'ALLOWALL'
+        return response
 
     except Exception as e:
         import traceback
