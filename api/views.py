@@ -25,6 +25,21 @@ from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
 from .plan_utils import puede_generar, incrementar_uso
 
+def actualizar_resultados_listado(listado, tipo, resultado):
+    """
+    Guarda el resultado (URL, caption, etc) dentro del JSON de datos del listado.
+    Esto permite persistencia entre sesiones.
+    """
+    if not listado: return
+    if not isinstance(listado.datos, dict):
+        listado.datos = {}
+    
+    if 'resultados' not in listado.datos:
+        listado.datos['resultados'] = {}
+    
+    listado.datos['resultados'][tipo] = resultado
+    listado.save(update_fields=['datos'])
+
 LIMITES_PLAN = {
     'free':     {'listados_mes': 10},
     'starter':  {'listados_mes': 40},
@@ -600,6 +615,12 @@ def generar_carrusel(request):
         prompt_text = f"Escribí un caption para un carrusel de Instagram de una propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Enfocado en vender el estilo de vida y llamar a la acción. Usá emojis y hashtags."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario digital.", agente=user)
 
+        # PERSISTENCIA: Guardar en el listado
+        if listado_id_val:
+            from .models import Listado
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+            actualizar_resultados_listado(listado_obj, 'carrusel', {"slides": slides_urls, "caption": caption})
+
         if user.is_authenticated:
             incrementar_uso(user, 'image')
 
@@ -1028,16 +1049,24 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
                 pdf_url = f"/api/pdf/{pdf_uuid}/"
 
             from .models import Listado
-            listado, created = Listado.objects.get_or_create(
-                agente=request.user,
-                tipo_propiedad=tipo_propiedad,
-                ciudad=ciudad,
-                defaults={
-                    'titulo': data.get('titulo') or f"{tipo_propiedad} en {ciudad}",
-                    'precio': precio,
-                    'datos': data
-                }
-            )
+            listado = None
+            if listado_id_hint:
+                listado = Listado.objects.filter(id=listado_id_hint, agente=request.user).first()
+            
+            if not listado:
+                listado, created = Listado.objects.get_or_create(
+                    agente=request.user,
+                    tipo_propiedad=tipo_propiedad,
+                    ciudad=ciudad,
+                    defaults={
+                        'titulo': data.get('titulo') or f"{tipo_propiedad} en {ciudad}",
+                        'precio': precio,
+                        'datos': data
+                    }
+                )
+
+            # PERSISTENCIA: Guardar el PDF en los resultados del listado
+            actualizar_resultados_listado(listado, 'pdf', {"url": pdf_url})
 
             return Response({"url": pdf_url, "listado_id": listado.id}, status=status.HTTP_200_OK)
 
@@ -1103,6 +1132,12 @@ def generar_imagen_post(request):
                 "error": "error_subida",
                 "mensaje": "No se pudo subir la imagen a la nube. Reintentá en unos segundos."
             }, status=500)
+
+        # PERSISTENCIA: Guardar en el listado
+        if listado_id_val:
+            from .models import Listado
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+            actualizar_resultados_listado(listado_obj, 'post', {"url": img_url, "caption": caption})
 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'image')
@@ -1173,6 +1208,12 @@ def generar_imagen_story(request):
                 "error": "error_subida",
                 "mensaje": "No se pudo subir la historia a la nube."
             }, status=500)
+
+        # PERSISTENCIA: Guardar en el listado
+        if listado_id_val:
+            from .models import Listado
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+            actualizar_resultados_listado(listado_obj, 'story', {"url": img_url, "caption": caption})
 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'image')
@@ -1258,6 +1299,13 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
         }
         premium_html = render_to_string('emails/marketing.html', context)
         parsed["html"] = premium_html
+        
+        # PERSISTENCIA: Guardar en el listado
+        listado_id_val = data.get('listado_id') or data.get('listadoId')
+        if listado_id_val:
+            from .models import Listado
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+            actualizar_resultados_listado(listado_obj, 'email', parsed)
             
         return Response(parsed, status=status.HTTP_200_OK)
     except Exception as e:
