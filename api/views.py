@@ -379,9 +379,14 @@ class PerfilView(APIView):
             "email": user.email,
             "nombre": user.nombre,
             "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
+            "agencia": getattr(user, 'agencia', None),
             "logo_url": getattr(user, 'logo_url', None),
+            "telefono": getattr(user, 'telefono', None),
             "nicho": getattr(user, 'nicho', None),
             "pais": getattr(user, 'pais', None),
+            "nacionalidad": getattr(user, 'nacionalidad', None),
+            "sitio_web": getattr(user, 'sitio_web', None),
+            "bio": getattr(user, 'bio', None),
             "meta_access_token": getattr(user, 'meta_access_token', None),
             "meta_instagram_account_id": getattr(user, 'meta_instagram_account_id', None),
             "agentes_asociados": getattr(user, 'agentes_asociados', []),
@@ -424,6 +429,20 @@ class PerfilView(APIView):
             user.meta_access_token = data['meta_access_token']
         if 'meta_instagram_account_id' in data:
             user.meta_instagram_account_id = data['meta_instagram_account_id']
+        if 'telefono' in data:
+            user.telefono = data['telefono']
+        if 'agencia' in data:
+            user.agencia = data['agencia']
+        if 'nicho' in data:
+            user.nicho = data['nicho']
+        if 'pais' in data:
+            user.pais = data['pais']
+        if 'nacionalidad' in data:
+            user.nacionalidad = data['nacionalidad']
+        if 'sitio_web' in data:
+            user.sitio_web = data['sitio_web']
+        if 'bio' in data:
+            user.bio = data['bio']
             
         user.save()
         return Response({
@@ -431,9 +450,14 @@ class PerfilView(APIView):
             "email": user.email,
             "nombre": user.nombre,
             "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
+            "agencia": getattr(user, 'agencia', None),
             "logo_url": getattr(user, 'logo_url', None),
+            "telefono": getattr(user, 'telefono', None),
             "nicho": getattr(user, 'nicho', None),
             "pais": getattr(user, 'pais', None),
+            "nacionalidad": getattr(user, 'nacionalidad', None),
+            "sitio_web": getattr(user, 'sitio_web', None),
+            "bio": getattr(user, 'bio', None),
             "meta_access_token": getattr(user, 'meta_access_token', None),
             "meta_instagram_account_id": getattr(user, 'meta_instagram_account_id', None),
             "agentes_asociados": getattr(user, 'agentes_asociados', []),

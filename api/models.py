@@ -28,6 +28,9 @@ class Agent(AbstractBaseUser, PermissionsMixin):
     meta_instagram_account_id = models.CharField(max_length=100, null=True, blank=True)
     nicho = models.CharField(max_length=100, null=True, blank=True)
     pais = models.CharField(max_length=100, null=True, blank=True)
+    nacionalidad = models.CharField(max_length=100, null=True, blank=True)
+    sitio_web = models.URLField(max_length=255, null=True, blank=True)
+    bio = models.TextField(null=True, blank=True)
     agentes_asociados = models.JSONField(default=list)
     plan_nombre = models.CharField(
         max_length=20,
