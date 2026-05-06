@@ -56,8 +56,8 @@ def mi_uso_apis(request):
     
     # Si no tiene bundle y es Free, intentar asignarle uno on-the-fly
     if not assignment or not assignment.bundle:
-        from api.pool_manager import _asignar_bundle
-        bundle_asignado = _asignar_bundle(user)
+        from api.services.pool_service import APIPoolService
+        bundle_asignado, _ = APIPoolService.assign_bundle_to_user(user)
         
         if bundle_asignado:
             # Recargar assignment
