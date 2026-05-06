@@ -724,12 +724,31 @@ class OnboardingView(APIView):
         
         if 'nombre_inmobiliaria' in data:
             user.nombre_inmobiliaria = data['nombre_inmobiliaria']
+        elif 'nombreInmobiliaria' in data:
+            user.nombre_inmobiliaria = data['nombreInmobiliaria']
+            
         if 'logo_url' in data:
             user.logo_url = data['logo_url']
+        elif 'logoUrl' in data:
+            user.logo_url = data['logoUrl']
+            
         if 'nicho' in data:
             user.nicho = data['nicho']
         if 'pais' in data:
             user.pais = data['pais']
+            
+        if 'telefono' in data:
+            user.telefono = data['telefono']
+        if 'agencia' in data:
+            user.agencia = data['agencia']
+        if 'nacionalidad' in data:
+            user.nacionalidad = data['nacionalidad']
+        if 'sitio_web' in data:
+            user.sitio_web = data['sitio_web']
+        elif 'sitioWeb' in data:
+            user.sitio_web = data['sitioWeb']
+        if 'bio' in data:
+            user.bio = data['bio']
             
         user.save()
         return Response({
@@ -737,8 +756,12 @@ class OnboardingView(APIView):
             "nombre": user.nombre,
             "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
             "logo_url": getattr(user, 'logo_url', None),
+            "telefono": getattr(user, 'telefono', None),
             "nicho": getattr(user, 'nicho', None),
             "pais": getattr(user, 'pais', None),
+            "nacionalidad": getattr(user, 'nacionalidad', None),
+            "sitio_web": getattr(user, 'sitio_web', None),
+            "bio": getattr(user, 'bio', None),
             "agentes_asociados": getattr(user, 'agentes_asociados', []),
             "plan_nombre": getattr(user, 'plan_nombre', 'starter')
         }, status=status.HTTP_200_OK)
