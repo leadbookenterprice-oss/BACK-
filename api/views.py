@@ -967,61 +967,40 @@ def construir_contexto_pdf(data, user, request=None):
 
     def save_temp_image(b64_or_url):
         """
-        Acepta base64 (con o sin header data:image/...) o URL http/https.
-        Descarga/decodifica la imagen y la guarda en /tmp/ como archivo local.
-        Retorna el path absoluto local, o None si falla.
-        WeasyPrint requiere rutas locales (file://) — no puede acceder a /tmp/ via HTTP.
-        """
-        if not b64_or_url or not isinstance(b64_or_url, str):
-            return None
-        val = b64_or_url.strip()
-
-        # Si es URL HTTP/HTTPS: descargar al disco local
-        if val.startswith('http://') or val.startswith('https://'):
-            try:
-                import requests as req_lib
-                resp = req_lib.get(val, timeout=15, stream=True)
-                if resp.status_code == 200:
-                    ct = resp.headers.get('content-type', '')
-                    ext = 'jpg'
-                    if 'png' in ct:
-                        ext = 'png'
-                    elif 'gif' in ct:
-                        ext = 'gif'
-                    elif 'webp' in ct:
-                        ext = 'webp'
-                    filename = os.path.join(tempfile.gettempdir(), f"lb_{uuid.uuid4().hex}.{ext}")
-                    with open(filename, 'wb') as f:
-                        for chunk in resp.iter_content(8192):
-                            f.write(chunk)
-                    temp_files.append(filename)
-                    return filename
-            except Exception as e:
-                print(f"[PDF] Error descargando imagen URL: {e}")
-            return None
-
-        # Si es base64 (con o sin header data:...)
-        try:
-            if ',' in val and val.startswith('data:'):
-                val = val.split(',', 1)[1]
-            val += '=' * ((4 - len(val) % 4) % 4)
-            img_data = base64.b64decode(val)
-            # Detectar formato por magic bytes
-            ext = 'jpg'
-            if img_data[:8] == b'\x89PNG\r\n\x1a\n':
-                ext = 'png'
-            elif img_data[:2] == b'\xff\xd8':
-                ext = 'jpg'
-            elif img_data[:6] in (b'GIF87a', b'GIF89a'):
-                ext = 'gif'
-            filename = os.path.join(tempfile.gettempdir(), f"lb_{uuid.uuid4().hex}.{ext}")
-            with open(filename, 'wb') as f:
-                f.write(img_data)
-            temp_files.append(filename)
-            return filename
-        except Exception as e:
-            print(f"[PDF] Error decodificando imagen base64: {e}")
-            return None
+    def resolver_imagen(val, return_url_only=False):
+        if not val: return None, None
+        
+        url_firma = None
+        
+        if isinstance(val, dict) and 'public_id' in val:
+            from api.services.almacenamiento import AlmacenamientoCloudinary
+            img_bytes, url_firma = AlmacenamientoCloudinary.obtener_bytes_y_url_foto(val)
+            if return_url_only:
+                return None, url_firma
+            if img_bytes:
+                b64 = base64.b64encode(img_bytes).decode()
+                return f"data:image/jpeg;base64,{b64}", url_firma
+            return None, url_firma
+            
+        if isinstance(val, str):
+            if val.startswith('http'):
+                url_firma = val
+                if return_url_only:
+                    return None, url_firma
+                try:
+                    import urllib.request
+                    with urllib.request.urlopen(val, timeout=10) as r:
+                        data = r.read()
+                    b64 = base64.b64encode(data).decode()
+                    return f"data:image/jpeg;base64,{b64}", url_firma
+                except Exception as e:
+                    print(f"[PDF] Error descargando imagen {val}: {e}")
+                    return None, url_firma
+            
+            if val.startswith('data:'):
+                return val, None
+                
+        return None, None
 
     def imagen_a_base64(ruta):
         """Convierte una imagen (ruta local o URL http) a data URI base64 para embeber en HTML."""
@@ -1086,30 +1065,35 @@ def construir_contexto_pdf(data, user, request=None):
 
     # ─── Procesar imágenes (base64 Y URLs) ───────────────────────────────
     logo_val_raw = data.get('logoAgenciaUrl', data.get('logo_url', ''))
-    logo_url = save_temp_image(logo_val_raw) or ''
+    logo_b64, logo_url_firma = resolver_imagen(logo_val_raw)
 
     portada_val_raw = data.get('portadaUrl', '')
     fotos_raw = data.get('fotosRecorrido', [])
 
-    # Filtrar el logo de las fotos del recorrido
     fotos_limpias = []
     for f in fotos_raw:
-        fv = f.get('url') or f.get('base64') or '' if isinstance(f, dict) else f or ''
-        if fv and fv != logo_val_raw:
-            fotos_limpias.append(fv)
+        if isinstance(f, dict):
+            if f.get('public_id') and f != logo_val_raw:
+                fotos_limpias.append(f)
+        elif isinstance(f, str) and f and f != logo_val_raw:
+            fotos_limpias.append(f)
 
     # Si la portada viene vacía o es igual al logo, usar la primera foto real de la propiedad
     if not portada_val_raw or portada_val_raw == logo_val_raw:
         if fotos_limpias:
             portada_val_raw = fotos_limpias[0]
 
-    portada_url = save_temp_image(portada_val_raw) or ''
+    portada_b64, portada_url_firma = resolver_imagen(portada_val_raw)
 
-    fotos_recorrido = []
+    fotos_recorrido_b64 = []
+    fotos_recorrido_urls = []
     for fv in fotos_limpias:
-        path = save_temp_image(fv)
-        if path:
-            fotos_recorrido.append(path)
+        # Aquí solo queremos las URLs para que Gemini las use. No descargamos la galería a RAM
+        _, url_firma = resolver_imagen(fv, return_url_only=True)
+        if url_firma:
+            fotos_recorrido_urls.append(url_firma)
+            # Para el PDF, Weasyprint puede descargar directamente la URL HTTP, así evitamos RAM infinita
+            fotos_recorrido_b64.append(url_firma)
 
     # ─── Procesar escenas si las hay ─────────────────────────────────────
     escenas = data.get('escenas', [])
@@ -1117,8 +1101,8 @@ def construir_contexto_pdf(data, user, request=None):
         escenas_procesadas = []
         for escena in escenas:
             if isinstance(escena, dict) and escena.get('fotoUrl'):
-                path = save_temp_image(escena['fotoUrl'])
-                escena = {**escena, 'fotoUrl': path}
+                _, url_firma = resolver_imagen(escena['fotoUrl'], return_url_only=True)
+                escena = {**escena, 'fotoUrl': url_firma or escena['fotoUrl']}
             escenas_procesadas.append(escena)
         data['escenas'] = escenas_procesadas
 
@@ -1163,12 +1147,12 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         'estacionamientos':   estacionamientos,
         'descripcion':        descripcion,
         'amenidades':         amenidades,
-        'portada_url':        imagen_a_base64(portada_url),
-        'fotos_recorrido':    [imagen_a_base64(f) for f in fotos_recorrido],
-        'logo_url':           imagen_a_base64(logo_url),
-        'portada_url_raw':    portada_val_raw,
-        'fotos_recorrido_raw': fotos_limpias,
-        'logo_url_raw':       logo_val_raw,
+        'portada_url':        portada_b64 or portada_url_firma or '',
+        'fotos_recorrido':    fotos_recorrido_b64,
+        'logo_url':           logo_b64 or logo_url_firma or '',
+        'portada_url_raw':    portada_url_firma or portada_val_raw if isinstance(portada_val_raw, str) else '',
+        'fotos_recorrido_raw': fotos_recorrido_urls,
+        'logo_url_raw':       logo_url_firma or logo_val_raw if isinstance(logo_val_raw, str) else '',
         'agente_nombre':      agente_nombre,
         'agente_telefono':    agente_telefono,
         'agente_email':       agente_email,
@@ -2971,22 +2955,25 @@ def upload_fotos_listado(request):
     try:
         from api.services.almacenamiento import AlmacenamientoCloudinary
         
-        if portada_b64 and portada_b64.startswith('data:image'):
-            url = AlmacenamientoCloudinary.guardar_foto_propiedad(portada_b64, user_id, listado_id, sufijo='_portada')
-            if url:
-                response_data['portadaUrl'] = url
+        if portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('data:image'):
+            obj = AlmacenamientoCloudinary.guardar_foto_propiedad(portada_b64, user_id, listado_id, tipo_foto='portada')
+            if obj:
+                response_data['portadaUrl'] = obj
             else:
                 response_data['portadaUrl'] = portada_b64 # Fallback
-
-        elif portada_b64 and portada_b64.startswith('http'):
+        elif isinstance(portada_b64, dict):
+            response_data['portadaUrl'] = portada_b64
+        elif portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('http'):
             response_data['portadaUrl'] = portada_b64
             
         for i, foto in enumerate(fotos_b64):
-            if foto and foto.startswith('data:image'):
-                url = AlmacenamientoCloudinary.guardar_foto_propiedad(foto, user_id, listado_id, sufijo=f'_galeria_{i}')
-                if url:
-                    response_data['fotosRecorrido'].append(url)
-            elif foto and foto.startswith('http'):
+            if foto and isinstance(foto, str) and foto.startswith('data:image'):
+                obj = AlmacenamientoCloudinary.guardar_foto_propiedad(foto, user_id, listado_id, tipo_foto='galeria', indice=i)
+                if obj:
+                    response_data['fotosRecorrido'].append(obj)
+            elif isinstance(foto, dict):
+                response_data['fotosRecorrido'].append(foto)
+            elif foto and isinstance(foto, str) and foto.startswith('http'):
                 response_data['fotosRecorrido'].append(foto)
 
         return Response(response_data)

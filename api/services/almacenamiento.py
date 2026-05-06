@@ -261,23 +261,107 @@ class AlmacenamientoCloudinary:
         return cls.subir(imagen, TIPO_AVATAR, user_id)
 
     @classmethod
-    def guardar_foto_propiedad(cls, base64_str: str, user_id: int, listado_id: int | None = None, sufijo: str = '') -> str | None:
+    def guardar_foto_propiedad(cls, base64_str: str, user_id: int, listado_id: int | None = None, tipo_foto: str = 'portada', indice: int = 0) -> dict | None:
         if not base64_str:
             return None
         
         try:
             import base64
-            # Handle format 'data:image/jpeg;base64,...'
             if ',' in base64_str:
                 header, data = base64_str.split(',', 1)
             else:
                 data = base64_str
                 
             image_bytes = base64.b64decode(data)
-            return cls.subir(image_bytes, TIPO_FOTO_PROPIEDAD, user_id, listado_id, sufijo=sufijo)
+            
+            # Construir public_id explícito
+            base_id = f'leadbook/usuario_{user_id}'
+            if listado_id:
+                base_id += f'/listado_{listado_id}'
+            else:
+                base_id += '/temp'
+                
+            if tipo_foto == 'portada':
+                public_id = f'{base_id}/portada'
+            else:
+                public_id = f'{base_id}/galeria_{indice}'
+
+            creds, key_id = cls.get_mejor_cuenta()
+            if not creds:
+                return None
+                
+            cloudinary.uploader.upload(
+                image_bytes,
+                resource_type='image',
+                public_id=public_id,
+                type='upload',
+                overwrite=True,
+                invalidate=True,
+                **creds
+            )
+            
+            if key_id:
+                cls._invalidate_stats_cache(key_id)
+
+            return {
+                "cloudinary_account": creds.get('cloud_name', ''),
+                "public_id": public_id
+            }
+            
         except Exception as e:
-            logger.error(f'[Almacenamiento] Error decodificando foto base64: {e}')
+            logger.error(f'[Almacenamiento] Error guardando foto de propiedad: {e}')
             return None
+
+    @classmethod
+    def obtener_bytes_y_url_foto(cls, foto_dict: dict) -> tuple[bytes | None, str | None]:
+        """
+        Recibe un diccionario {"cloudinary_account": "...", "public_id": "..."}
+        Retorna (bytes_de_la_imagen, url_firmada)
+        """
+        if not foto_dict or not isinstance(foto_dict, dict):
+            return None, None
+            
+        cloud_name = foto_dict.get('cloudinary_account')
+        public_id = foto_dict.get('public_id')
+        if not cloud_name or not public_id:
+            return None, None
+            
+        # Buscar credenciales en el pool que coincidan con cloud_name
+        keys = cls._get_pool_keys()
+        creds = None
+        for k in keys:
+            c = cls._parse_cloudinary_url(k.api_key)
+            if c and c.get('cloud_name') == cloud_name:
+                creds = c
+                break
+                
+        if not creds:
+            # Fallback global si no se encuentra en el pool
+            creds = {
+                'cloud_name': getattr(settings, 'CLOUDINARY_CLOUD_NAME', ''),
+                'api_key': getattr(settings, 'CLOUDINARY_API_KEY', ''),
+                'api_secret': getattr(settings, 'CLOUDINARY_API_SECRET', ''),
+            }
+
+        try:
+            from cloudinary.utils import cloudinary_url
+            url, _ = cloudinary_url(
+                public_id,
+                resource_type='image',
+                type='upload',
+                sign_url=True,
+                secure=True,
+                **creds
+            )
+            
+            import requests as req_lib
+            r = req_lib.get(url, timeout=8)
+            if r.status_code == 200:
+                return r.content, url
+            return None, url
+        except Exception as e:
+            logger.error(f'[Almacenamiento] Error descargando foto a RAM: {e}')
+            return None, None
 
     # ── Estado del pool ───────────────────────────────────────────────────────
 
