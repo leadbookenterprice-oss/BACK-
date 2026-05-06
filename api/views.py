@@ -1090,8 +1090,8 @@ def construir_contexto_pdf(data, user, request=None):
 {tipo_propiedad} en {operacion} en {ciudad}.
 Precio: {moneda} {precio}.
 Recámaras: {recamaras}. Baños: {banos}.
-Superficie construida: {superficie_cubierta}m².
-Terreno: {superficie_total}m².
+Superficie construida: {superficie_cubierta}m2.
+Terreno: {superficie_total}m2.
 Amenidades: {amenidades_str}.
 
 Párrafo 1: Descripción general de la propiedad y ubicación (3-4 oraciones).
@@ -1102,7 +1102,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
             from .plan_utils import registrar_uso
             registrar_uso(user, 'ai')
         if not descripcion:
-            descripcion = f"Esta {tipo_propiedad} en {operacion} ubicada en {ciudad} representa una oportunidad única en el mercado inmobiliario. Con una superficie de {superficie_cubierta}m² y acabados de primera calidad, ofrece el equilibrio perfecto entre confort y diseño.\n\nSu distribución inteligente permite aprovechar cada espacio al máximo, mientras que las amenidades incluidas elevan la experiencia de vida. Precio: {moneda} {precio}. No pierda la oportunidad de conocerla."
+            descripcion = f"Esta {tipo_propiedad} en {operacion} ubicada en {ciudad} representa una oportunidad única en el mercado inmobiliario. Con una superficie de {superficie_cubierta}m2 y acabados de primera calidad, ofrece el equilibrio perfecto entre confort y diseño.\n\nSu distribución inteligente permite aprovechar cada espacio al máximo, mientras que las amenidades incluidas elevan la experiencia de vida. Precio: {moneda} {precio}. No pierda la oportunidad de conocerla."
 
 
     # QR Code del agente
