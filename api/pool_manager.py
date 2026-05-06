@@ -23,20 +23,19 @@ def get_api_key(agente, servicio):
         # No tiene bundle activo, pasamos a keys directas
         pass
 
-    # 2. Buscar key individual directa (assigned)
+    # 2. Buscar key individual directa (assigned o in_bundle o activa)
     cuenta = APIKey.objects.filter(
         assigned_to=agente,
         servicio__iexact=servicio,
-        status='assigned'
+        status__in=['available', 'active', 'assigned', 'in_bundle']
     ).first()
     
     if cuenta:
         return cuenta.api_key
 
-    # 3. Si no tiene nada, intentar una reparación/asignación rápida
-    # Esto garantiza que si el pool tiene stock, el usuario nunca se quede sin key al intentar generar.
-    repaired = APIPoolService.repair_user_apis(agente)
-    if servicio in repaired:
+    # 3. Si no tiene nada, disparar reparación/asignación rápida creando un bundle o agrupando keys
+    assigned_services = APIPoolService.assign_keys_to_user(agente)
+    if servicio in assigned_services:
         # Intentar de nuevo tras la reparación
         return get_api_key(agente, servicio)
 
@@ -53,7 +52,7 @@ def marcar_agotada(agente, servicio):
     """Marca la key individual como agotada."""
     APIKey.objects.filter(
         assigned_to=agente,
-        servicio=servicio,
-        status='assigned'
+        servicio__iexact=servicio,
+        status__in=['available', 'active', 'assigned', 'in_bundle']
     ).update(status='exhausted')
 

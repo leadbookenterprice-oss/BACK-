@@ -29,7 +29,7 @@ class Command(BaseCommand):
             
             success = True
             for s in missing_services:
-                key = APIKey.objects.filter(status='available', servicio=s).first()
+                key = APIKey.objects.filter(status='available', servicio__iexact=s).first()
                 if key:
                     key.status = 'assigned'
                     key.assigned_to = user

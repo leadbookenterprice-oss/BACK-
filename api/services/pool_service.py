@@ -104,7 +104,7 @@ class APIPoolService:
         servicios = ['gemini', 'elevenlabs', 'uploadpost']
         keys_to_assign = {}
         for s in servicios:
-            key = APIKey.objects.filter(status='available', servicio=s).first()
+            key = APIKey.objects.filter(status='available', servicio__iexact=s).first()
             if not key:
                 # Si falta alguna de las 3, no se asigna NADA y se alerta
                 AdminAlert.objects.create(
@@ -178,8 +178,8 @@ class APIPoolService:
         servicios_criticos = ['gemini', 'elevenlabs', 'uploadpost']
         
         # 1. Obtener qué servicios tiene cubiertos actualmente por llaves directas SALUDABLES
-        direct_keys = APIKey.objects.filter(assigned_to=user, status='assigned')
-        covered_services = list(direct_keys.values_list('servicio', flat=True))
+        direct_keys = APIKey.objects.filter(assigned_to=user, status__in=['available', 'active', 'assigned', 'in_bundle'])
+        covered_services = set(k.servicio.lower() for k in direct_keys)
         
         # 2. Obtener qué servicios tiene cubiertos por Bundle activo y COMPLETO
         try:
@@ -188,7 +188,7 @@ class APIPoolService:
                 # Si tiene bundle completo, asumimos que tiene todo cubierto
                 for s in servicios_criticos:
                     if s not in covered_services:
-                        covered_services.append(s)
+                        covered_services.add(s)
         except APIBundleAssignment.DoesNotExist:
             pass
 
@@ -201,7 +201,7 @@ class APIPoolService:
         # 4. Intentar asignar del pool para los faltantes
         for s in missing:
             # 4.a. Desvincular cualquier llave actual defectuosa (exhausted/dead) para evitar UniqueViolation
-            old_keys = APIKey.objects.filter(assigned_to=user, servicio=s)
+            old_keys = APIKey.objects.filter(assigned_to=user, servicio__iexact=s)
             for ok in old_keys:
                 ok.assigned_to = None
                 ok.assigned_at = None
@@ -210,7 +210,7 @@ class APIPoolService:
                 ok.save(update_fields=['assigned_to', 'assigned_at', 'status'])
 
             # 4.b. Buscar una key disponible
-            new_key = APIKey.objects.filter(servicio=s, status='available').first()
+            new_key = APIKey.objects.filter(servicio__iexact=s, status='available').first()
             if new_key:
                 new_key.status = 'assigned'
                 new_key.assigned_to = user

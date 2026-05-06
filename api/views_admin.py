@@ -294,7 +294,7 @@ def admin_apikeys_pool(request):
     servicio = request.query_params.get('servicio')
     keys = APIKey.objects.all().order_by('servicio', '-created_at')
     if servicio:
-        keys = keys.filter(servicio=servicio)
+        keys = keys.filter(servicio__iexact=servicio)
         
     # Límite por defecto para el cálculo de porcentaje
     DEFAULT_LIMITS = {
@@ -341,7 +341,7 @@ def admin_apikeys_pool_crear(request):
         return Response({'error': 'Servicio y API Key son requeridos'}, status=400)
         
     k = APIKey.objects.create(
-        servicio=servicio,
+        servicio=servicio.lower() if isinstance(servicio, str) else servicio,
         api_key=api_key,
         status='available',
         daily_limit=daily_limit,
