@@ -965,8 +965,6 @@ def construir_contexto_pdf(data, user, request=None):
     # ─── Helpers de imágenes para WeasyPrint ─────────────────────────────
     temp_files = []
 
-    def save_temp_image(b64_or_url):
-        """
     def resolver_imagen(val):
         if not val: return None
         
@@ -982,44 +980,7 @@ def construir_contexto_pdf(data, user, request=None):
                 
         return None
 
-    def imagen_a_base64(ruta):
-        """Convierte una imagen (ruta local o URL http) a data URI base64 para embeber en HTML."""
-        if not ruta or not isinstance(ruta, str):
-            return ''
-        # Si ya es una data URI, retornarla tal cual
-        if ruta.startswith('data:'):
-            return ruta
-        # Si es URL HTTP: descargar en memoria
-        if ruta.startswith('http://') or ruta.startswith('https://'):
-            try:
-                import urllib.request
-                with urllib.request.urlopen(ruta, timeout=10) as r:
-                    data = r.read()
-                ext = ruta.split('.')[-1].lower().split('?')[0]
-                mime = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-                        'png': 'image/png', 'gif': 'image/gif',
-                        'webp': 'image/webp'}.get(ext, 'image/jpeg')
-                return f"data:{mime};base64,{base64.b64encode(data).decode()}"
-            except Exception as e:
-                print(f"[PDF] Error descargando imagen {ruta}: {e}")
-                return ''
-        # Si es un file:// URL, extraer el path
-        if ruta.startswith('file://'):
-            ruta = ruta[7:]
-        # Si es ruta local
-        if os.path.exists(ruta):
-            try:
-                with open(ruta, 'rb') as f:
-                    data = f.read()
-                ext = ruta.split('.')[-1].lower()
-                mime = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-                        'png': 'image/png', 'gif': 'image/gif',
-                        'webp': 'image/webp'}.get(ext, 'image/jpeg')
-                return f"data:{mime};base64,{base64.b64encode(data).decode()}"
-            except Exception as e:
-                print(f"[PDF] Error leyendo imagen {ruta}: {e}")
-                return ''
-        return ''
+
 
     # ─── Extraer campos normalizados ──────────────────────────────────────
     listado_id_hint  = data.get('listado_id') or data.get('listadoId')  # para Almacenamiento
