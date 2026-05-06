@@ -967,40 +967,20 @@ def construir_contexto_pdf(data, user, request=None):
 
     def save_temp_image(b64_or_url):
         """
-    def resolver_imagen(val, return_url_only=False):
-        if not val: return None, None
-        
-        url_firma = None
+    def resolver_imagen(val):
+        if not val: return None
         
         if isinstance(val, dict) and 'public_id' in val:
             from api.services.almacenamiento import AlmacenamientoCloudinary
-            img_bytes, url_firma = AlmacenamientoCloudinary.obtener_bytes_y_url_foto(val)
-            if return_url_only:
-                return None, url_firma
-            if img_bytes:
-                b64 = base64.b64encode(img_bytes).decode()
-                return f"data:image/jpeg;base64,{b64}", url_firma
-            return None, url_firma
+            return AlmacenamientoCloudinary.obtener_url_foto(val)
             
         if isinstance(val, str):
             if val.startswith('http'):
-                url_firma = val
-                if return_url_only:
-                    return None, url_firma
-                try:
-                    import urllib.request
-                    with urllib.request.urlopen(val, timeout=10) as r:
-                        data = r.read()
-                    b64 = base64.b64encode(data).decode()
-                    return f"data:image/jpeg;base64,{b64}", url_firma
-                except Exception as e:
-                    print(f"[PDF] Error descargando imagen {val}: {e}")
-                    return None, url_firma
-            
+                return val
             if val.startswith('data:'):
-                return val, None
+                return val
                 
-        return None, None
+        return None
 
     def imagen_a_base64(ruta):
         """Convierte una imagen (ruta local o URL http) a data URI base64 para embeber en HTML."""
@@ -1065,7 +1045,7 @@ def construir_contexto_pdf(data, user, request=None):
 
     # ─── Procesar imágenes (base64 Y URLs) ───────────────────────────────
     logo_val_raw = data.get('logoAgenciaUrl', data.get('logo_url', ''))
-    logo_b64, logo_url_firma = resolver_imagen(logo_val_raw)
+    logo_url = resolver_imagen(logo_val_raw)
 
     portada_val_raw = data.get('portadaUrl', '')
     fotos_raw = data.get('fotosRecorrido', [])
@@ -1083,17 +1063,13 @@ def construir_contexto_pdf(data, user, request=None):
         if fotos_limpias:
             portada_val_raw = fotos_limpias[0]
 
-    portada_b64, portada_url_firma = resolver_imagen(portada_val_raw)
+    portada_url = resolver_imagen(portada_val_raw)
 
-    fotos_recorrido_b64 = []
     fotos_recorrido_urls = []
     for fv in fotos_limpias:
-        # Aquí solo queremos las URLs para que Gemini las use. No descargamos la galería a RAM
-        _, url_firma = resolver_imagen(fv, return_url_only=True)
+        url_firma = resolver_imagen(fv)
         if url_firma:
             fotos_recorrido_urls.append(url_firma)
-            # Para el PDF, Weasyprint puede descargar directamente la URL HTTP, así evitamos RAM infinita
-            fotos_recorrido_b64.append(url_firma)
 
     # ─── Procesar escenas si las hay ─────────────────────────────────────
     escenas = data.get('escenas', [])
@@ -1101,7 +1077,7 @@ def construir_contexto_pdf(data, user, request=None):
         escenas_procesadas = []
         for escena in escenas:
             if isinstance(escena, dict) and escena.get('fotoUrl'):
-                _, url_firma = resolver_imagen(escena['fotoUrl'], return_url_only=True)
+                url_firma = resolver_imagen(escena['fotoUrl'])
                 escena = {**escena, 'fotoUrl': url_firma or escena['fotoUrl']}
             escenas_procesadas.append(escena)
         data['escenas'] = escenas_procesadas
@@ -1147,12 +1123,12 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         'estacionamientos':   estacionamientos,
         'descripcion':        descripcion,
         'amenidades':         amenidades,
-        'portada_url':        portada_b64 or portada_url_firma or '',
-        'fotos_recorrido':    fotos_recorrido_b64,
-        'logo_url':           logo_b64 or logo_url_firma or '',
-        'portada_url_raw':    portada_url_firma or portada_val_raw if isinstance(portada_val_raw, str) else '',
+        'portada_url':        portada_url or '',
+        'fotos_recorrido':    fotos_recorrido_urls,
+        'logo_url':           logo_url or '',
+        'portada_url_raw':    portada_url or '',
         'fotos_recorrido_raw': fotos_recorrido_urls,
-        'logo_url_raw':       logo_url_firma or logo_val_raw if isinstance(logo_val_raw, str) else '',
+        'logo_url_raw':       logo_url or '',
         'agente_nombre':      agente_nombre,
         'agente_telefono':    agente_telefono,
         'agente_email':       agente_email,

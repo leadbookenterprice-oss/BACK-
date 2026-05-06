@@ -313,20 +313,19 @@ class AlmacenamientoCloudinary:
             return None
 
     @classmethod
-    def obtener_bytes_y_url_foto(cls, foto_dict: dict) -> tuple[bytes | None, str | None]:
+    def obtener_url_foto(cls, foto_dict: dict) -> str | None:
         """
         Recibe un diccionario {"cloudinary_account": "...", "public_id": "..."}
-        Retorna (bytes_de_la_imagen, url_firmada)
+        Retorna la url_firmada
         """
         if not foto_dict or not isinstance(foto_dict, dict):
-            return None, None
+            return None
             
         cloud_name = foto_dict.get('cloudinary_account')
         public_id = foto_dict.get('public_id')
         if not cloud_name or not public_id:
-            return None, None
+            return None
             
-        # Buscar credenciales en el pool que coincidan con cloud_name
         keys = cls._get_pool_keys()
         creds = None
         for k in keys:
@@ -336,7 +335,6 @@ class AlmacenamientoCloudinary:
                 break
                 
         if not creds:
-            # Fallback global si no se encuentra en el pool
             creds = {
                 'cloud_name': getattr(settings, 'CLOUDINARY_CLOUD_NAME', ''),
                 'api_key': getattr(settings, 'CLOUDINARY_API_KEY', ''),
@@ -353,15 +351,10 @@ class AlmacenamientoCloudinary:
                 secure=True,
                 **creds
             )
-            
-            import requests as req_lib
-            r = req_lib.get(url, timeout=8)
-            if r.status_code == 200:
-                return r.content, url
-            return None, url
+            return url
         except Exception as e:
-            logger.error(f'[Almacenamiento] Error descargando foto a RAM: {e}')
-            return None, None
+            logger.error(f'[Almacenamiento] Error firmando url foto: {e}')
+            return None
 
     # ── Estado del pool ───────────────────────────────────────────────────────
 
