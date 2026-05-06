@@ -178,12 +178,14 @@ class AlmacenamientoCloudinary:
                 invalidate=True,
                 **extra_creds,
             )
-            
+
+            resource_type_result = resultado.get('resource_type', 'auto')
+
             # Generar URL FIRMADA para saltar restricciones de ACL/Strict Transformations
             from cloudinary.utils import cloudinary_url
             url, _ = cloudinary_url(
                 public_id,
-                resource_type=resultado.get('resource_type', 'auto'),
+                resource_type=resource_type_result,
                 type='upload',
                 sign_url=True,
                 secure=True,
@@ -202,7 +204,7 @@ class AlmacenamientoCloudinary:
             # Si el error es "recurso ya existe", extraer la URL existente
             if 'already exists' in str(e).lower() or '409' in str(e):
                 logger.info(f'[Almacenamiento] Archivo ya existe en Cloudinary, recuperando URL: {public_id}')
-                return cls._get_existing_url(public_id, resource_type, extra_creds)
+                return cls._get_existing_url(public_id, 'auto', extra_creds)
             logger.error(f'[Almacenamiento] Error Cloudinary al subir {tipo}: {e}')
             return None
 
@@ -224,10 +226,7 @@ class AlmacenamientoCloudinary:
 
     @classmethod
     def guardar_pdf(cls, pdf_bytes: bytes, user_id: int, listado_id: int | None = None) -> str | None:
-        # Bypass Cloudinary debido a restricciones de ACL en formatos Raw (PDF).
-        # Esto forzará el mecanismo de "fallback" local en views.py
-        logger.info("[Almacenamiento] Bypass Cloudinary para PDFs activado (ACL Fix)")
-        return None
+        return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id)
 
     @classmethod
     def guardar_post(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
