@@ -385,7 +385,12 @@ def admin_users_hard_delete(request, pk):
     """Borrado físico del usuario de la base de datos."""
     try:
         u = Agent.objects.get(pk=pk)
-        u.delete() # Esto borra físicamente al usuario y sus relaciones en cascada (si está definido)
+        
+        # Liberar APIs atadas a esta cuenta ANTES de borrar físicamente
+        from api.services.pool_service import APIPoolService
+        APIPoolService.release_keys_from_user(u)
+        
+        u.delete() # Esto borra físicamente al usuario y sus relaciones en cascada
         return Response({"status": "deleted_permanently"}, status=200)
     except Agent.DoesNotExist:
         return Response(status=404)

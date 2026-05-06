@@ -175,6 +175,11 @@ def admin_usuario_eliminar(request, user_id):
         agente.is_active = False
         agente.eliminado_en = now()
         agente.save()
+        
+        # Liberar APIs atadas a esta cuenta
+        from api.services.pool_service import APIPoolService
+        APIPoolService.release_keys_from_user(agente)
+        
         return Response({'success': True, 'eliminado': email, 'message': 'Usuario marcado como eliminado (soft delete)'})
     except Agent.DoesNotExist:
         return Response({'error': 'Usuario no encontrado'}, status=status.HTTP_404_NOT_FOUND)
