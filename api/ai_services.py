@@ -320,14 +320,9 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
             except Exception as img_err:
                 logger.warning(f"No se pudo procesar imagen para Gemini: {img_err}")
 
-        # Agregar imágenes en orden: logo agencia, portada, fotos galería
-        if context.get('logo_url'):
-            add_image_part(context['logo_url'])
+        # Agregar imágenes en orden: SOLO portada va como imagen binaria nativa
         if context.get('portada_url'):
             add_image_part(context['portada_url'])
-        if context.get('fotos_recorrido'):
-            for foto in context['fotos_recorrido'][:5]:
-                add_image_part(foto)
 
         # Preparar watermark LeadBook
         watermark_b64 = _get_leadbook_watermark_b64()
@@ -340,6 +335,10 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
         # QR embed
         qr_code = context.get('qr_code', '')
         qr_img_tag = f'<img src="data:image/png;base64,{qr_code}" style="width:80px;height:80px;" alt="QR WhatsApp">' if qr_code else ''
+        
+        # URLs crudas (evitar enviar base64 enorme en el prompt de texto)
+        logo_url_str = context.get('logo_url_raw', '')
+        fotos_galeria_str = "\n".join(context.get('fotos_recorrido_raw', [])[:5])
 
         prompt_step2 = f"""Sos un desarrollador frontend experto. Generá un HTML puro y autónomo para una ficha inmobiliaria premium.
 
@@ -368,9 +367,13 @@ DATOS DEL AGENTE:
 - Teléfono: {context.get('agente_telefono', '')}
 - Email: {context.get('agente_email', '')}
 
-IMÁGENES: Las imágenes están adjuntas a este mensaje como partes nativas (en orden: logo agencia, foto portada, fotos galería).
-Usalas directamente en las etiquetas <img> usando su posición en el prompt (primera imagen adjunta = logo, segunda = portada, resto = galería).
-Cuando referencies las imágenes adjuntas, usa la sintaxis de inline blob o data URL que Gemini provee.
+IMÁGENES Y MULTIMEDIA:
+- Foto de portada: Está adjunta a este mensaje como un archivo binario nativo (la única imagen adjunta). Usala en el tag <img> del Hero Section usando la sintaxis de inline blob que provee Gemini.
+- Logo de la agencia (URL): {logo_url_str}
+- Fotos de la galería (URLs):
+{fotos_galeria_str}
+
+Para el logo y la galería, DEBES usar ESTRICTAMENTE las URLs proporcionadas arriba en el atributo `src` de las etiquetas <img> correspondientes. NO intentes inventar URLs ni usar la imagen adjunta para la galería.
 
 ESTRUCTURA HTML REQUERIDA:
 1. Top bar con logo de agencia + badge de operación (VENTA/ALQUILER)
