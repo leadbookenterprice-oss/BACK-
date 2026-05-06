@@ -179,6 +179,14 @@ def admin_usuario_eliminar(request, user_id):
         # Liberar APIs atadas a esta cuenta
         from api.services.pool_service import APIPoolService
         APIPoolService.release_keys_from_user(agente)
+
+        # Trazabilidad
+        AdminAlert.objects.create(
+            type='system',
+            severity='info',
+            title='Usuario Desactivado y APIs Liberadas',
+            message=f"El usuario {email} fue marcado como eliminado (soft-delete). Sus llaves API han sido regresadas al pool."
+        )
         
         return Response({'success': True, 'eliminado': email, 'message': 'Usuario marcado como eliminado (soft delete)'})
     except Agent.DoesNotExist:
@@ -714,43 +722,31 @@ def admin_audio_sfx_detail(request, pk):
 @permission_classes([AllowAny])
 def admin_apikeys_auto_repair(request):
     """
-    Busca usuarios free que tengan asignadas menos de 3 APIs 
-    y les intenta asignar las faltantes del pool.
+    Busca usuarios activos que tengan servicios faltantes o caídos 
+    y les intenta asignar las faltantes del pool usando APIPoolService.
     """
     if not _is_staff_check(request):
         return Response({'error': 'Forbidden'}, status=403)
         
-    from api.models import Agent, APIKey, APIBundleAssignment
-    from django.utils import timezone
+    from api.models import Agent
+    from api.services.pool_service import APIPoolService
     
-    users = Agent.objects.filter(is_active=True)
+    # Podemos filtrar por IDs si se pasan en el request (para reparación selectiva)
+    user_ids = request.data.get('user_ids', [])
+    
+    if user_ids:
+        users = Agent.objects.filter(id__in=user_ids, is_active=True)
+    else:
+        # Por defecto repara a todos los activos
+        users = Agent.objects.filter(is_active=True)
+        
     fixed = 0
     details = []
     
     for user in users:
-        bundle_assignment = APIBundleAssignment.objects.filter(usuario=user, activo=True).first()
-        if bundle_assignment and bundle_assignment.bundle.is_complete():
-            continue
-            
-        keys = APIKey.objects.filter(assigned_to=user)
-        if keys.count() >= 3:
-            continue
-            
-        owned_services = list(keys.values_list('servicio', flat=True))
-        missing_services = [s for s in ['gemini', 'elevenlabs', 'uploadpost'] if s not in owned_services]
-        
-        assigned_now = []
-        for s in missing_services:
-            key = APIKey.objects.filter(status='available', servicio=s).first()
-            if key:
-                key.status = 'assigned'
-                key.assigned_to = user
-                key.assigned_at = timezone.now()
-                key.save()
-                assigned_now.append(s)
-                
-        if len(assigned_now) > 0:
+        repaired = APIPoolService.repair_user_apis(user)
+        if repaired:
             fixed += 1
-            details.append({"email": user.email, "repaired": assigned_now})
+            details.append({"email": user.email, "repaired": repaired})
             
     return Response({"status": "success", "fixed_count": fixed, "details": details})

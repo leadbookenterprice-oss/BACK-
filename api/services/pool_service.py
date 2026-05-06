@@ -168,7 +168,61 @@ class APIPoolService:
             APIPoolService.rotate_bundle(user)
 
     @staticmethod
+    def repair_user_apis(user):
+        """
+        Detecta qué servicios le faltan al usuario (gemini, elevenlabs, uploadpost)
+        o cuáles están agotados/muertos, e intenta asignar nuevos del pool.
+        Devuelve una lista de servicios reparados.
+        """
+        repaired = []
+        servicios_criticos = ['gemini', 'elevenlabs', 'uploadpost']
+        
+        # 1. Obtener qué servicios tiene cubiertos actualmente por llaves directas SALUDABLES
+        direct_keys = APIKey.objects.filter(assigned_to=user, status='assigned')
+        covered_services = list(direct_keys.values_list('servicio', flat=True))
+        
+        # 2. Obtener qué servicios tiene cubiertos por Bundle activo y COMPLETO
+        try:
+            asig = APIBundleAssignment.objects.get(usuario=user, activo=True)
+            if asig.bundle.is_complete():
+                # Si tiene bundle completo, asumimos que tiene todo cubierto
+                for s in servicios_criticos:
+                    if s not in covered_services:
+                        covered_services.append(s)
+        except APIBundleAssignment.DoesNotExist:
+            pass
+
+        # 3. Identificar faltantes
+        missing = [s for s in servicios_criticos if s not in covered_services]
+        
+        if not missing:
+            return []
+
+        # 4. Intentar asignar del pool para los faltantes
+        for s in missing:
+            # Buscar una key disponible
+            new_key = APIKey.objects.filter(servicio=s, status='available').first()
+            if new_key:
+                new_key.status = 'assigned'
+                new_key.assigned_to = user
+                new_key.assigned_at = timezone.now()
+                new_key.save()
+                repaired.append(s)
+            else:
+                # Alerta si no hay stock para reparar
+                AdminAlert.objects.create(
+                    type='quota_warning',
+                    severity='warning',
+                    title=f'Sin stock para auto-reparar: {s}',
+                    message=f'El usuario {user.email} necesita una key de {s} pero el pool está vacío.',
+                    related_user=user
+                )
+        
+        return repaired
+
+    @staticmethod
     def get_pool_stats():
+# ... (rest of the file remains same)
         """Stats del pool completo (bundles + keys individuales)."""
         from django.db.models import Count
         bundle_stats = APIPoolService.get_bundle_stats()

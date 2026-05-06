@@ -287,7 +287,7 @@ def admin_api_keys_reassign(request, pk):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def admin_users_list(request):
-    users = Agent.objects.all().order_by('-fecha_registro')[:100] # Limite temporal
+    users = Agent.objects.filter(eliminado_en__isnull=True).order_by('-fecha_registro')[:100] # Limite temporal
     data = []
     for u in users:
         data.append({
@@ -395,6 +395,14 @@ def admin_users_hard_delete(request, pk):
         # Liberar APIs atadas a esta cuenta ANTES de borrar físicamente
         from api.services.pool_service import APIPoolService
         APIPoolService.release_keys_from_user(u)
+        
+        # Crear alerta de trazabilidad
+        AdminAlert.objects.create(
+            type='system',
+            severity='info',
+            title='Usuario Eliminado y APIs Liberadas',
+            message=f"El usuario {u.email} fue eliminado permanentemente. Sus llaves API han sido regresadas al pool como 'disponibles'."
+        )
         
         u.delete() # Esto borra físicamente al usuario y sus relaciones en cascada
         return Response({"status": "deleted_permanently"}, status=200)

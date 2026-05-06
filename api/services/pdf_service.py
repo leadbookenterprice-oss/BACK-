@@ -1,6 +1,6 @@
 import os
 from django.template.loader import render_to_string
-from weasyprint import HTML
+# from weasyprint import HTML
 from django.core.files.base import ContentFile
 from api.models import GeneratedAsset
 
