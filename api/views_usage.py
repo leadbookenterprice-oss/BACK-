@@ -114,13 +114,19 @@ def mi_uso_apis(request):
             except Exception:
                 consumido = key.requests_this_month
                 
+            porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
+            if key.status in ['exhausted', 'dead']:
+                porcentaje = 100
+                consumido = limite # Para que se vea coherente
+
             stats.append({
                 "servicio": "elevenlabs",
                 "nombre": "Voces Neurales",
                 "consumido": consumido,
                 "limite": limite,
                 "unidad": "caracteres",
-                "porcentaje": min(100, int((consumido / limite) * 100)) if limite else 0
+                "porcentaje": porcentaje,
+                "status": key.status
             })
             
         # GEMINI / UPLOADPOST: Conteo Interno
@@ -129,13 +135,19 @@ def mi_uso_apis(request):
             nombre_display = "Motor de Textos IA" if servicio == 'gemini' else "Gestor de Redes"
             unidad_display = "peticiones" if servicio == 'gemini' else "publicaciones"
             
+            porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
+            if key.status in ['exhausted', 'dead']:
+                porcentaje = 100
+                consumido = limite # Para que se vea coherente
+                
             stats.append({
                 "servicio": servicio,
                 "nombre": nombre_display,
                 "consumido": consumido,
                 "limite": limite,
                 "unidad": unidad_display,
-                "porcentaje": min(100, int((consumido / limite) * 100)) if limite else 0
+                "porcentaje": porcentaje,
+                "status": key.status
             })
             
     return Response({
