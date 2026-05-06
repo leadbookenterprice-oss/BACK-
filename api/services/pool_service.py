@@ -200,7 +200,16 @@ class APIPoolService:
 
         # 4. Intentar asignar del pool para los faltantes
         for s in missing:
-            # Buscar una key disponible
+            # 4.a. Desvincular cualquier llave actual defectuosa (exhausted/dead) para evitar UniqueViolation
+            old_keys = APIKey.objects.filter(assigned_to=user, servicio=s)
+            for ok in old_keys:
+                ok.assigned_to = None
+                ok.assigned_at = None
+                if ok.status in ['assigned', 'in_bundle']:
+                    ok.status = 'available'
+                ok.save(update_fields=['assigned_to', 'assigned_at', 'status'])
+
+            # 4.b. Buscar una key disponible
             new_key = APIKey.objects.filter(servicio=s, status='available').first()
             if new_key:
                 new_key.status = 'assigned'
