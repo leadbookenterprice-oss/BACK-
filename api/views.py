@@ -2948,6 +2948,8 @@ REQUISITOS:
         if not result:
             return Response({"error": "No se pudo generar texto"}, status=503)
         return Response({"texto": result.strip()})
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
