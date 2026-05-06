@@ -25,7 +25,7 @@ def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
     
     try:
         response = client.models.generate_content(
-            model='gemini-2.5-flash-lite-preview-06-17',
+            model='gemini-2.5-flash-lite',
             contents=full_prompt,
         )
         return response.text
@@ -291,7 +291,7 @@ Devolvé SOLO el prompt de diseño (texto plano, sin markdown, sin explicaciones
 Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe ser único y diferente cada vez."""
 
         response_step1 = client.models.generate_content(
-            model='gemini-2.5-flash-lite-preview-06-17',
+            model='gemini-2.5-flash-lite',
             contents=prompt_step1,
         )
         design_prompt = response_step1.text.strip()

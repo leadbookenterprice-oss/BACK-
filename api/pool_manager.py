@@ -28,13 +28,22 @@ def get_api_key(agente, servicio):
                 return key_val
 
     # Legacy: buscar key individual directa (compatibilidad hacia atrás)
+    # Acepta 'assigned' (legacy directo) o 'in_bundle' (asignación sin bundle formal)
     cuenta = APIKey.objects.filter(
         assigned_to=agente,
-        servicio=servicio,
-        status='assigned'
+        servicio__iexact=servicio,
+    ).exclude(status__in=['available', 'exhausted', 'dead', 'disabled']).first()
+    if cuenta:
+        return cuenta.api_key
+
+    # Último recurso: cualquier key del servicio asignada al usuario sin importar status
+    cuenta = APIKey.objects.filter(
+        assigned_to=agente,
+        servicio__iexact=servicio,
     ).first()
     if cuenta:
         return cuenta.api_key
+
     # Fallback final: No hay key asignada
     return None
 
