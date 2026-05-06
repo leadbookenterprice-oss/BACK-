@@ -15,6 +15,7 @@ urlpatterns = [
 
     # ── Pool (aliases used by the old frontend) ───────────────────────────────
     path('apikeys/pool/bulk/', views.admin_api_keys_bulk_create, name='admin_apikeys_pool_bulk'),
+    path('apikeys/pool/auto-repair/', views.admin_apikeys_auto_repair, name='admin_apikeys_pool_auto_repair'),
     path('apikeys/pool/', views.admin_api_keys_list, name='admin_apikeys_pool'),
     path('apikeys/pool/crear/', views.admin_api_keys_create, name='admin_apikeys_pool_crear'),
     path('apikeys/pool/<int:pk>/', views.admin_api_keys_detail, name='admin_apikeys_pool_detail'),

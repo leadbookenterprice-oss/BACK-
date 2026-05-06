@@ -202,24 +202,47 @@ def admin_api_keys_bulk_create(request):
         "ignored": len(keys_data) - len(new_keys)
     }, status=201)
 
-@api_view(['PATCH', 'DELETE'])
+@api_view(['PATCH', 'DELETE', 'POST'])
 @permission_classes([AllowAny])
 def admin_api_keys_detail(request, pk):
     try:
         key = APIKey.objects.get(pk=pk)
     except APIKey.DoesNotExist:
         return Response(status=404)
-        
-    if request.method == 'DELETE':
-        if key.assigned_to:
+
+    # ── Acciones POST según el sufijo de la URL ─────────────────────────────
+    if request.method == 'POST':
+        path = request.path
+        if path.endswith('/liberar/'):
+            # Desvincula la key del usuario pero la mantiene en DB
             key.status = 'available'
             key.assigned_to = None
-            key.save(update_fields=['status', 'assigned_to'])
-            return Response(status=204)
-        else:
-            key.delete()
-            return Response(status=204)
-        
+            key.assigned_at = None
+            key.save(update_fields=['status', 'assigned_to', 'assigned_at'])
+            return Response({'status': 'released'})
+        elif path.endswith('/reactivar/'):
+            key.status = 'available'
+            key.save(update_fields=['status'])
+            return Response({'status': 'reactivated'})
+        elif path.endswith('/reset/'):
+            key.requests_today = 0
+            key.requests_this_month = 0
+            key.error_count = 0
+            if key.status == 'exhausted':
+                key.status = 'available' if not key.assigned_to else 'assigned'
+            key.save()
+            return Response({'status': 'reset'})
+        return Response({'error': 'Acción POST desconocida'}, status=400)
+
+    if request.method == 'DELETE':
+        # Siempre borra físicamente — liberar primero si tiene usuario asignado
+        if key.assigned_to:
+            key.assigned_to = None
+            key.assigned_at = None
+            key.save(update_fields=['assigned_to', 'assigned_at'])
+        key.delete()
+        return Response(status=204)
+
     # PATCH
     if 'status' in request.data:
         key.status = request.data['status']
@@ -228,8 +251,8 @@ def admin_api_keys_detail(request, pk):
     if 'notes' in request.data:
         key.notes = request.data['notes']
     key.save()
-    
-    return Response({"id": key.id, "status": key.status})
+
+    return Response({'id': key.id, 'status': key.status})
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -281,8 +304,8 @@ def admin_api_keys_reassign(request, pk):
     if not user:
         return Response({"error": "Key is not assigned to any user"}, status=400)
         
-    new_key = APIPoolService.rotate_key(user, key.servicio)
-    return Response({"old_key": key.id, "new_key": new_key.id if new_key else None})
+    new_bundle = APIPoolService.rotate_bundle(user)
+    return Response({"old_key": key.id, "new_bundle": new_bundle.id if new_bundle else None})
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -660,3 +683,9 @@ def admin_bundles_asignar(request, bundle_id):
 def admin_bundles_liberar(request, bundle_id):
     from api.views_admin import admin_bundles_liberar as _v
     return _v(request._request, bundle_id=bundle_id)
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_apikeys_auto_repair(request):
+    from api.views_admin import admin_apikeys_auto_repair as _v
+    return _v(request._request)

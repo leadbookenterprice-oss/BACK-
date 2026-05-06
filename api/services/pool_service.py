@@ -222,7 +222,6 @@ class APIPoolService:
 
     @staticmethod
     def get_pool_stats():
-# ... (rest of the file remains same)
         """Stats del pool completo (bundles + keys individuales)."""
         from django.db.models import Count
         bundle_stats = APIPoolService.get_bundle_stats()
