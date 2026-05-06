@@ -405,13 +405,24 @@ def admin_users_ban(request, pk):
         APIPoolService.release_keys_from_user(u)
         
         # Añadir email a la blacklist permanente para que nunca se pueda re-registrar
-        from api.models import BannedEmail
+        from api.models import BannedEmail, BannedIP
         BannedEmail.objects.get_or_create(
             email=u.email,
             defaults={'reason': request.data.get('reason', 'Baneado por el administrador')}
         )
         
-        return Response({"status": "banned_permanently", "email": u.email})
+        # Añadir IP a la blacklist si existe
+        if u.last_login_ip:
+            BannedIP.objects.get_or_create(
+                ip_address=u.last_login_ip,
+                defaults={'reason': request.data.get('reason', 'Baneado por el administrador (IP compartida o router)')}
+            )
+        
+        return Response({
+            "status": "banned_permanently", 
+            "email": u.email,
+            "ip_banned": bool(u.last_login_ip)
+        })
     except Agent.DoesNotExist:
         return Response(status=404)
 

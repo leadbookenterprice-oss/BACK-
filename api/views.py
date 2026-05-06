@@ -92,12 +92,47 @@ def generar_qr_base64(texto):
     img.save(buffer, format='PNG')
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
+def get_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip
+
+from rest_framework_simplejwt.views import TokenObtainPairView
+from api.models import BannedIP, Agent
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    def post(self, request, *args, **kwargs):
+        ip = get_client_ip(request)
+        if BannedIP.objects.filter(ip_address=ip).exists():
+            return Response({'detail': 'Tu IP ha sido bloqueada. Contacta al soporte.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == 200:
+            # Login successful
+            email = request.data.get('email')
+            user_agent = request.META.get('HTTP_USER_AGENT', '')
+            try:
+                agent = Agent.objects.get(email=email)
+                agent.last_login_ip = ip
+                agent.last_login_user_agent = user_agent
+                agent.save(update_fields=['last_login_ip', 'last_login_user_agent'])
+            except Agent.DoesNotExist:
+                pass
+        return response
+
 class RegisterView(APIView):
     permission_classes = [AllowAny]
     def post(self, request):
         from datetime import timedelta
         from django.utils import timezone
         email = request.data.get('email', '').strip().lower()
+        
+        ip = get_client_ip(request)
+        if BannedIP.objects.filter(ip_address=ip).exists():
+            return Response({'error': 'Tu IP ha sido bloqueada. No podés crear cuentas.'}, status=status.HTTP_403_FORBIDDEN)
         
         # Verificar blacklist de emails baneados permanentemente
         from .models import Agent, BannedEmail
@@ -137,6 +172,9 @@ class RegisterView(APIView):
                 otp_usado.code_hash = 'USED'
                 otp_usado.save()
 
+            user.last_login_ip = ip
+            user.last_login_user_agent = request.META.get('HTTP_USER_AGENT', '')
+            user.save(update_fields=['last_login_ip', 'last_login_user_agent'])
             refresh = RefreshToken.for_user(user)
             return Response({
                 'access': str(refresh.access_token),

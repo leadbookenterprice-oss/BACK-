@@ -49,6 +49,8 @@ class Agent(AbstractBaseUser, PermissionsMixin):
 
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
+    last_login_ip = models.GenericIPAddressField(null=True, blank=True)
+    last_login_user_agent = models.TextField(null=True, blank=True)
 
     objects = AgentManager()
 
@@ -449,14 +451,9 @@ class UserBanRecord(models.Model):
     is_active = models.BooleanField(default=True)
 
 class BannedEmail(models.Model):
-    """
-    Blacklist permanente de emails. 
-    Un email baneado aquí no puede volver a registrarse NUNCA.
-    Se crea al banear un usuario. NO se crea al eliminar un usuario.
-    """
     email = models.EmailField(unique=True)
     banned_at = models.DateTimeField(auto_now_add=True)
-    reason = models.TextField(blank=True, default='Baneado por el administrador')
+    reason = models.TextField(blank=True, null=True)
 
     class Meta:
         verbose_name = "Email Baneado Permanentemente"
@@ -499,3 +496,11 @@ class VideoSFX(models.Model):
 
     def __str__(self):
         return f"[{self.get_tipo_display()}] {self.nombre}"
+
+class BannedIP(models.Model):
+    ip_address = models.GenericIPAddressField(unique=True)
+    banned_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return self.ip_address

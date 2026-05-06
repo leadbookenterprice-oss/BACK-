@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 from . import views_usage
 from .views import (
@@ -13,7 +13,7 @@ from .views import (
     plan_status, seleccionar_plan_free, test_upload_avatar, generar_carrusel,
     amenidades_presets, recuperar_password, confirmar_recuperacion,
     publicar_redes_sociales, proxy_pdf_view, proxy_pdf_thumbnail_view,
-    generar_html
+    generar_html, CustomTokenObtainPairView
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -33,7 +33,7 @@ router.register(r'assets', GeneratedAssetViewSet)
 
 urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='auth_register'),
-    path('auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/login/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh_alt'),
     path('auth/logout/', LogoutView.as_view(), name='auth_logout'),
