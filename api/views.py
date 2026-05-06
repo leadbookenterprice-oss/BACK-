@@ -2948,5 +2948,49 @@ REQUISITOS:
         if not result:
             return Response({"error": "No se pudo generar texto"}, status=503)
         return Response({"texto": result.strip()})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_fotos_listado(request):
+    """
+    Sube fotos de propiedad (portada y galería) a Cloudinary a través del pool del backend.
+    """
+    data = request.data
+    portada_b64 = data.get('portadaUrl')
+    fotos_b64 = data.get('fotosRecorrido', [])
+    listado_id = data.get('listado_id')
+
+    user_id = request.user.id
+    response_data = {
+        'portadaUrl': None,
+        'fotosRecorrido': []
+    }
+
+    try:
+        from api.services.almacenamiento import AlmacenamientoCloudinary
+        
+        if portada_b64 and portada_b64.startswith('data:image'):
+            url = AlmacenamientoCloudinary.guardar_foto_propiedad(portada_b64, user_id, listado_id, sufijo='_portada')
+            if url:
+                response_data['portadaUrl'] = url
+            else:
+                response_data['portadaUrl'] = portada_b64 # Fallback
+
+        elif portada_b64 and portada_b64.startswith('http'):
+            response_data['portadaUrl'] = portada_b64
+            
+        for i, foto in enumerate(fotos_b64):
+            if foto and foto.startswith('data:image'):
+                url = AlmacenamientoCloudinary.guardar_foto_propiedad(foto, user_id, listado_id, sufijo=f'_galeria_{i}')
+                if url:
+                    response_data['fotosRecorrido'].append(url)
+            elif foto and foto.startswith('http'):
+                response_data['fotosRecorrido'].append(foto)
+
+        return Response(response_data)
+        
+    except Exception as e:
+        logger.error(f"Error al subir fotos de listado: {e}")
+        return Response({"error": str(e)}, status=500)
     except Exception as e:
         return Response({"error": str(e)}, status=500)

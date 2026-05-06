@@ -13,7 +13,8 @@ from .views import (
     plan_status, seleccionar_plan_free, test_upload_avatar, generar_carrusel,
     amenidades_presets, recuperar_password, confirmar_recuperacion,
     publicar_redes_sociales, proxy_pdf_view, proxy_pdf_thumbnail_view,
-    generar_html, generar_escena, CustomTokenObtainPairView
+    generar_html, generar_escena, CustomTokenObtainPairView,
+    upload_fotos_listado
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -49,6 +50,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard, name='dashboard'),
     path('listados/', ListadosView.as_view(), name='listados'),
     path('listados/<int:pk>/', ListadoDetalleView.as_view(), name='listado_detalle'),
+    path('listados/upload-fotos/', upload_fotos_listado, name='upload_fotos_listado'),
     path('listados/<int:pk>/html/', generar_html, name='generar_html'),
     path('listados/<int:pk>/generar-video/', generar_video, name='generar_video'),
     path('listados/<int:listado_id>/pdf-proxy/', proxy_pdf_view, name='pdf_proxy'),

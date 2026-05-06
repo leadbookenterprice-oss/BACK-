@@ -28,6 +28,7 @@ TIPO_EMAIL    = 'email'
 TIPO_VIDEO    = 'video'
 TIPO_AUDIO    = 'audio'
 TIPO_AVATAR   = 'avatar'
+TIPO_FOTO_PROPIEDAD = 'foto_propiedad'
 
 # Umbral de espacio libre mínimo antes de considerar una cuenta "llena" (bytes)
 UMBRAL_BYTES_MINIMO = 50 * 1024 * 1024  # 50 MB
@@ -153,13 +154,20 @@ class AlmacenamientoCloudinary:
         # Construir public_id determinístico pero con un hash único para evitar caches de permisos (401)
         import uuid
         unique_hash = uuid.uuid4().hex[:6]
-        base_id = f'leadbook/{tipo}s/user_{user_id}'
         
-        if listado_id:
-            # Con 'auto', Cloudinary maneja la extensión.
-            public_id = f'{base_id}/listado_{listado_id}_{unique_hash}'
+        # Lógica especial para listados/fotos de propiedades
+        if tipo == TIPO_FOTO_PROPIEDAD:
+            base_id = f'leadbook/listados/usuario_{user_id}'
+            if listado_id:
+                public_id = f'{base_id}/listado_{listado_id}/foto_{unique_hash}{sufijo}'
+            else:
+                public_id = f'{base_id}/temp/foto_{unique_hash}{sufijo}'
         else:
-            public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}'
+            base_id = f'leadbook/{tipo}s/user_{user_id}'
+            if listado_id:
+                public_id = f'{base_id}/listado_{listado_id}_{unique_hash}{sufijo}'
+            else:
+                public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}{sufijo}'
 
         creds, key_id = cls.get_mejor_cuenta()
         extra_creds = creds if creds else {}
@@ -251,6 +259,25 @@ class AlmacenamientoCloudinary:
     @classmethod
     def guardar_avatar(cls, imagen, user_id: int) -> str | None:
         return cls.subir(imagen, TIPO_AVATAR, user_id)
+
+    @classmethod
+    def guardar_foto_propiedad(cls, base64_str: str, user_id: int, listado_id: int | None = None, sufijo: str = '') -> str | None:
+        if not base64_str:
+            return None
+        
+        try:
+            import base64
+            # Handle format 'data:image/jpeg;base64,...'
+            if ',' in base64_str:
+                header, data = base64_str.split(',', 1)
+            else:
+                data = base64_str
+                
+            image_bytes = base64.b64decode(data)
+            return cls.subir(image_bytes, TIPO_FOTO_PROPIEDAD, user_id, listado_id, sufijo=sufijo)
+        except Exception as e:
+            logger.error(f'[Almacenamiento] Error decodificando foto base64: {e}')
+            return None
 
     # ── Estado del pool ───────────────────────────────────────────────────────
 
