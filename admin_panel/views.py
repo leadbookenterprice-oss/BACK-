@@ -211,8 +211,14 @@ def admin_api_keys_detail(request, pk):
         return Response(status=404)
         
     if request.method == 'DELETE':
-        key.delete()
-        return Response(status=204)
+        if key.assigned_to:
+            key.status = 'available'
+            key.assigned_to = None
+            key.save(update_fields=['status', 'assigned_to'])
+            return Response(status=204)
+        else:
+            key.delete()
+            return Response(status=204)
         
     # PATCH
     if 'status' in request.data:
