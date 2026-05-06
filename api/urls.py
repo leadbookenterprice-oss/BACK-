@@ -13,7 +13,7 @@ from .views import (
     plan_status, seleccionar_plan_free, test_upload_avatar, generar_carrusel,
     amenidades_presets, recuperar_password, confirmar_recuperacion,
     publicar_redes_sociales, proxy_pdf_view, proxy_pdf_thumbnail_view,
-    generar_html, CustomTokenObtainPairView
+    generar_html, generar_escena, CustomTokenObtainPairView
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -56,6 +56,7 @@ urlpatterns = [
 
     path('', include(router.urls)),
     path('generar-guion/', generar_guion, name='generar_guion'),
+    path('generar-escena/', generar_escena, name='generar_escena'),
     path('generar-listado/', generar_listado, name='generar_listado'),
     path('generar-pdf/', generar_pdf, name='generar_pdf'),
     path('generar-imagen-post/', generar_imagen_post, name='generar_imagen_post'),

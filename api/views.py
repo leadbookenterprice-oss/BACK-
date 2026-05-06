@@ -243,6 +243,25 @@ def generar_guion(request):
     recamaras = str(data.get('recamaras', '') or data.get('habitaciones', ''))
     banos = str(data.get('banos', '') or data.get('bathrooms', ''))
     superficie = str(data.get('superficieCubierta', '') or data.get('metros', ''))
+    voz = data.get('voz', 'femenina')          # 'masculina' | 'femenina'
+    tono = data.get('tono', 'profesional')     # 'profesional' | 'lujo' | 'energetico'
+    voiceover = data.get('voiceover', False)   # bool
+    contexto_adicional = data.get('contextoAdicional', '')
+
+    # Mapear tono a instrucciones narrativas
+    tono_map = {
+        'profesional': 'profesional y formal, directo, transmite confianza y seriedad',
+        'lujo':        'de lujo y exclusividad, sofisticado, evoca aspiración y premium lifestyle, usa vocabulario refinado',
+        'energetico':  'dinámico y energético, entusiasta, usa frases cortas e impactantes, genera urgencia'
+    }
+    tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
+
+    # Narrador según voz
+    narrador_instrucciones = (
+        'con voz masculina en mente: frases firmes, directas, con autoridad'
+        if voz == 'masculina' else
+        'con voz femenina en mente: frases cálidas, cercanas, invitadoras'
+    )
 
     # Intentar IA solo si hay keys Y con timeout estricto de 5s
     descripcion_ia = None
@@ -252,6 +271,7 @@ def generar_guion(request):
     if GEMINI_KEY or GROQ_KEY:
         palabras_por_escena = "25-38 palabras" if tipo_video == 'reel' else "50-75 palabras"
         palabras_total = "100-150 palabras" if tipo_video == 'reel' else "200-300 palabras"
+        contexto_extra = f"\nENFOQUE ADICIONAL DEL CLIENTE: {contexto_adicional}" if contexto_adicional else ''
         prompt = f"""Sos un copywriter inmobiliario experto.
 Generá un guión PROFESIONAL para video tipo {tipo_video}.
 
@@ -263,11 +283,15 @@ PROPIEDAD:
 - Recámaras: {recamaras}
 - Baños: {banos}
 
+ESTILO DE NARRACIÓN:
+- Tono: {tono_instrucciones}
+- Narrador: {narrador_instrucciones}
+- Tipo de video: {tipo_video.upper()} — {'Tour inmersivo y narrado, guía al espectador por la propiedad' if tipo_video == 'tour' else 'Reel dinámico, impacto visual rápido'}{contexto_extra}
+
 REQUISITOS:
 - Genera EXACTAMENTE 4 escenas
 - Cada escena: {palabras_por_escena} (texto persuasivo y descriptivo)
 - Total del guión: {palabras_total}
-- Tono: profesional, elegante, convincente
 - Formato: JSON puro
 
 ESTRUCTURA:
@@ -2873,3 +2897,53 @@ def generar_html(request, pk):
             except Exception:
                 pass
         return HttpResponse(f"Error generando HTML: {str(e)}<br><pre>{traceback.format_exc()}</pre>", content_type='text/html', status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generar_escena(request):
+    """Regenera el texto de UNA escena específica usando el mismo tono/voz del usuario."""
+    data = request.data
+    nombre_escena = data.get('nombre_escena', 'Escena')
+    indice_escena = data.get('indice_escena', 0)
+    total_escenas = data.get('total_escenas', 4)
+
+    tipo = data.get('tipoPropiedad', 'Propiedad')
+    ciudad = data.get('ciudad', '')
+    operacion = data.get('operacion', 'Venta')
+    moneda = data.get('moneda', 'USD')
+    precio = data.get('precio', '')
+    voz = data.get('voz', 'femenina')
+    tono = data.get('tono', 'profesional')
+    tipo_video = data.get('tipoVideo', 'reel')
+    contexto_adicional = data.get('contextoAdicional', '')
+
+    tono_map = {
+        'profesional': 'profesional y formal, transmite confianza',
+        'lujo': 'de lujo y exclusividad, sofisticado, usa vocabulario refinado',
+        'energetico': 'dinámico y energético, usa frases cortas e impactantes',
+    }
+    tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
+    narrador = 'firme, directo, con autoridad' if voz == 'masculina' else 'cálido, cercano, invitador'
+    palabras = '25-38' if tipo_video == 'reel' else '50-75'
+    contexto_extra = f"\nEnfoque adicional: {contexto_adicional}" if contexto_adicional else ''
+
+    prompt = f"""Sos un copywriter inmobiliario experto.
+Generá SOLO el texto para la escena "{nombre_escena}" (escena {indice_escena + 1} de {total_escenas}) de un video inmobiliario.
+
+PROPIEDAD: {tipo} en {operacion} | {ciudad} | {moneda} {precio}
+TONO: {tono_instrucciones}
+NARRADOR: {narrador}{contexto_extra}
+
+REQUISITOS:
+- Exactamente {palabras} palabras
+- El texto es para narración en voz en off, debe sonar natural al hablar
+- No pongas el nombre de la escena, solo el texto a narrar
+- Responde SOLO el texto, sin JSON, sin comillas, sin explicaciones"""
+
+    try:
+        result = smart_call(prompt, agente=request.user)
+        if not result:
+            return Response({"error": "No se pudo generar texto"}, status=503)
+        return Response({"texto": result.strip()})
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
