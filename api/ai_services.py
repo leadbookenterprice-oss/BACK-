@@ -290,14 +290,14 @@ def generar_html_gemini(context, agente):
         # ─── PASO 1: Generar prompt creativo de diseño ───────────────────────────
         # Variantes de estilo para que cada ficha sea visualmente distinta
         style_seeds = [
-            "elegante y minimalista, tipografía serif para títulos, mucho espacio en blanco",
-            "moderno y bold, tipografía sans-serif geométrica, contrastes fuertes y secciones coloreadas",
-            "lujoso y oscuro, fondo oscuro con acentos dorados, tipografía display premium",
-            "fresco y mediterráneo, colores tierra y crema, tipografía humanista",
-            "urbano y dinámico, tipografía condensada, secciones con bordes diagonales",
-            "clásico y confiable, layout tipo revista inmobiliaria, tipografía editorial",
-            "tech y contemporáneo, glassmorphism sutil, tipografía Inter con pesos variables",
-            "natural y sostenible, paleta verde-madera, tipografía orgánica redondeada",
+            "Elegante y minimalista de la Quinta Avenida: tipografía serif editorial para títulos (Playfair Display), mucho espacio negativo, paleta de blancos rotos y carbón, acentos en oro champán.",
+            "Modernismo radical de Beverly Hills: tipografía sans-serif geométrica (Montserrat 900), contrastes de alto impacto, secciones con bordes nítidos, paleta monocromática con un color de acento vibrante.",
+            "Lujo nocturno de Dubái: fondo deep dark (#0f0f0f), acentos dorados brillantes y bronce, tipografía serif clásica premium (Cinzel), glassmorphism intenso con desenfoque de fondo en todas las cards.",
+            "Residencial mediterráneo de la Costa Brava: paleta de colores terracota, arena y azul profundo, tipografía humanista (Lora), sombras suaves y orgánicas, texturas visuales limpias.",
+            "Penthouse urbano de Manhattan: tipografía condensada industrial (Bebas Neue), secciones con cortes diagonales dinámicos, paleta de grises metálicos y azul medianoche, estética tecnológica.",
+            "Editorial tipo Vogue Real Estate: layout de revista de alta gama, tipografía Bodoni para títulos, interlineado amplio, paleta pastel sofisticada con acentos negros profundos.",
+            "Arquitectura contemporánea nórdica: estilo Zen, tipografía Inter con pesos variables, glassmorphism sutil, paleta de maderas claras, grises suaves y blanco nórdico.",
+            "Hacienda de lujo mexicana: paleta orgánica (arcilla, bosque, piedra), tipografía serif robusta, iconos artesanales, sombras profundas y layout cálido pero estructurado.",
         ]
         style_hint = random.choice(style_seeds)
 
@@ -310,10 +310,10 @@ def generar_html_gemini(context, agente):
         agente_nombre = context.get('agente_nombre', '')
         agencia_nombre = context.get('agencia_nombre', '')
 
-        prompt_step1 = f"""Sos un director de arte especialista en fichas inmobiliarias digitales premium.
-
-Tu tarea es generar un PROMPT DE DISEÑO DETALLADO y creativo para que otro modelo genere el HTML de una ficha inmobiliaria.
-El estilo base de esta ficha debe ser: {style_hint}
+        prompt_step1 = f"""Sos un director de arte de una agencia de branding de lujo y real estate premium.
+        
+Tu tarea es generar un PROMPT DE DISEÑO DETALLADO, creativo y técnico para que un desarrollador frontend senior genere el HTML de una landing page inmobiliaria de alto nivel.
+El estilo base de esta ficha debe ser: {style_hint} (PERO EXPANDE ESTO CON MUCHO MÁS DETALLE VISUAL Y LUJO).
 
 DATOS DE LA PROPIEDAD:
 - Tipo: {tipo} en {operacion}
@@ -322,16 +322,14 @@ DATOS DE LA PROPIEDAD:
 - Amenidades: {amenidades}
 - Agencia: {agencia_nombre} | Agente: {agente_nombre}
 
-El prompt debe especificar en detalle:
-1. Fuentes de Google Fonts a usar (nombre exacto de la fuente para heading y para body)
-2. Paleta de colores exacta (hex codes) — color principal, secundario, acento, fondo, texto
-3. Cómo organizar las secciones (top bar, hero, precio, stats, descripción, amenidades, galería, footer)
-4. Efectos visuales CSS específicos (gradientes, sombras, bordes, overlays)
-5. Estilo de los chips de amenidades (bordes, colores, íconos)
-6. Estilo del footer con datos del agente
+El prompt que generes debe especificar obligatoriamente:
+1. TIPOGRAFÍA (Google Fonts): Elegí una fuente para Títulos (Display/Serif/Sans-Bold) y otra para el Cuerpo de texto. Especificá los 'font-weight' exactos (ej: 300, 700, 900).
+2. PALETA DE COLORES (Hex): Definí color Principal, Secundario, Acento (gold, emerald, deep blue, etc), Fondo (no uses blanco puro, buscá off-white o dark mode premium), Texto y Gradientes cinematográficos.
+3. EFECTOS VISUALES: Especificá el uso de 'backdrop-filter: blur' para glassmorphism, sombras 'box-shadow' multi-capa, bordes sutiles y overlays oscuros con degradado para legibilidad sobre imágenes.
+4. ANIMACIONES CSS: Instruí sobre animaciones de entrada 'fade-in-up', transiciones 'ease-in-out' de 0.3s y efectos hover vivos en botones y chips.
+5. DISEÑO DE SECCIONES: Describí cómo deben integrarse visualmente el Hero, la barra de Stats (en bloque sólido o minimalista), las Amenidades (como chips de diseño) y la Galería.
 
-Devolvé SOLO el prompt de diseño (texto plano, sin markdown, sin explicaciones adicionales).
-Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe ser único y diferente cada vez."""
+Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin introducciones). El resultado debe ser una hoja de ruta visual para un programador."""
 
         print(f"[HTML] ▶ Paso 1 - Armando prompt de diseño...")
         print(f"[HTML] ▶ Paso 1 - Datos enviados: tipo={context.get('tipo_propiedad')}, ciudad={context.get('ciudad')}, amenidades={len(context.get('amenidades', []))} items")
@@ -419,7 +417,11 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
         print(f"[DIAG] portada_url tipo: {str(context.get('portada_url', ''))[:50]}")
         print(f"[DIAG] portada_url largo: {len(str(context.get('portada_url', '')))} chars")
 
-        prompt_step2 = f"""Sos un desarrollador frontend experto. Generá un HTML puro y autónomo para una ficha inmobiliaria premium.
+        prompt_step2 = f"""CRÍTICO: GENERÁ EL HTML COMPLETO DE ARRIBA HACIA ABAJO SIN OMITIR NINGUNA SECCIÓN. 
+EL ORDEN ES OBLIGATORIO: 1)head+CSS 2)top-bar 3)hero 4)precio 5)stats 6)descripción 7)amenidades 8)galería 9)footer.
+NUNCA CORTES EL HTML A MITAD. SI NO PODÉS COMPLETAR UNA SECCIÓN, DEJÁ UN PLACEHOLDER PERO NO LA OMITAS.
+
+Sos un desarrollador frontend senior especializado en landing pages inmobiliarias de lujo. Tu objetivo es convertir el siguiente prompt de diseño en un sitio web perfecto.
 
 DISEÑO A IMPLEMENTAR (seguilo ESTRICTAMENTE):
 {design_prompt}
@@ -435,44 +437,37 @@ DATOS DE LA PROPIEDAD:
 - Superficie Total: {context.get('superficie_total', 'N/A')}
 - Estacionamientos: {context.get('estacionamientos', 'N/A')}
 
-DESCRIPCIÓN (generada por IA, insertala tal cual):
+DESCRIPCIÓN:
 {context.get('descripcion', '')}
 
 AMENIDADES: {', '.join(context.get('amenidades', []))}
 
 DATOS DEL AGENTE:
-- Nombre: {context.get('agente_nombre', '')}
-- Agencia: {context.get('agencia_nombre', '')}
-- Teléfono: {context.get('agente_telefono', '')}
-- Email: {context.get('agente_email', '')}
+- Nombre: {context.get('agente_nombre', '')} | Agencia: {context.get('agencia_nombre', '')}
+- Teléfono: {context.get('agente_telefono', '')} | Email: {context.get('agente_email', '')}
 
-IMÁGENES Y MULTIMEDIA:
-- Foto de portada: Está adjunta a este mensaje como un archivo binario nativo (la única imagen adjunta). Usala en el tag <img> del Hero Section usando la sintaxis de inline blob que provee Gemini.
-- Logo de la agencia (URL): {logo_url_str}
-- Fotos de la galería (URLs):
+IMÁGENES:
+- Portada: Adjunta como binario nativo. Usala en el Hero Section.
+- Logo Agencia (URL): {logo_url_str}
+- Galería (URLs):
 {fotos_galeria_str}
 
-Para el logo y la galería, DEBES usar ESTRICTAMENTE las URLs proporcionadas arriba en el atributo `src` de las etiquetas <img> correspondientes. NO intentes inventar URLs ni usar la imagen adjunta para la galería.
+GUÍA DE SECCIONES PREMIUM:
+1. TOP BAR: Logo alineado, diseño minimalista, sticky.
+2. HERO: Altura 500px, centrada, con un gradiente oscuro cinematográfico (bottom-to-top). Título de la propiedad impactante en tipografía Display grande. Badge de operación en color acento.
+3. PRECIO: Superpuesto elegantemente sobre el gradiente del hero o en una transición inmediata.
+4. STATS BAR: Fondo de color sólido (oscuro o acento). 5 columnas con ICONOS SVG INLINE únicos (house, bed, bath, ruler, car). Números en bold grande, etiquetas en uppercase pequeño.
+5. DESCRIPCIÓN: Fondo off-white sutil. Usá comillas decorativas gigantes (opacity 0.1) en color acento al inicio. Interlineado de 1.8 para máxima legibilidad.
+6. AMENIDADES: Layout flex-wrap. Chips con bordes redondeados, hover animation (scale 1.05) e ICONOS SVG lógicos para cada una.
+7. GALERÍA: Foto 1 a full-width (350px). Resto en grid de 2 columnas. Bordes redondeados (12px), box-shadow suave y hover effect de zoom sutil.
+8. FOOTER: Fondo oscuro. Avatar del agente circular con borde acento. QR Code ({qr_img_tag}) bien posicionado. Marca de agua LeadBook: {watermark_html}
 
-ESTRUCTURA HTML REQUERIDA:
-1. Top bar con logo de agencia + badge de operación (VENTA/ALQUILER)
-2. Hero section: foto portada full-width (height 420px) con overlay degradado y título de propiedad + ciudad encima
-3. Barra de precio destacada con el precio en tipografía grande
-4. Barra de stats: recámaras, baños, superficie cubierta, superficie total, estacionamientos con íconos SVG inline
-5. Sección descripción con fondo diferenciado
-6. Sección amenidades: chips con íconos SVG inline mapeados lógicamente
-7. Galería: primera foto full-width, el resto en grid 2 columnas
-8. Footer: avatar circular del agente (primera imagen = logo agencia en circle), datos del agente, QR:
-{qr_img_tag}
-9. Marca de agua LeadBook (insertar esto exactamente en el body antes del cierre </body>):
-{watermark_html}
-
-REGLAS ESTRICTAS:
-- DEVOLVER SOLO CÓDIGO HTML VÁLIDO, sin markdown, sin backticks, sin explicaciones.
-- Todo CSS en <style> en el <head>.
-- Incluir Google Fonts según el diseño especificado.
-- El HTML debe ser 100% autónomo (sin archivos externos salvo Google Fonts).
-- La ÚNICA imagen adjunta binaria es la foto de portada. Para el logo y la galería usá EXCLUSIVAMENTE las URLs proporcionadas en sus atributos src."""
+REGLAS TÉCNICAS:
+- CSS en <style> dentro del <head>.
+- Usá variables CSS (:root) para los colores del diseño.
+- Importá las Google Fonts especificadas.
+- Incluí keyframes para una animación 'fade-in-up' al cargar la página.
+- DEVOLVÉ SOLO EL CÓDIGO HTML PURO, sin backticks ni markdown."""
 
         contents_step2.append(prompt_step2)
 
