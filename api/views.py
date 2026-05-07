@@ -2920,6 +2920,51 @@ def proxy_pdf_view(request, listado_id):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+def descargar_pdf(request, listado_id):
+    """
+    Descarga el PDF desde Cloudinary internamente y lo sirve al browser
+    como attachment para forzar la descarga, evadiendo problemas de CORS.
+    """
+    try:
+        from .models import Listado
+        listado = Listado.objects.get(id=listado_id)
+        
+        # Buscar URL en los datos del listado
+        res = listado.datos.get('resultados', {}) if listado.datos else {}
+        pdf_data = res.get('pdf', {})
+        pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else pdf_data
+        
+        if not pdf_url:
+            return Response({"error": "URL de PDF no encontrada"}, status=404)
+
+        # Si es URL local, redirigir directamente
+        if not pdf_url.startswith('http'):
+            from django.shortcuts import redirect
+            absolute_url = request.build_absolute_uri(pdf_url)
+            if 'localhost' not in absolute_url and '127.0.0.1' not in absolute_url:
+                absolute_url = absolute_url.replace('http://', 'https://')
+            return redirect(absolute_url)
+
+        # Petición interna a Cloudinary
+        response = requests.get(pdf_url, timeout=30)
+        
+        if response.status_code != 200:
+            return Response({
+                "error": f"Cloudinary respondió con error {response.status_code}"
+            }, status=status.HTTP_502_BAD_GATEWAY)
+
+        from django.http import HttpResponse
+        django_response = HttpResponse(response.content, content_type='application/pdf')
+        django_response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
+        return django_response
+
+    except Listado.DoesNotExist:
+        return Response({"error": "Listado no encontrado"}, status=404)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def proxy_pdf_thumbnail_view(request, listado_id):
     """
     Genera una vista previa (imagen) de la primera página del PDF vía proxy.

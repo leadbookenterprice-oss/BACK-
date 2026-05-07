@@ -46,6 +46,10 @@ def generar_html_desde_template(context, agente):
     Genera HTML usando un template prediseñado.
     Gemini solo elige los colores según el estilo de la propiedad.
     """
+    print(f"[Template DEBUG] context keys: {list(context.keys())}")
+    print(f"[Template DEBUG] portada_url raw: {repr(context.get('portada_url', 'NO EXISTE'))}")
+    print(f"[Template DEBUG] portadaUrl raw: {repr(context.get('portadaUrl', 'NO EXISTE'))}")
+    
     # 1. Elegir template al azar
     templates = list(TEMPLATE_COLORES.keys())
     template_elegido = random.choice(templates)
