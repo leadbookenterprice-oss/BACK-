@@ -9,6 +9,13 @@ from api.tracking import track_api_call
 
 logger = logging.getLogger(__name__)
 
+
+# Excepción especial para cuota mensual de Gemini agotada.
+# Los views la capturan y devuelven HTTP 429 con mensaje canonico.
+class GeminiQuotaExhaustedError(Exception):
+    """Cuota mensual/diaria de Gemini agotada. No tiene solución con reintentos."""
+    pass
+
 @track_api_call(service='gemini')
 def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
     if agente is not None:
@@ -219,10 +226,13 @@ def execute_with_gemini_retry(agente, operation, max_retries=3):
                 ])
                 
                 if is_monthly or (not is_minute and '429' not in error_msg): 
-                    # Es un agotamiento real
+                    # Es un agotamiento real de cuota mensual/diaria
                     if agente:
                         _mark_gemini_exhausted(agente, is_monthly=True)
-                    raise Exception("Llegaste al límite mensual de tu API de Inteligencia Artificial (Gemini).")
+                    raise GeminiQuotaExhaustedError(
+                        "Alcanzaste el límite mensual de generación de contenido IA. "
+                        "Tu cuota se renueva el próximo mes."
+                    )
                     
                 if is_minute or '429' in error_msg:
                     # Rate limit temporal por minuto

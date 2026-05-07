@@ -22,7 +22,7 @@ from .serializers import (
     TerminosCondicionesSerializer, PoliticaPrivacidadSerializer
 )
 from .tasks import run_asset_generation
-from .ai_services import call_groq_api, call_gemini_api, smart_call
+from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
 from .plan_utils import puede_generar, incrementar_uso
@@ -719,6 +719,8 @@ def generar_carrusel(request):
             "slides": slides_urls,
             "caption": caption
         }, status=status.HTTP_200_OK)
+    except GeminiQuotaExhaustedError as e:
+        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1166,6 +1168,12 @@ def generar_pdf(request):
         response['X-Frame-Options'] = 'ALLOWALL'
         return response
 
+    except GeminiQuotaExhaustedError as e:
+        return Response({
+            "error": "cuota_ia_agotada",
+            "mensaje": str(e),
+        }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
     except Exception as e:
         import traceback
         error_completo = traceback.format_exc()
@@ -1247,6 +1255,8 @@ def generar_imagen_post(request):
             "caption": caption,
             "texto": caption
         }, status=status.HTTP_200_OK)
+    except GeminiQuotaExhaustedError as e:
+        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1325,6 +1335,8 @@ def generar_imagen_story(request):
             "caption": caption,
             "texto": caption
         }, status=status.HTTP_200_OK)
+    except GeminiQuotaExhaustedError as e:
+        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1407,6 +1419,8 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             actualizar_resultados_listado(listado_obj, 'email', parsed)
             
         return Response(parsed, status=status.HTTP_200_OK)
+    except GeminiQuotaExhaustedError as e:
+        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

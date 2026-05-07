@@ -33,7 +33,7 @@ def mi_uso_apis(request):
             quota, _ = UserAPIQuota.objects.get_or_create(user=user, service=svc)
             limite = quota.monthly_limit or DEFAULT_LIMITS.get(svc, 100)
             consumido = quota.requests_this_month
-            nombre_display = "Voces Neurales" if svc == 'elevenlabs' else "Motor de Textos IA" if svc == 'gemini' else "Gestor de Redes"
+            nombre_display = "Voces Neurales" if svc == 'elevenlabs' else "Generación de Contenido IA" if svc == 'gemini' else "Gestor de Redes"
             unidad_display = "caracteres" if svc == 'elevenlabs' else "peticiones" if svc == 'gemini' else "publicaciones"
             
             stats.append({
@@ -69,7 +69,7 @@ def mi_uso_apis(request):
                 quota, _ = UserAPIQuota.objects.get_or_create(user=user, service=svc)
                 limite = quota.monthly_limit or DEFAULT_LIMITS.get(svc, 100)
                 consumido = quota.requests_this_month
-                nombre_display = "Voces Neurales" if svc == 'elevenlabs' else "Motor de Textos IA" if svc == 'gemini' else "Gestor de Redes"
+                nombre_display = "Voces Neurales" if svc == 'elevenlabs' else "Generación de Contenido IA" if svc == 'gemini' else "Gestor de Redes"
                 unidad_display = "caracteres" if svc == 'elevenlabs' else "peticiones" if svc == 'gemini' else "publicaciones"
                 
                 stats.append({
@@ -132,7 +132,7 @@ def mi_uso_apis(request):
         # GEMINI / UPLOADPOST: Conteo Interno
         else:
             consumido = key.requests_this_month
-            nombre_display = "Motor de Textos IA" if servicio == 'gemini' else "Gestor de Redes"
+            nombre_display = "Generación de Contenido IA" if servicio == 'gemini' else "Gestor de Redes"
             unidad_display = "peticiones" if servicio == 'gemini' else "publicaciones"
             
             porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
