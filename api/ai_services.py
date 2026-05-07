@@ -63,7 +63,8 @@ def generar_html_desde_template(context, agente):
     
     # 4. Reemplazar datos de la propiedad
     html = html.replace('{{TITULO}}', str(context.get('tipo_propiedad', '') + ' en ' + context.get('ciudad', '')))
-    html = html.replace('{{PRECIO}}', str(context.get('moneda', '$') + ' ' + str(context.get('precio', ''))))
+    precio_str = f"{context.get('moneda', '$')} {context.get('precio', '')}"
+    html = html.replace('{{PRECIO}}', precio_str)
     html = html.replace('{{CIUDAD}}', str(context.get('ciudad', '')))
     html = html.replace('{{OPERACION}}', str(context.get('operacion', 'VENTA')).upper())
     html = html.replace('{{DESCRIPCION}}', str(context.get('descripcion', '')))
@@ -115,16 +116,18 @@ def generar_html_desde_template(context, agente):
     for i in range(len(fotos)+1, 5):
         html = re.sub(rf'\{{{{#if FOTO_{i}\}}}}.*?\{{{{/if\}}}}', '', html, flags=re.DOTALL)
     
+    # 9. Amenidades — generar chips HTML (ANTES DE LIMPIAR)
+    amenidades = context.get('amenidades', [])
+    print(f"[Template] Amenidades: {amenidades}")
+    chips_html = ''.join([f'<span class="amenidad-chip">{a}</span>' for a in amenidades])
+    html = html.replace('{{AMENIDADES}}', chips_html)
+
     # Limpiar cualquier placeholder restante
     html = re.sub(r'\{\{#if [^}]+\}\}', '', html)
     html = re.sub(r'\{\{else\}\}', '', html)
     html = re.sub(r'\{\{/if\}\}', '', html)
     html = re.sub(r'\{\{[^}]+\}\}', '', html)
     
-    # 9. Amenidades — generar chips HTML
-    amenidades = context.get('amenidades', [])
-    chips_html = ''.join([f'<span class="amenidad-chip">{a}</span>' for a in amenidades])
-    html = html.replace('{{AMENIDADES}}', chips_html)
     
     logger.info(f"[HTML Template] Template elegido: {template_elegido}. HTML generado: {len(html)} chars.")
     return html

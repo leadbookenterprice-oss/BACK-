@@ -218,6 +218,7 @@ class AlmacenamientoCloudinary:
                     secure=True,
                     **extra_creds
                 )
+                url += '?fl_attachment'
             else:
                 url, _ = cloudinary_url(
                     public_id,
