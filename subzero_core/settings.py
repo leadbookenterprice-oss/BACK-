@@ -13,6 +13,9 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 import os
 from pathlib import Path
 from decouple import config
+
+# Aumentar hilos para vistas síncronas largas (como Gemini)
+os.environ.setdefault("ASGI_THREADS", "100")
 import dj_database_url
 import cloudinary
 import cloudinary.uploader

@@ -262,6 +262,10 @@ def generar_html_gemini(context, agente):
     from google import genai
     import random
 
+    import time
+    print(f"[HTML] ▶ Función iniciada. Usuario: {agente}")
+    print(f"[HTML] ▶ Obteniendo API key...")
+
     try:
         if agente is not None:
             from api.pool_manager import get_api_key
@@ -271,6 +275,8 @@ def generar_html_gemini(context, agente):
                 return None
         else:
             key = settings.GEMINI_API_KEY
+            
+        print(f"[HTML] ✅ API key obtenida: {key[:12]}...")
 
         client = genai.Client(api_key=key)
 
@@ -320,7 +326,11 @@ El prompt debe especificar en detalle:
 Devolvé SOLO el prompt de diseño (texto plano, sin markdown, sin explicaciones adicionales).
 Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe ser único y diferente cada vez."""
 
-        print(f"[DEBUG HTML] Iniciando Paso 1...")
+        print(f"[HTML] ▶ Paso 1 - Armando prompt de diseño...")
+        print(f"[HTML] ▶ Paso 1 - Datos enviados: tipo={context.get('tipo_propiedad')}, ciudad={context.get('ciudad')}, amenidades={len(context.get('amenidades', []))} items")
+        t1 = time.time()
+        
+        print(f"[HTML] ▶ Paso 1 - Enviando request a gemini-2.5-flash-lite...")
         def _call_step1():
             return client.models.generate_content(
                 model='gemini-2.5-flash-lite',
@@ -328,25 +338,34 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
             ).text.strip()
 
         design_prompt = execute_with_gemini_retry(agente, _call_step1)
-        print(f"[DEBUG HTML] Respuesta Paso 1: {repr(design_prompt[:200] if design_prompt else 'NONE')}")
-        if not design_prompt:
-            print(f"[DEBUG HTML] Paso 1 falló - design_prompt vacío")
+        
+        print(f"[HTML] ✅ Paso 1 - Respuesta recibida en {time.time()-t1:.2f}s. Largo: {len(design_prompt) if design_prompt else 0} chars")
+        if design_prompt:
+            print(f"[HTML] ▶ Paso 1 - Primeros 100 chars: {design_prompt[:100]}")
+        else:
+            print(f"[HTML] ▶ Paso 1 falló - design_prompt vacío")
             
         logger.info(f"[HTML Gen] Paso 1 completado. Prompt creativo generado ({len(design_prompt)} chars).")
 
         # ─── PASO 2: Generar HTML final con imágenes ─────────────────────────────
         contents_step2 = []
 
+        print(f"[HTML] ▶ Paso 2 - Preparando imágenes...")
+        print(f"[HTML] ▶ Paso 2 - portada_url presente: {bool(context.get('portada_url'))}")
+        
         # Helper para agregar imágenes base64 como partes nativas
         def add_image_part(data_url):
             if not data_url:
                 return
             try:
+                print(f"[HTML] ▶ Paso 2 - Descargando portada...")
+                t2 = time.time()
                 if data_url.startswith('data:'):
                     header, b64_data = data_url.split(',', 1)
                     mime = header.split(':')[1].split(';')[0]
                     raw_bytes = base64.b64decode(b64_data)
                     contents_step2.append(types.Part.from_bytes(data=raw_bytes, mime_type=mime))
+                    print(f"[HTML] ✅ Paso 2 - Portada decodificada (base64) en {time.time()-t2:.2f}s. Tamaño: {len(raw_bytes)} bytes")
                 elif data_url.startswith('http'):
                     # URL remota: intentar descargar
                     import requests as req_lib
@@ -354,6 +373,7 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
                     if r.status_code == 200:
                         mime = r.headers.get('Content-Type', 'image/jpeg').split(';')[0]
                         contents_step2.append(types.Part.from_bytes(data=r.content, mime_type=mime))
+                        print(f"[HTML] ✅ Paso 2 - Portada descargada en {time.time()-t2:.2f}s. Tamaño: {len(r.content)} bytes")
             except Exception as img_err:
                 logger.warning(f"No se pudo procesar imagen para Gemini: {img_err}")
 
@@ -429,7 +449,10 @@ REGLAS ESTRICTAS:
 
         contents_step2.append(prompt_step2)
 
-        print(f"[DEBUG HTML] Iniciando Paso 2...")
+        print(f"[HTML] ▶ Paso 2 - Largo del prompt texto: {len(prompt_step2)} chars")
+        print(f"[HTML] ▶ Paso 2 - Enviando request a gemini-2.5-flash-lite...")
+        t3 = time.time()
+        
         def _call_step2():
             return client.models.generate_content(
                 model='gemini-2.5-flash-lite',
@@ -437,6 +460,10 @@ REGLAS ESTRICTAS:
             ).text.strip()
 
         html_output = execute_with_gemini_retry(agente, _call_step2)
+        
+        print(f"[HTML] ✅ Paso 2 - Respuesta recibida en {time.time()-t3:.2f}s. Largo HTML: {len(html_output) if html_output else 0} chars")
+        if html_output:
+            print(f"[HTML] ▶ Paso 2 - Primeros 200 chars del HTML: {html_output[:200]}")
 
         # Limpiar posibles backticks si la IA desobedece
         if html_output.startswith('```html'):
@@ -450,7 +477,10 @@ REGLAS ESTRICTAS:
         return html_output.strip()
 
     except Exception as e:
-        print(f"[DEBUG HTML] Excepción: {repr(e)}")
+        print(f"[HTML] ❌ Error en generar_html_gemini: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
         # execute_with_gemini_retry ya manejó el 429 correctamente
         logger.error(f"Error en generar_html_gemini: {e}")
         return None
