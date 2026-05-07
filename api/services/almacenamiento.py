@@ -182,30 +182,50 @@ class AlmacenamientoCloudinary:
             if hasattr(contenido, 'read'):
                 contenido.seek(0)
 
+            # Lógica especial para PDFs: deben ser públicos y descargables
+            upload_params = {
+                'public_id': public_id,
+                'type': 'upload',
+                'overwrite': True,
+                'invalidate': True,
+                **extra_creds,
+            }
+            
+            if tipo == TIPO_PDF:
+                upload_params['resource_type'] = 'raw'
+                upload_params['access_mode'] = 'public'
+            else:
+                upload_params['resource_type'] = 'auto'
+
             resultado = cloudinary.uploader.upload(
                 contenido,
-                resource_type='auto',
-                public_id=public_id,
-                type='upload',
-                overwrite=True,
-                invalidate=True,
-                **extra_creds,
+                **upload_params
             )
 
             resource_type_result = resultado.get('resource_type', 'auto')
 
-            # Generar URL FIRMADA para saltar restricciones de ACL/Strict Transformations
+            # Generar URL: Pública directa para PDF (raw), Firmada para el resto (seguridad)
             from cloudinary.utils import cloudinary_url
-            url, _ = cloudinary_url(
-                public_id,
-                resource_type=resource_type_result,
-                type='upload',
-                sign_url=True,
-                secure=True,
-                **extra_creds
-            )
             
-            logger.info(f'[Almacenamiento] ✓ {tipo} subido y firmado para user {user_id}: {url}')
+            if tipo == TIPO_PDF:
+                url, _ = cloudinary_url(
+                    public_id,
+                    resource_type='raw',
+                    type='upload',
+                    secure=True,
+                    **extra_creds
+                )
+            else:
+                url, _ = cloudinary_url(
+                    public_id,
+                    resource_type=resource_type_result,
+                    type='upload',
+                    sign_url=True,
+                    secure=True,
+                    **extra_creds
+                )
+            
+            logger.info(f'[Almacenamiento] ✓ {tipo} subido (Public={tipo==TIPO_PDF}) para user {user_id}: {url}')
 
             # Invalida caché de stats de la cuenta usada
             if key_id:

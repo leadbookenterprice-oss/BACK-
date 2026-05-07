@@ -194,7 +194,7 @@ def call_nim_model(prompt: str, model_id: str, imagen_url: str = None) -> str:
     response = client.chat.completions.create(
         model=model_id,
         messages=messages,
-        max_tokens=8192,
+        max_tokens=16384,
         temperature=0.7
     )
     return response.choices[0].message.content
@@ -481,15 +481,21 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
         
         # Obtenemos la imagen de portada para Gemini
         try:
-            portada_b64 = _get_portada_base64(context)
-            if portada_b64:
-                contents_step2.append(types.Part.from_bytes(
-                    data=base64.b64decode(portada_b64.split(',')[1]),
-                    mime_type="image/png"
-                ))
-                print(f"[HTML] ▶ Paso 2 - Imagen de portada adjunta para Gemini.")
+            # Si la portada ya es base64, la usamos. Si no, Gemini en el paso 2 la ignorará 
+            # (ya que los modelos NIM usan la URL directamente vía call_nim_model)
+            if portada_url and (portada_url.startswith('data:image') or portada_url.startswith('https://')):
+                # Nota: Si es HTTPS, los modelos NIM la procesan nativamente. 
+                # Para Gemini, solo adjuntamos si podemos decodificarla (base64)
+                if portada_url.startswith('data:image'):
+                    contents_step2.append(types.Part.from_bytes(
+                        data=base64.b64decode(portada_url.split(',')[1]),
+                        mime_type="image/png"
+                    ))
+                    print(f"[HTML] ▶ Paso 2 - Imagen de portada (base64) adjunta para Gemini.")
+                else:
+                    print(f"[HTML] ▶ Paso 2 - Imagen de portada (URL) disponible para modelos NIM.")
         except Exception as e:
-            print(f"[HTML] ⚠️ Error procesando imagen de portada para Gemini: {e}")
+            print(f"[HTML] ⚠️ Error procesando imagen de portada para el prompt: {e}")
 
         # QR embed
         qr_code = context.get('qr_code', '')
@@ -534,7 +540,7 @@ DATOS DEL AGENTE:
 
 IMÁGENES:
 - Portada: La imagen adjunta binaria o URL es la FOTO DE PORTADA y DEBE ser usada exclusivamente en el Hero Section como imagen de fondo. No uses ninguna URL de galería para el hero.
-- Logo Agencia (URL): {logo_url_str}
+- Logo Agencia: {logo_url_str if logo_url_str else 'No disponible — omitir sección de logo'}
 - Galería (URLs):
 {fotos_galeria_str}
 
