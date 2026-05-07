@@ -52,13 +52,28 @@ def render_html_to_pdf(html_content: str) -> bytes:
         try:
             # networkidle es clave para asegurar que se carguen imágenes y fuentes antes de imprimir
             page.set_content(html_content, wait_until="networkidle", timeout=30000)
+            # Asegurar estado idle por si acaso set_content no fue suficiente
+            page.wait_for_load_state('networkidle', timeout=30000)
         except PlaywrightTimeoutError:
             logger.warning("[Render Engine] Timeout esperando networkidle para PDF, procediendo de todas formas.")
         except Exception as e:
             logger.error(f"[Render Engine] Error cargando contenido para PDF: {e}")
             
-        page.wait_for_timeout(1000) # Un segundo extra para asegurar renderizado de fuentes
-        pdf_bytes = page.pdf(format="A4", print_background=True)
+        # 3 segundos extra para asegurar renderizado completo de fuentes de Google y animaciones iniciales
+        page.wait_for_timeout(3000) 
+        
+        pdf_bytes = page.pdf(
+            format="A4", 
+            print_background=True,
+            margin={'top': '0mm', 'right': '0mm', 'bottom': '0mm', 'left': '0mm'}
+        )
+        
+        size_bytes = len(pdf_bytes)
+        logger.info(f"[Render Engine] PDF generado exitosamente. Tamaño: {size_bytes} bytes")
+        
+        if size_bytes < 10000:
+            logger.warning(f"[Render Engine] WARNING: El PDF generado es sospechosamente pequeño ({size_bytes} bytes). Podría estar en blanco.")
+            
         browser.close()
         
     return pdf_bytes
