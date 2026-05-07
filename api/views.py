@@ -12,6 +12,9 @@ from decouple import config
 import cloudinary
 import cloudinary.uploader
 from api.services.almacenamiento import AlmacenamientoCloudinary
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     Property, GeneratedAsset, Listado, OTPCode,
@@ -1056,8 +1059,6 @@ def construir_contexto_pdf(data, user, request=None):
                 return val
             if val.startswith('data:'):
                 from api.services.almacenamiento import AlmacenamientoCloudinary
-                import logging
-                logger = logging.getLogger(__name__)
                 try:
                     res = AlmacenamientoCloudinary.guardar_foto_propiedad(
                         base64_str=val,
