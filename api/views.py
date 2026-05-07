@@ -962,10 +962,13 @@ def generar_video(request, pk):
         return Response({"error": "Listado no encontrado"}, status=404)
 
 def construir_contexto_pdf(data, user, request=None):
+    # ─── Extraer hint de listado para el almacenamiento ──────────────────────
+    listado_id_hint  = data.get('listado_id') or data.get('listadoId')
+
     # ─── Helpers de imágenes para WeasyPrint ─────────────────────────────
     temp_files = []
 
-    def resolver_imagen(val):
+    def resolver_imagen(val, tipo='portada', indice=0):
         if not val: return None
         
         if isinstance(val, dict) and 'public_id' in val:
@@ -976,14 +979,28 @@ def construir_contexto_pdf(data, user, request=None):
             if val.startswith('http'):
                 return val
             if val.startswith('data:'):
-                return val
+                from api.services.almacenamiento import AlmacenamientoCloudinary
+                import logging
+                logger = logging.getLogger(__name__)
+                try:
+                    res = AlmacenamientoCloudinary.guardar_foto_propiedad(
+                        base64_str=val,
+                        user_id=user.id,
+                        listado_id=listado_id_hint,
+                        tipo_foto=tipo,
+                        indice=indice
+                    )
+                    if res and 'public_id' in res:
+                        return AlmacenamientoCloudinary.obtener_url_foto(res)
+                except Exception as e:
+                    logger.error(f"Error subiendo base64 en resolver_imagen: {e}")
+                return None
                 
         return None
 
 
 
     # ─── Extraer campos normalizados ──────────────────────────────────────
-    listado_id_hint  = data.get('listado_id') or data.get('listadoId')  # para Almacenamiento
     tipo_propiedad   = data.get('tipoPropiedad', data.get('tipo_propiedad', 'Propiedad'))
     ciudad           = data.get('ciudad', '')
     precio           = str(data.get('precio', ''))

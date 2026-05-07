@@ -390,7 +390,19 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
         
         # URLs crudas (evitar enviar base64 enorme en el prompt de texto)
         logo_url_str = context.get('logo_url_raw', '')
-        fotos_galeria_str = "\n".join(context.get('fotos_recorrido_raw', [])[:5])
+        if logo_url_str.startswith('data:'):
+            logger.error("logo_url_raw es un base64. Descartando del prompt de texto.")
+            logo_url_str = ""
+
+        fotos_recorrido = context.get('fotos_recorrido_raw', [])
+        fotos_limpias = []
+        for f in fotos_recorrido:
+            if f.startswith('data:'):
+                logger.error("Una foto de recorrido es base64. Descartando del prompt de texto.")
+            else:
+                fotos_limpias.append(f)
+                
+        fotos_galeria_str = "\n".join(fotos_limpias[:5])
 
         print(f"[DIAG] design_prompt: {len(design_prompt) if design_prompt else 0} chars")
         print(f"[DIAG] descripcion: {len(context.get('descripcion', ''))} chars")
