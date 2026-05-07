@@ -104,28 +104,17 @@ def generar_html_desde_template(context, agente):
         html = re.sub(r'\{\{#if QR_CODE\}\}.*?\{\{/if\}\}', '', html, flags=re.DOTALL)
     
     # 7. Foto de portada
-    portada_val = context.get('portada_url', '')
+    portada_val = context.get('portada_url', '') or context.get('portada_url_raw', '')
     if isinstance(portada_val, dict) and 'public_id' in portada_val:
-        from api.services.almacenamiento import AlmacenamientoCloudinary
-        portada_url = AlmacenamientoCloudinary.obtener_url_foto(portada_val)
+        cloud = portada_val.get('cloudinary_account', 'df1vldrhb')
+        pid = portada_val.get('public_id', '')
+        portada_url = f"https://res.cloudinary.com/{cloud}/image/upload/{pid}"
+    elif isinstance(portada_val, str) and portada_val.startswith('http'):
+        import re as re_module
+        portada_url = re_module.sub(r's--[^/]+--/', '', portada_val)
     else:
-        portada_url = str(portada_val)
-        
-    import re as re_module
-    portada_url = re_module.sub(r's--[^/]+--/', '', portada_url)
-    
-    if not portada_url or not portada_url.startswith('http'):
-        fotos = context.get('fotos_recorrido_raw', [])
-        if fotos:
-            primera = fotos[0]
-            if isinstance(primera, dict):
-                from api.services.almacenamiento import AlmacenamientoCloudinary
-                portada_url = AlmacenamientoCloudinary.obtener_url_foto(primera)
-                portada_url = re_module.sub(r's--[^/]+--/', '', portada_url)
-            else:
-                portada_url = str(primera)
-                
-    print(f"[Template] Portada URL: {portada_url[:80] if portada_url else 'VACÍA'}")
+        portada_url = ''
+    print(f"[Template] Portada URL COMPLETA: {portada_url}")
     html = html.replace('{{FOTO_PORTADA}}', portada_url)
 
     
@@ -134,10 +123,15 @@ def generar_html_desde_template(context, agente):
     galeria_html = ''
     for i, foto in enumerate(fotos):
         if isinstance(foto, dict) and 'public_id' in foto:
-            from api.services.almacenamiento import AlmacenamientoCloudinary
-            foto_url = AlmacenamientoCloudinary.obtener_url_foto(foto)
+            cloud = foto.get('cloudinary_account', 'df1vldrhb')
+            pid = foto.get('public_id', '')
+            foto_url = f"https://res.cloudinary.com/{cloud}/image/upload/{pid}"
+        elif isinstance(foto, str) and foto.startswith('http'):
+            import re as re_module
+            foto_url = re_module.sub(r's--[^/]+--/', '', foto)
         else:
-            foto_url = str(foto)
+            foto_url = ''
+            
         if foto_url:
             galeria_html += f'<img class="galeria-foto" src="{foto_url}" alt="Foto {i+1}">\n'
 
