@@ -27,16 +27,16 @@ PASO1_CASCADE = [
     ("gemini", "gemini-2.5-flash-lite"),  # último fallback
 ]
 
-# Cascada Paso 2 — multimodal primero, después texto puro
+# Cascada Paso 2 — Prioridad Gemini, luego NIM, luego Groq
 PASO2_CASCADE = [
+    ("gemini", "gemini-2.5-pro"),
+    ("gemini", "gemini-2.5-flash"),
+    ("gemini", "gemini-3-flash-preview"),
+    ("gemini", "gemini-3.1-flash-lite-preview"),
+    ("gemini", "gemini-2.5-flash-lite"),
     ("nim", "meta/llama-4-maverick-17b-128e-instruct"),
-    ("nim", "microsoft/phi-4-multimodal-instruct"),
-    ("nim", "google/gemma-3-27b-it"),
-    ("nim", "mistralai/devstral-2-123b-instruct-2512"),
     ("nim", "mistralai/mistral-large-3-675b-instruct-2512"),
-    ("nim", "qwen/qwen3-coder-480b-a35b-instruct"),
     ("groq", "llama-3.3-70b-versatile"),
-    ("gemini", "gemini-2.5-flash-lite"),  # último fallback
 ]
 
 def _get_nvidia_key():
@@ -563,6 +563,49 @@ REGLAS TÉCNICAS:
 
         contents_step2.append(prompt_step2)
 
+        # Prompt alternativo mucho más detallado y estricto para modelos NIM y Groq
+        datos_propiedad = f"""
+- Tipo: {context.get('tipo_propiedad')}
+- Operación: {context.get('operacion')}
+- Precio: {context.get('moneda')} {context.get('precio')}
+- Ciudad/Ubicación: {context.get('ciudad')}
+- Recámaras: {context.get('recamaras', 'N/A')}
+- Baños: {context.get('banos', 'N/A')}
+- Superficie Cubierta: {context.get('superficie_cubierta', 'N/A')}
+- Superficie Total: {context.get('superficie_total', 'N/A')}
+- Estacionamientos: {context.get('estacionamientos', 'N/A')}
+- Amenidades: {', '.join(context.get('amenidades', []))}
+- Descripción: {context.get('descripcion', '')}
+- Agente: {context.get('agente_nombre', '')} | {context.get('agente_email', '')} | {context.get('agente_telefono', '')}
+- Agencia: {context.get('agencia_nombre', '')}
+"""
+        
+        prompt_step2_nim = f"""Sos un desarrollador frontend senior especializado en sitios inmobiliarios de lujo. 
+Tu única tarea es generar código HTML completo, válido y autónomo para una ficha inmobiliaria premium.
+
+CRÍTICO — LEÉ ESTO ANTES DE GENERAR:
+- Generá el HTML COMPLETO de arriba hacia abajo sin omitir NINGUNA sección
+- El orden es OBLIGATORIO: 1)head+CSS completo 2)top-bar 3)hero con foto 4)precio 5)stats 6)descripción 7)amenidades 8)galería 9)footer con datos agente
+- NUNCA uses markdown, NUNCA uses backticks, NUNCA des explicaciones — solo HTML puro
+- El CSS tiene que estar COMPLETO en el <head> con variables :root, Google Fonts, animaciones keyframes
+- La foto de portada está disponible en esta URL: {portada_url} — usala como background-image del hero
+- El hero tiene que tener height: 500px, fondo con la foto y un overlay oscuro degradado
+
+DISEÑO A IMPLEMENTAR:
+{design_prompt}
+
+DATOS DE LA PROPIEDAD:
+{datos_propiedad}
+
+REGLAS DE DISEÑO PREMIUM:
+- Hero: foto full-width 500px con gradiente oscuro cinematográfico bottom-to-top, título y precio superpuestos
+- Stats bar: fondo oscuro, 5 columnas con SVG icons únicos, números grandes bold
+- Amenidades: chips con hover animation, icons SVG inline
+- Galería: cada foto 100% ancho, min-height 400px, border-radius 8px
+- Footer: fondo oscuro, datos del agente, QR code
+- Tipografía: Google Fonts según el diseño, mínimo 2 fuentes diferentes
+- Colores: variables CSS en :root, gradientes en múltiples elementos"""
+
         print(f"[HTML] ▶ Paso 2 - Iniciando cascada de modelos...")
         t3 = time.time()
         
@@ -573,9 +616,9 @@ REGLAS TÉCNICAS:
             print(f"[HTML] ▶ Paso 2 - Intentando con {provider} ({model_id})...")
             try:
                 if provider == "nim":
-                    html_output = call_nim_model(prompt_step2, model_id, imagen_url=portada_url)
+                    html_output = call_nim_model(prompt_step2_nim, model_id, imagen_url=portada_url)
                 elif provider == "groq":
-                    p2_modified = f"Foto de portada (URL): {portada_url}\n\n{prompt_step2}"
+                    p2_modified = f"Foto de portada (URL): {portada_url}\n\n{prompt_step2_nim}"
                     html_output = call_groq_html(p2_modified)
                 elif provider == "gemini":
                     def _call_step2():
