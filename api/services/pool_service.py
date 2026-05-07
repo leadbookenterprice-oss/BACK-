@@ -182,10 +182,12 @@ class APIPoolService:
         covered_services = set(k.servicio.lower() for k in direct_keys)
         
         # 2. Obtener qué servicios tiene cubiertos por Bundle activo y COMPLETO
+        active_bundle = None
         try:
             asig = APIBundleAssignment.objects.get(usuario=user, activo=True)
-            if asig.bundle.is_complete():
-                # Si tiene bundle completo, asumimos que tiene todo cubierto
+            active_bundle = asig.bundle
+            if active_bundle.is_complete():
+                # Si tiene bundle completo (todas las llaves sanas), asumimos que tiene todo cubierto
                 for s in servicios_criticos:
                     if s not in covered_services:
                         covered_services.add(s)
@@ -212,10 +214,24 @@ class APIPoolService:
             # 4.b. Buscar una key disponible
             new_key = APIKey.objects.filter(servicio__iexact=s, status='available').first()
             if new_key:
-                new_key.status = 'assigned'
-                new_key.assigned_to = user
-                new_key.assigned_at = timezone.now()
-                new_key.save()
+                if active_bundle:
+                    new_key.status = 'in_bundle'
+                    new_key.assigned_to = user
+                    new_key.assigned_at = timezone.now()
+                    new_key.save()
+                    
+                    if s == 'gemini':
+                        active_bundle.key_gemini = new_key
+                    elif s == 'elevenlabs':
+                        active_bundle.key_elevenlabs = new_key
+                    elif s == 'uploadpost':
+                        active_bundle.key_uploadpost = new_key
+                    active_bundle.save(update_fields=['key_gemini', 'key_elevenlabs', 'key_uploadpost'])
+                else:
+                    new_key.status = 'assigned'
+                    new_key.assigned_to = user
+                    new_key.assigned_at = timezone.now()
+                    new_key.save()
                 repaired.append(s)
             else:
                 # Alerta si no hay stock para reparar

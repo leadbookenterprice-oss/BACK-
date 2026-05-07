@@ -352,8 +352,17 @@ class APIBundle(models.Model):
         return f"{self.nombre} [{self.get_status_display()}]"
 
     def is_complete(self):
-        """Verifica que las 3 keys requeridas estén configuradas."""
-        return all([self.key_gemini_id, self.key_elevenlabs_id, self.key_uploadpost_id])
+        """Verifica que las 3 keys requeridas estén configuradas y saludables (no agotadas ni muertas)."""
+        valid_statuses = ['available', 'assigned', 'in_bundle']
+        
+        if not all([self.key_gemini_id, self.key_elevenlabs_id, self.key_uploadpost_id]):
+            return False
+            
+        return all([
+            self.key_gemini.status in valid_statuses if self.key_gemini else False,
+            self.key_elevenlabs.status in valid_statuses if self.key_elevenlabs else False,
+            self.key_uploadpost.status in valid_statuses if self.key_uploadpost else False,
+        ])
 
     def get_key_for(self, servicio):
         """Devuelve el valor de la API key para el servicio indicado."""
