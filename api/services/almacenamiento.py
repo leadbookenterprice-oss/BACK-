@@ -93,6 +93,8 @@ class AlmacenamientoCloudinary:
             )
             used = res.get('storage', {}).get('usage', 0)
             limit = res.get('storage', {}).get('limit', 0)
+            if limit == 0:
+                limit = 25 * 1024 * 1024 * 1024  # 25GB por defecto para cuentas nuevas (basadas en créditos)
             stats = {'free_bytes': limit - used, 'used_bytes': used, 'total_bytes': limit}
         except Exception as e:
             logger.warning(f'[Almacenamiento] No se pudo consultar stats de {key_obj.id}: {e}')
@@ -129,7 +131,7 @@ class AlmacenamientoCloudinary:
                 mejor_creds = cls._parse_cloudinary_url(k.api_key)
                 mejor_key_id = k.id
 
-        if not mejor_creds or max_libre < UMBRAL_BYTES_MINIMO:
+        if not mejor_creds:
             # Todas están casi llenas o el pool está vacío → fallback global
             logger.warning('[Almacenamiento] Todas las cuentas del pool están llenas o vacías. Usando config global.')
             return None, None
