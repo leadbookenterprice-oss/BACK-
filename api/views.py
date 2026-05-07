@@ -82,9 +82,16 @@ import uuid
 import os
 import time
 
+import urllib.parse, urllib.request, tempfile
 def generar_qr_url(texto):
-    import urllib.parse
-    return f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(texto)}"
+    url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(texto)}"
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        urllib.request.urlretrieve(url, tmp.name)
+        return f"file://{tmp.name}"
+    except Exception as e:
+        print(f"[QR] Error descargando imagen: {e}")
+        return ''
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
