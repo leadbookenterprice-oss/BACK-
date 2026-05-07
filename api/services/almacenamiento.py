@@ -173,6 +173,9 @@ class AlmacenamientoCloudinary:
                 public_id = f'{base_id}/listado_{listado_id}_{unique_hash}{sufijo}'
             else:
                 public_id = f'{base_id}/{tipo}_{uuid.uuid4().hex[:12]}{sufijo}'
+            
+            if tipo == TIPO_PDF:
+                public_id += '.pdf'
 
         creds, key_id = cls.get_mejor_cuenta()
         extra_creds = creds if creds else {}
