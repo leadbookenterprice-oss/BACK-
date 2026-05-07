@@ -1313,6 +1313,11 @@ def generar_imagen_post(request):
 
         data = request.data
         
+        print(f"[POST DEBUG] agenteNombre: {data.get('agenteNombre')}")
+        print(f"[POST DEBUG] agenteTelefono: {data.get('agenteTelefono')}")
+        print(f"[POST DEBUG] agenciaNombre: {data.get('agenciaNombre')}")
+        print(f"[POST DEBUG] keys recibidas: {list(data.keys())}")
+
         # Preparar contexto para la plantilla premium
         context = {
             "portada_url": data.get('portadaUrl'),
