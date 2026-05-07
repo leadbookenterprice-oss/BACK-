@@ -750,3 +750,69 @@ def admin_apikeys_auto_repair(request):
             details.append({"email": user.email, "repaired": repaired})
             
     return Response({"status": "success", "fixed_count": fixed, "details": details})
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def admin_branding_watermark(request):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    from .models import ConfiguracionSistema
+    import base64
+    from io import BytesIO
+    import cloudinary.uploader
+    from api.services.almacenamiento import AlmacenamientoCloudinary
+
+    if request.method == 'GET':
+        config, created = ConfiguracionSistema.objects.get_or_create(clave='watermark')
+        url = config.datos.get('url') if config.datos else None
+        return Response({
+            'url': url,
+            'actualizado_en': config.actualizado_en
+        })
+
+    if request.method == 'POST':
+        image_base64 = request.data.get('image')
+        if not image_base64:
+            return Response({'error': 'Imagen requerida'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Limpiar el prefijo data:image/png;base64, si existe
+            if 'base64,' in image_base64:
+                image_base64 = image_base64.split('base64,')[1]
+            
+            image_data = base64.b64decode(image_base64)
+            image_stream = BytesIO(image_data)
+            
+            # Usar la mejor cuenta disponible del pool
+            creds, key_id = AlmacenamientoCloudinary.get_mejor_cuenta()
+            extra_creds = creds if creds else {}
+
+            resultado = cloudinary.uploader.upload(
+                image_stream,
+                folder="leadbook/sistema",
+                public_id="watermark",
+                overwrite=True,
+                invalidate=True,
+                **extra_creds
+            )
+
+            url = resultado.get('secure_url')
+
+            if not url:
+                return Response({'error': 'Error al subir a Cloudinary'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # Guardar en la configuración
+            config, created = ConfiguracionSistema.objects.get_or_create(clave='watermark')
+            config.datos = {
+                'url': url,
+                'public_id': resultado.get('public_id'),
+                'cloud_name': extra_creds.get('cloud_name')
+            }
+            config.save()
+
+            return Response({
+                'message': 'Marca de agua actualizada exitosamente',
+                'url': url
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

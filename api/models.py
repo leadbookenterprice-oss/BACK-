@@ -514,3 +514,11 @@ class BannedIP(models.Model):
 
     def __str__(self):
         return self.ip_address
+class ConfiguracionSistema(models.Model):
+    clave = models.CharField(max_length=50, unique=True) # ej: 'watermark'
+    valor = models.TextField(blank=True, null=True)     # opcional
+    datos = models.JSONField(default=dict, blank=True)  # para guardar public_id, cloud_name, etc.
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.clave

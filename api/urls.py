@@ -25,7 +25,7 @@ from .views_admin import (
     admin_bundles_list, admin_bundles_crear, admin_bundles_detail,
     admin_bundles_asignar, admin_bundles_liberar, admin_bundles_stats,
     admin_audio_music, admin_audio_music_detail, admin_audio_sfx, admin_audio_sfx_detail,
-    admin_apikeys_auto_repair,
+    admin_apikeys_auto_repair, admin_branding_watermark,
 )
 
 router = DefaultRouter()
@@ -136,4 +136,5 @@ urlpatterns = [
     path('admin/audio/music/<int:pk>/', admin_audio_music_detail),
     path('admin/audio/sfx/', admin_audio_sfx),
     path('admin/audio/sfx/<int:pk>/', admin_audio_sfx_detail),
+    path('admin/branding/watermark/', admin_branding_watermark),
 ]
