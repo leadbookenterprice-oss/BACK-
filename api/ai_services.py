@@ -112,8 +112,19 @@ def generar_html_desde_template(context, agente):
         portada_url = str(portada_val)
         
     import re as re_module
-    portada_url = re_module.sub(r'/s--[^/]+--/', '/', portada_url)
+    portada_url = re_module.sub(r's--[^/]+--/', '', portada_url)
     
+    if not portada_url or not portada_url.startswith('http'):
+        fotos = context.get('fotos_recorrido_raw', [])
+        if fotos:
+            primera = fotos[0]
+            if isinstance(primera, dict):
+                from api.services.almacenamiento import AlmacenamientoCloudinary
+                portada_url = AlmacenamientoCloudinary.obtener_url_foto(primera)
+                portada_url = re_module.sub(r's--[^/]+--/', '', portada_url)
+            else:
+                portada_url = str(primera)
+                
     print(f"[Template] Portada URL: {portada_url[:80] if portada_url else 'VACÍA'}")
     html = html.replace('{{FOTO_PORTADA}}', portada_url)
 

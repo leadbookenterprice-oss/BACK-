@@ -2950,8 +2950,6 @@ def descargar_pdf(request, listado_id):
         import requests as req
         import re
         
-        pdf_url = re.sub(r'/s--[^/]+--/', '/', pdf_url)
-        
         # Construir URL pública sin firma
         from api.services.almacenamiento import AlmacenamientoCloudinary
         creds, _ = AlmacenamientoCloudinary.get_mejor_cuenta()
@@ -2961,6 +2959,19 @@ def descargar_pdf(request, listado_id):
                 api_key=creds['api_key'],
                 api_secret=creds['api_secret']
             )
+
+        match = re.search(r'/raw/upload/(?:v\d+/)?(.+)', pdf_url)
+        if match:
+            public_id = match.group(1)
+            # Generar URL firmada con SDK
+            signed_url, _ = cloudinary.utils.cloudinary_url(
+                public_id,
+                resource_type='raw',
+                type='upload',
+                sign_url=True,
+                expires_at=int(__import__('time').time()) + 300
+            )
+            pdf_url = signed_url
         
         # Descargar usando requests con timeout
         r = req.get(pdf_url, timeout=30)
