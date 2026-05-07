@@ -256,6 +256,7 @@ GEMINI_API_KEY     = config('GEMINI_API_KEY', default='')
 GROQ_API_KEY       = config('GROQ_API_KEY', default='')
 ELEVENLABS_API_KEY = config('ELEVENLABS_API_KEY', default='')
 UPLOADPOST_API_KEY = config('UPLOADPOST_API_KEY', default='')
+NVIDIA_API_KEY     = config('NVIDIA_API_KEY', default='')
 
 # MercadoPago Configuration
 MP_ACCESS_TOKEN    = config('MP_ACCESS_TOKEN', default='')

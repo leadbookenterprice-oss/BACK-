@@ -92,6 +92,88 @@ def call_groq_api(prompt: str, **kwargs) -> str:
             raise
     raise RuntimeError(f"Groq sin modelos disponibles: {last_err}")
 
+@track_api_call(service='groq')
+def call_groq_html(prompt: str, system_prompt: str = "") -> str:
+    """Llama a Groq para generar HTML. Solo texto, sin imágenes."""
+    from api.models import APIKey
+    
+    key = settings.GROQ_API_KEY
+    pool_key = APIKey.objects.filter(servicio='groq', status='available').first()
+    if pool_key:
+        key = pool_key.api_key
+
+    if not key:
+        logger.error("No se encontró API Key para Groq")
+        return None
+
+    client = Groq(api_key=key)
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Error en call_groq_html: {e}")
+        return None
+
+@track_api_call(service='nvidia')
+def call_nvidia_html(prompt: str, system_prompt: str = "", imagen_url: str = None) -> str:
+    """Llama a NVIDIA NIM para generar HTML. Soporta imágenes via URL."""
+    from api.models import APIKey
+    
+    key = settings.NVIDIA_API_KEY
+    pool_key = APIKey.objects.filter(servicio='nvidia', status='available').first()
+    if pool_key:
+        key = pool_key.api_key
+
+    if not key:
+        logger.error("No se encontró API Key para NVIDIA")
+        return None
+
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json"
+    }
+
+    if imagen_url:
+        model = "nvidia/llama-3.2-90b-vision-instruct"
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"{system_prompt}\n\n{prompt}"},
+                        {"type": "image_url", "image_url": {"url": imagen_url}}
+                    ]
+                }
+            ],
+            "max_tokens": 4096
+        }
+    else:
+        model = "meta/llama-3.1-70b-instruct"
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 4096
+        }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
+        return response.json()['choices'][0]['message']['content']
+    except Exception as e:
+        logger.error(f"Error en call_nvidia_html: {e}")
+        return None
+
 def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
     import os
     import time
@@ -501,7 +583,30 @@ REGLAS TÉCNICAS:
                 continue
 
         if not html_output:
-            logger.error(f"Paso 2 falló con todos los modelos de la cascada. Último error: {last_error}")
+            logger.error(f"Paso 2 falló con todos los modelos de Gemini. Iniciando cascada de fallback (NVIDIA, Groq)...")
+            
+            # Intento con NVIDIA (Soporta imagen de portada)
+            try:
+                portada_url = context.get('portada_url')
+                print(f"[HTML] ▶ Paso 2 - Intentando con NVIDIA NIM (Multimodal)...")
+                html_output = call_nvidia_html(prompt_step2, imagen_url=portada_url)
+                if html_output:
+                    print(f"[HTML] ✅ Paso 2 exitoso con NVIDIA")
+            except Exception as e:
+                logger.error(f"Fallback NVIDIA falló: {e}")
+
+            # Último intento con Groq (Solo texto)
+            if not html_output:
+                try:
+                    print(f"[HTML] ▶ Paso 2 - Intentando con Groq (Llama 3.3)...")
+                    html_output = call_groq_html(prompt_step2)
+                    if html_output:
+                        print(f"[HTML] ✅ Paso 2 exitoso con Groq")
+                except Exception as e:
+                    logger.error(f"Fallback Groq falló: {e}")
+
+        if not html_output:
+            logger.error(f"Paso 2 falló con todos los modelos disponibles. Último error: {last_error}")
             return None
         
         print(f"[HTML] ✅ Paso 2 - Respuesta recibida en {time.time()-t3:.2f}s. Largo HTML: {len(html_output) if html_output else 0} chars")

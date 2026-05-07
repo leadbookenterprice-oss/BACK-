@@ -250,6 +250,7 @@ class APIKey(models.Model):
         ('uploadpost', 'Upload Post'),
         ('openai', 'OpenAI'),
         ('groq', 'Groq'),
+        ('nvidia', 'NVIDIA NIM'),
         ('anthropic', 'Anthropic'),
         ('stability', 'Stability AI'),
         ('replicate', 'Replicate'),
