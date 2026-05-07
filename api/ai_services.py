@@ -356,7 +356,7 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
         if context.get('portada_url'):
             add_image_part(context['portada_url'])
 
-        # Preparar watermark LeadBook (solo texto para ahorrar tokens)
+        # Preparar watermark LeadBook (texto puro para ahorrar tokens)
         watermark_html = '<div style="position:fixed;bottom:16px;right:16px;opacity:0.15;font-family:sans-serif;font-size:11px;color:#888;pointer-events:none;z-index:9999;">Generado con LeadBook</div>'
 
         # QR embed
