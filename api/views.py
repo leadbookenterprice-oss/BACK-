@@ -1220,12 +1220,50 @@ def generar_pdf(request):
 
         from django.template.loader import render_to_string
         from django.http import HttpResponse
+        from api.services.render_engine import render_html_to_pdf
+        from api.services.almacenamiento import AlmacenamientoCloudinary
         from api.ai_services import generar_html_gemini
+        from .models import Listado
 
         html_string = generar_html_gemini(context, request.user)
         if not html_string:
             print("[PDF] Fallback: Gemini falló, usando render_to_string estático")
             html_string = render_to_string('pdf/property_brochure_html.html', context)
+
+        # ─── Conversión a PDF Real con Playwright ────────────────────────────
+        pdf_url = None
+        try:
+            print(f"[PDF] Iniciando conversión Playwright para listado {listado_id_hint}...")
+            pdf_bytes = render_html_to_pdf(html_string)
+            if pdf_bytes:
+                print(f"[PDF] Conversión exitosa ({len(pdf_bytes)} bytes). Subiendo a Cloudinary...")
+                pdf_url = AlmacenamientoCloudinary.guardar_pdf(
+                    pdf_bytes, 
+                    user_id=request.user.id, 
+                    listado_id=listado_id_hint
+                )
+                
+                # Persistir la URL en el listado para el historial
+                if listado_id_hint and pdf_url:
+                    try:
+                        listado = Listado.objects.get(id=listado_id_hint)
+                        if not listado.datos: listado.datos = {}
+                        if 'resultados' not in listado.datos: listado.datos['resultados'] = {}
+                        
+                        # Guardamos ambos para que el frontend tenga fallback
+                        listado.datos['resultados']['pdf'] = {
+                            "html": html_string,
+                            "url": pdf_url
+                        }
+                        listado.save()
+                        print(f"[PDF] URL guardada en DB: {pdf_url}")
+                    except Listado.DoesNotExist:
+                        pass
+            else:
+                print("[PDF] Error: Playwright devolvió bytes vacíos.")
+        except Exception as pdf_err:
+            print(f"[PDF ERROR] Falló la conversión/subida: {pdf_err}")
+            # El fallback es seguir adelante con el HTML solo
 
         # ─── Limpiar archivos temporales de imágenes ─────────────────────────
         for f in temp_files:
@@ -1235,9 +1273,12 @@ def generar_pdf(request):
             except Exception:
                 pass
 
-        response = HttpResponse(html_string, content_type='text/html; charset=utf-8')
-        response['X-Frame-Options'] = 'ALLOWALL'
-        return response
+        # Devolvemos JSON para que el frontend maneje el preview y el link de descarga
+        return Response({
+            "html": html_string,
+            "url": pdf_url,
+            "listado_id": listado_id_hint
+        }, status=status.HTTP_200_OK)
 
     except GeminiQuotaExhaustedError as e:
         return Response({

@@ -2,7 +2,7 @@ import io
 import logging
 import os
 import json
-# from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -38,3 +38,27 @@ def render_html_to_image(html_content: str, width: int, height: int) -> io.Bytes
     output = io.BytesIO(screenshot_bytes)
     output.seek(0)
     return output
+
+def render_html_to_pdf(html_content: str) -> bytes:
+    """
+    Toma un string HTML y devuelve los bytes del PDF renderizado en formato A4.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True, 
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        )
+        page = browser.new_page()
+        try:
+            # networkidle es clave para asegurar que se carguen imágenes y fuentes antes de imprimir
+            page.set_content(html_content, wait_until="networkidle", timeout=30000)
+        except PlaywrightTimeoutError:
+            logger.warning("[Render Engine] Timeout esperando networkidle para PDF, procediendo de todas formas.")
+        except Exception as e:
+            logger.error(f"[Render Engine] Error cargando contenido para PDF: {e}")
+            
+        page.wait_for_timeout(1000) # Un segundo extra para asegurar renderizado de fuentes
+        pdf_bytes = page.pdf(format="A4", print_background=True)
+        browser.close()
+        
+    return pdf_bytes
