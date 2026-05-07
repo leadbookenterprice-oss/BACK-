@@ -106,3 +106,5 @@ daphne==4.0.0
 django-ratelimit==4.1.0
 openai-whisper
 playwright==1.42.0
+openai
+

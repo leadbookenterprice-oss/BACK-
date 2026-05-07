@@ -18,6 +18,41 @@ GEMINI_MODELS_CASCADE = [
     "gemini-2.5-flash-lite",
 ]
 
+# Cascada Paso 1 — solo texto, rápidos
+PASO1_CASCADE = [
+    ("groq", "llama-3.3-70b-versatile"),
+    ("nim", "moonshotai/kimi-k2-instruct"),
+    ("nim", "qwen/qwen3-coder-480b-a35b-instruct"),
+    ("nim", "mistralai/mistral-large-3-675b-instruct-2512"),
+    ("gemini", "gemini-2.5-flash-lite"),  # último fallback
+]
+
+# Cascada Paso 2 — multimodal primero, después texto puro
+PASO2_CASCADE = [
+    ("nim", "meta/llama-4-maverick-17b-128e-instruct"),
+    ("nim", "microsoft/phi-4-multimodal-instruct"),
+    ("nim", "google/gemma-3-27b-it"),
+    ("nim", "mistralai/devstral-2-123b-instruct-2512"),
+    ("nim", "mistralai/mistral-large-3-675b-instruct-2512"),
+    ("nim", "qwen/qwen3-coder-480b-a35b-instruct"),
+    ("groq", "llama-3.3-70b-versatile"),
+    ("gemini", "gemini-2.5-flash-lite"),  # último fallback
+]
+
+def _get_nvidia_key():
+    from api.models import APIKey
+    pool_key = APIKey.objects.filter(servicio='nvidia', status__in=['available', 'active']).first()
+    if pool_key:
+        return pool_key.api_key
+    return settings.NVIDIA_API_KEY
+
+def _get_groq_key():
+    from api.models import APIKey
+    pool_key = APIKey.objects.filter(servicio='groq', status__in=['available', 'active']).first()
+    if pool_key:
+        return pool_key.api_key
+    return settings.GROQ_API_KEY
+
 
 # Excepción especial para cuota mensual de Gemini agotada.
 # Los views la capturan y devuelven HTTP 429 con mensaje canonico.
@@ -95,13 +130,7 @@ def call_groq_api(prompt: str, **kwargs) -> str:
 @track_api_call(service='groq')
 def call_groq_html(prompt: str, system_prompt: str = "") -> str:
     """Llama a Groq para generar HTML. Solo texto, sin imágenes."""
-    from api.models import APIKey
-    
-    key = settings.GROQ_API_KEY
-    pool_key = APIKey.objects.filter(servicio='groq', status='available').first()
-    if pool_key:
-        key = pool_key.api_key
-
+    key = _get_groq_key()
     if not key:
         logger.error("No se encontró API Key para Groq")
         return None
@@ -120,59 +149,55 @@ def call_groq_html(prompt: str, system_prompt: str = "") -> str:
         logger.error(f"Error en call_groq_html: {e}")
         return None
 
-@track_api_call(service='nvidia')
-def call_nvidia_html(prompt: str, system_prompt: str = "", imagen_url: str = None) -> str:
-    """Llama a NVIDIA NIM para generar HTML. Soporta imágenes via URL."""
-    from api.models import APIKey
+@track_api_call(service='nim')
+def call_nim_model(prompt: str, model_id: str, imagen_url: str = None) -> str:
+    """
+    Llama a cualquier modelo de NVIDIA NIM.
+    Si imagen_url está presente y el modelo es multimodal, la incluye.
+    Endpoint: https://integrate.api.nvidia.com/v1/chat/completions
+    """
+    from openai import OpenAI
     
-    key = settings.NVIDIA_API_KEY
-    pool_key = APIKey.objects.filter(servicio='nvidia', status='available').first()
-    if pool_key:
-        key = pool_key.api_key
-
+    # Obtener key de pool o settings
+    key = _get_nvidia_key()
     if not key:
-        logger.error("No se encontró API Key para NVIDIA")
-        return None
-
-    url = "https://integrate.api.nvidia.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json"
-    }
-
-    if imagen_url:
-        model = "nvidia/llama-3.2-90b-vision-instruct"
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": f"{system_prompt}\n\n{prompt}"},
-                        {"type": "image_url", "image_url": {"url": imagen_url}}
-                    ]
-                }
-            ],
-            "max_tokens": 4096
-        }
+        raise Exception("No hay NVIDIA API Key disponible")
+    
+    client = OpenAI(
+        base_url="https://integrate.api.nvidia.com/v1",
+        api_key=key
+    )
+    
+    # Modelos multimodales que soportan imágenes
+    MULTIMODAL_MODELS = [
+        "meta/llama-4-maverick-17b-128e-instruct",
+        "microsoft/phi-4-multimodal-instruct", 
+        "google/gemma-3-27b-it",
+    ]
+    
+    if imagen_url and model_id in MULTIMODAL_MODELS:
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": imagen_url}}
+            ]
+        }]
     else:
-        model = "meta/llama-3.1-70b-instruct"
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 4096
-        }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        response.raise_for_status()
-        return response.json()['choices'][0]['message']['content']
-    except Exception as e:
-        logger.error(f"Error en call_nvidia_html: {e}")
-        return None
+        # Si el modelo no es multimodal pero tenemos imagen, la inyectamos como texto
+        msg_content = prompt
+        if imagen_url:
+            msg_content = f"Foto de portada (URL): {imagen_url}\n\n{prompt}"
+            
+        messages = [{"role": "user", "content": msg_content}]
+    
+    response = client.chat.completions.create(
+        model=model_id,
+        messages=messages,
+        max_tokens=8192,
+        temperature=0.7
+    )
+    return response.choices[0].message.content
 
 def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
     import os
@@ -417,87 +442,66 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
         print(f"[HTML] ▶ Paso 1 - Datos enviados: tipo={context.get('tipo_propiedad')}, ciudad={context.get('ciudad')}, amenidades={len(context.get('amenidades', []))} items")
         t1 = time.time()
         
-        print(f"[HTML] ▶ Paso 1 - Enviando request a gemini-2.5-flash-lite...")
-        def _call_step1():
-            return client.models.generate_content(
-                model='gemini-2.5-flash-lite',
-                contents=prompt_step1,
-            ).text.strip()
-
-        design_prompt = execute_with_gemini_retry(agente, _call_step1)
-        
-        print(f"[HTML] ✅ Paso 1 - Respuesta recibida en {time.time()-t1:.2f}s. Largo: {len(design_prompt) if design_prompt else 0} chars")
-        if design_prompt:
-            print(f"[HTML] ▶ Paso 1 - Primeros 100 chars: {design_prompt[:100]}")
-        else:
-            print(f"[HTML] ▶ Paso 1 falló - design_prompt vacío")
-            
-        logger.info(f"[HTML Gen] Paso 1 completado. Prompt creativo generado ({len(design_prompt)} chars).")
-
-        # ─── PASO 2: Generar HTML final con imágenes ─────────────────────────────
-        contents_step2 = []
-
-        print(f"[HTML] ▶ Paso 2 - Preparando imágenes...")
-        print(f"[HTML] ▶ Paso 2 - portada_url presente: {bool(context.get('portada_url'))}")
-        
-        # Helper para agregar imágenes base64 como partes nativas
-        def add_image_part(data_url):
-            if not data_url:
-                return
+        design_prompt = None
+        for provider, model_id in PASO1_CASCADE:
             try:
-                print(f"[HTML] ▶ Paso 2 - Descargando portada...")
-                t2 = time.time()
-                if data_url.startswith('data:'):
-                    header, b64_data = data_url.split(',', 1)
-                    mime = header.split(':')[1].split(';')[0]
-                    raw_bytes = base64.b64decode(b64_data)
-                    contents_step2.append(types.Part.from_bytes(data=raw_bytes, mime_type=mime))
-                    print(f"[HTML] ✅ Paso 2 - Portada decodificada (base64) en {time.time()-t2:.2f}s. Tamaño: {len(raw_bytes)} bytes")
-                elif data_url.startswith('http'):
-                    # URL remota: intentar descargar
-                    import requests as req_lib
-                    r = req_lib.get(data_url, timeout=8)
-                    if r.status_code == 200:
-                        mime = r.headers.get('Content-Type', 'image/jpeg').split(';')[0]
-                        contents_step2.append(types.Part.from_bytes(data=r.content, mime_type=mime))
-                        print(f"[HTML] ✅ Paso 2 - Portada descargada en {time.time()-t2:.2f}s. Tamaño: {len(r.content)} bytes")
-            except Exception as img_err:
-                logger.warning(f"No se pudo procesar imagen para Gemini: {img_err}")
+                print(f"[HTML] ▶ Paso 1 - Intentando con {provider} ({model_id})...")
+                if provider == "groq":
+                    design_prompt = call_groq_html(prompt_step1)
+                elif provider == "nim":
+                    design_prompt = call_nim_model(prompt_step1, model_id)
+                elif provider == "gemini":
+                    def _call_step1():
+                        return client.models.generate_content(
+                            model=model_id,
+                            contents=prompt_step1,
+                        ).text.strip()
+                    design_prompt = execute_with_gemini_retry(agente, _call_step1)
+                
+                if design_prompt:
+                    print(f"[HTML] ✅ Paso 1 exitoso con {provider} ({model_id})")
+                    break
+            except Exception as e:
+                error_msg = str(e).lower()
+                logger.warning(f"[HTML] ⚠️ Paso 1 - {provider} ({model_id}) falló: {e}")
+                if "per minute" in error_msg:
+                    print(f"[HTML] ⏳ Rate limit por minuto. Esperando 60s...")
+                    time.sleep(60)
+                continue
 
-        # Agregar imágenes en orden: SOLO portada va como imagen binaria nativa
-        if context.get('portada_url'):
-            add_image_part(context['portada_url'])
+        if not design_prompt:
+            logger.error("Paso 1 falló con todos los modelos de la cascada.")
+            return None
 
-        # Preparar watermark LeadBook (texto puro para ahorrar tokens)
-        watermark_html = '<div style="position:fixed;bottom:16px;right:16px;opacity:0.15;font-family:sans-serif;font-size:11px;color:#888;pointer-events:none;z-index:9999;">Generado con LeadBook</div>'
+        print(f"[HTML] ✅ Paso 1 finalizado en {time.time()-t1:.2f}s. Largo del prompt: {len(design_prompt)} chars")
+
+        # ─── PASO 2: Generar HTML final ──────────────────────────────────────────
+        contents_step2 = []
+        portada_url = context.get('portada_url')
+        
+        # Obtenemos la imagen de portada para Gemini
+        try:
+            portada_b64 = _get_portada_base64(context)
+            if portada_b64:
+                contents_step2.append(types.Part.from_bytes(
+                    data=base64.b64decode(portada_b64.split(',')[1]),
+                    mime_type="image/png"
+                ))
+                print(f"[HTML] ▶ Paso 2 - Imagen de portada adjunta para Gemini.")
+        except Exception as e:
+            print(f"[HTML] ⚠️ Error procesando imagen de portada para Gemini: {e}")
 
         # QR embed
         qr_code = context.get('qr_code', '')
         qr_img_tag = f'<img src="data:image/png;base64,{qr_code}" style="width:80px;height:80px;" alt="QR WhatsApp">' if qr_code else ''
         
         # URLs crudas (evitar enviar base64 enorme en el prompt de texto)
-        logo_url_str = context.get('logo_url_raw', '')
-        if logo_url_str.startswith('data:'):
-            logger.error("logo_url_raw es un base64. Descartando del prompt de texto.")
-            logo_url_str = ""
+        logo_url_str = context.get('agencia_logo_url', '') or context.get('logo_url', '')
+        watermark_html = context.get('watermark_html', '')
 
         fotos_recorrido = context.get('fotos_recorrido_raw', [])
-        fotos_limpias = []
-        for f in fotos_recorrido:
-            if f.startswith('data:'):
-                logger.error("Una foto de recorrido es base64. Descartando del prompt de texto.")
-            else:
-                fotos_limpias.append(f)
-                
+        fotos_limpias = [f for f in fotos_recorrido if not f.startswith('data:')]
         fotos_galeria_str = "\n".join(fotos_limpias[:5])
-
-        print(f"[DIAG] design_prompt: {len(design_prompt) if design_prompt else 0} chars")
-        print(f"[DIAG] descripcion: {len(context.get('descripcion', ''))} chars")
-        print(f"[DIAG] qr_img_tag: {len(qr_img_tag)} chars")
-        print(f"[DIAG] logo_url_str: {len(logo_url_str)} chars")
-        print(f"[DIAG] fotos_galeria_str: {len(fotos_galeria_str)} chars")
-        print(f"[DIAG] portada_url tipo: {str(context.get('portada_url', ''))[:50]}")
-        print(f"[DIAG] portada_url largo: {len(str(context.get('portada_url', '')))} chars")
 
         prompt_step2 = f"""CRÍTICO: GENERÁ EL HTML COMPLETO DE ARRIBA HACIA ABAJO SIN OMITIR NINGUNA SECCIÓN. 
 EL ORDEN ES OBLIGATORIO: 1)head+CSS 2)top-bar 3)hero 4)precio 5)stats 6)descripción 7)amenidades 8)galería 9)footer.
@@ -529,14 +533,14 @@ DATOS DEL AGENTE:
 - Teléfono: {context.get('agente_telefono', '')} | Email: {context.get('agente_email', '')}
 
 IMÁGENES:
-- Portada: La imagen adjunta binaria es la FOTO DE PORTADA y DEBE ser usada exclusivamente en el Hero Section como imagen de fondo. No uses ninguna URL de galería para el hero.
+- Portada: La imagen adjunta binaria o URL es la FOTO DE PORTADA y DEBE ser usada exclusivamente en el Hero Section como imagen de fondo. No uses ninguna URL de galería para el hero.
 - Logo Agencia (URL): {logo_url_str}
 - Galería (URLs):
 {fotos_galeria_str}
 
 GUÍA DE SECCIONES PREMIUM:
 1. TOP BAR: Logo alineado, diseño minimalista, sticky.
-2. HERO: Altura 500px, centrada, con un gradiente oscuro cinematográfico (bottom-to-top). Título de la propiedad impactante en tipografía Display grande. Badge de operación en color acento. La imagen de fondo DEBE ser la portada adjunta.
+2. HERO: Altura 500px, centrada, con un gradiente oscuro cinematográfico (bottom-to-top). Título de la propiedad impactante en tipografía Display grande. Badge de operación en color acento. La imagen de fondo DEBE ser la portada.
 3. PRECIO: Superpuesto elegantemente sobre el gradiente del hero o en una transición inmediata.
 4. STATS BAR: Fondo de color sólido (oscuro o acento). 5 columnas con ICONOS SVG INLINE únicos (house, bed, bath, ruler, car). Números en bold grande, etiquetas en uppercase pequeño.
 5. DESCRIPCIÓN: Fondo off-white sutil. Usá comillas decorativas gigantes (opacity 0.1) en color acento al inicio. Interlineado de 1.8 para máxima legibilidad.
@@ -553,57 +557,39 @@ REGLAS TÉCNICAS:
 
         contents_step2.append(prompt_step2)
 
-        print(f"[HTML] ▶ Paso 2 - Largo del prompt texto: {len(prompt_step2)} chars")
         print(f"[HTML] ▶ Paso 2 - Iniciando cascada de modelos...")
         t3 = time.time()
         
         html_output = None
         last_error = None
         
-        for model_name in GEMINI_MODELS_CASCADE:
-            print(f"[HTML] ▶ Paso 2 - Intentando con modelo: {model_name}...")
+        for provider, model_id in PASO2_CASCADE:
+            print(f"[HTML] ▶ Paso 2 - Intentando con {provider} ({model_id})...")
             try:
-                def _call_step2():
-                    return client.models.generate_content(
-                        model=model_name,
-                        contents=contents_step2,
-                    ).text.strip()
-
-                html_output = execute_with_gemini_retry(agente, _call_step2)
+                if provider == "nim":
+                    html_output = call_nim_model(prompt_step2, model_id, imagen_url=portada_url)
+                elif provider == "groq":
+                    p2_modified = f"Foto de portada (URL): {portada_url}\n\n{prompt_step2}"
+                    html_output = call_groq_html(p2_modified)
+                elif provider == "gemini":
+                    def _call_step2():
+                        return client.models.generate_content(
+                            model=model_id,
+                            contents=contents_step2,
+                        ).text.strip()
+                    html_output = execute_with_gemini_retry(agente, _call_step2)
+                
                 if html_output:
-                    print(f"[HTML] ✅ Paso 2 exitoso con modelo: {model_name}")
+                    print(f"[HTML] ✅ Paso 2 exitoso con {provider} ({model_id})")
                     break
-            except GeminiQuotaExhaustedError as e:
-                logger.warning(f"Modelo {model_name} agotado o con cuota insuficiente: {e}. Probando siguiente en cascada...")
-                last_error = e
-                continue
             except Exception as e:
-                logger.error(f"Error inesperado con modelo {model_name}: {e}. Intentando siguiente...")
+                error_msg = str(e).lower()
                 last_error = e
+                logger.warning(f"[HTML] ⚠️ Paso 2 - {provider} ({model_id}) falló: {e}")
+                if "per minute" in error_msg:
+                    print(f"[HTML] ⏳ Rate limit por minuto. Esperando 60s...")
+                    time.sleep(60)
                 continue
-
-        if not html_output:
-            logger.error(f"Paso 2 falló con todos los modelos de Gemini. Iniciando cascada de fallback (NVIDIA, Groq)...")
-            
-            # Intento con NVIDIA (Soporta imagen de portada)
-            try:
-                portada_url = context.get('portada_url')
-                print(f"[HTML] ▶ Paso 2 - Intentando con NVIDIA NIM (Multimodal)...")
-                html_output = call_nvidia_html(prompt_step2, imagen_url=portada_url)
-                if html_output:
-                    print(f"[HTML] ✅ Paso 2 exitoso con NVIDIA")
-            except Exception as e:
-                logger.error(f"Fallback NVIDIA falló: {e}")
-
-            # Último intento con Groq (Solo texto)
-            if not html_output:
-                try:
-                    print(f"[HTML] ▶ Paso 2 - Intentando con Groq (Llama 3.3)...")
-                    html_output = call_groq_html(prompt_step2)
-                    if html_output:
-                        print(f"[HTML] ✅ Paso 2 exitoso con Groq")
-                except Exception as e:
-                    logger.error(f"Fallback Groq falló: {e}")
 
         if not html_output:
             logger.error(f"Paso 2 falló con todos los modelos disponibles. Último error: {last_error}")
