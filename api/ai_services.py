@@ -432,7 +432,7 @@ REGLAS ESTRICTAS:
         print(f"[DEBUG HTML] Iniciando Paso 2...")
         def _call_step2():
             return client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-2.5-flash-lite',
                 contents=contents_step2,
             ).text.strip()
 
