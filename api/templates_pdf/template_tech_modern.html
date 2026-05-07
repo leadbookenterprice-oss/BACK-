@@ -98,10 +98,7 @@ body { font-family: 'Space Grotesk', sans-serif; background: #080c10; color: #e8
 <div class="galeria">
   <div class="section-title">// Galería</div>
   <div class="galeria-grid">
-    {{#if FOTO_1}}<img class="galeria-foto" src="{{FOTO_1}}" alt="">{{/if}}
-    {{#if FOTO_2}}<img class="galeria-foto" src="{{FOTO_2}}" alt="">{{/if}}
-    {{#if FOTO_3}}<img class="galeria-foto" src="{{FOTO_3}}" alt="">{{/if}}
-    {{#if FOTO_4}}<img class="galeria-foto" src="{{FOTO_4}}" alt="">{{/if}}
+    {{GALERIA_FOTOS}}
   </div>
 </div>
 <div class="footer">

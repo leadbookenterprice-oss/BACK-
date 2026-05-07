@@ -2946,17 +2946,34 @@ def descargar_pdf(request, listado_id):
             return redirect(absolute_url)
 
         # Petición interna a Cloudinary
-        response = requests.get(pdf_url, timeout=30)
+        import cloudinary
+        import requests as req
+        import re
         
-        if response.status_code != 200:
+        pdf_url = re.sub(r'/s--[^/]+--/', '/', pdf_url)
+        
+        # Construir URL pública sin firma
+        from api.services.almacenamiento import AlmacenamientoCloudinary
+        creds, _ = AlmacenamientoCloudinary.get_mejor_cuenta()
+        if creds:
+            cloudinary.config(
+                cloud_name=creds['cloud_name'],
+                api_key=creds['api_key'],
+                api_secret=creds['api_secret']
+            )
+        
+        # Descargar usando requests con timeout
+        r = req.get(pdf_url, timeout=30)
+        if r.status_code == 200:
+            from django.http import HttpResponse
+            response = HttpResponse(r.content, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
+            response['Access-Control-Allow-Origin'] = '*'
+            return response
+        else:
             return Response({
-                "error": f"Cloudinary respondió con error {response.status_code}"
+                "error": f"Cloudinary respondió con error {r.status_code}"
             }, status=status.HTTP_502_BAD_GATEWAY)
-
-        from django.http import HttpResponse
-        django_response = HttpResponse(response.content, content_type='application/pdf')
-        django_response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
-        return django_response
 
     except Listado.DoesNotExist:
         return Response({"error": "Listado no encontrado"}, status=404)

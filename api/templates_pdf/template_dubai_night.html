@@ -143,10 +143,7 @@ body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
 <div class="galeria">
   <div class="section-title">Galería</div>
   <div class="galeria-grid">
-    {{#if FOTO_1}}<img class="galeria-foto" src="{{FOTO_1}}" alt="Foto 1">{{/if}}
-    {{#if FOTO_2}}<img class="galeria-foto" src="{{FOTO_2}}" alt="Foto 2">{{/if}}
-    {{#if FOTO_3}}<img class="galeria-foto" src="{{FOTO_3}}" alt="Foto 3">{{/if}}
-    {{#if FOTO_4}}<img class="galeria-foto" src="{{FOTO_4}}" alt="Foto 4">{{/if}}
+    {{GALERIA_FOTOS}}
   </div>
 </div>
 

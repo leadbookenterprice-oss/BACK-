@@ -110,22 +110,27 @@ def generar_html_desde_template(context, agente):
         portada_url = AlmacenamientoCloudinary.obtener_url_foto(portada_val)
     else:
         portada_url = str(portada_val)
+        
+    import re as re_module
+    portada_url = re_module.sub(r'/s--[^/]+--/', '/', portada_url)
+    
     print(f"[Template] Portada URL: {portada_url[:80] if portada_url else 'VACÍA'}")
     html = html.replace('{{FOTO_PORTADA}}', portada_url)
+
     
     # 8. Fotos de galería
     fotos = context.get('fotos_recorrido_raw', [])
-    for i, foto_url in enumerate(fotos[:4], 1):
-        if isinstance(foto_url, dict):
+    galeria_html = ''
+    for i, foto in enumerate(fotos):
+        if isinstance(foto, dict) and 'public_id' in foto:
             from api.services.almacenamiento import AlmacenamientoCloudinary
-            foto_url = AlmacenamientoCloudinary.obtener_url_foto(foto_url)
-        html = html.replace(f'{{{{#if FOTO_{i}}}}}', '')
-        html = html.replace(f'{{{{FOTO_{i}}}}}', str(foto_url or ''))
-        html = re.sub(r'\{\{/if\}\}', '', html, count=1)
-    
-    # Limpiar placeholders de fotos no usadas
-    for i in range(len(fotos)+1, 5):
-        html = re.sub(rf'\{{{{#if FOTO_{i}\}}}}.*?\{{{{/if\}}}}', '', html, flags=re.DOTALL)
+            foto_url = AlmacenamientoCloudinary.obtener_url_foto(foto)
+        else:
+            foto_url = str(foto)
+        if foto_url:
+            galeria_html += f'<img class="galeria-foto" src="{foto_url}" alt="Foto {i+1}">\n'
+
+    html = html.replace('{{GALERIA_FOTOS}}', galeria_html)
     
     # 9. Amenidades — generar chips HTML (ANTES DE LIMPIAR)
     amenidades = context.get('amenidades', [])
