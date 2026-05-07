@@ -392,6 +392,14 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
         logo_url_str = context.get('logo_url_raw', '')
         fotos_galeria_str = "\n".join(context.get('fotos_recorrido_raw', [])[:5])
 
+        print(f"[DIAG] design_prompt: {len(design_prompt) if design_prompt else 0} chars")
+        print(f"[DIAG] descripcion: {len(context.get('descripcion', ''))} chars")
+        print(f"[DIAG] qr_img_tag: {len(qr_img_tag)} chars")
+        print(f"[DIAG] logo_url_str: {len(logo_url_str)} chars")
+        print(f"[DIAG] fotos_galeria_str: {len(fotos_galeria_str)} chars")
+        print(f"[DIAG] portada_url tipo: {str(context.get('portada_url', ''))[:50]}")
+        print(f"[DIAG] portada_url largo: {len(str(context.get('portada_url', '')))} chars")
+
         prompt_step2 = f"""Sos un desarrollador frontend experto. Generá un HTML puro y autónomo para una ficha inmobiliaria premium.
 
 DISEÑO A IMPLEMENTAR (seguilo ESTRICTAMENTE):
