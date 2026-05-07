@@ -88,37 +88,22 @@ def mi_uso_apis(request):
             })
         
     bundle = assignment.bundle
-
-    # Construcción del mapa de keys: bundle como base, key directa tiene prioridad
-    # ── Para cada servicio, si el admin asignó una key directamente al usuario
-    #    (APIKey.assigned_to = user), esa key tiene prioridad sobre la del bundle.
-    def _get_effective_key(servicio, bundle_key):
-        """Devuelve la key directamente asignada al usuario si existe, sino la del bundle."""
-        directa = APIKey.objects.filter(
-            assigned_to=user,
-            servicio=servicio,
-            status__in=['available', 'assigned', 'exhausted']
-        ).order_by('-assigned_at', '-id').first()
-        return directa if directa else bundle_key
-
-    keys_efectivas = {
-        'gemini':      _get_effective_key('gemini',      bundle.key_gemini),
-        'elevenlabs':  _get_effective_key('elevenlabs',  bundle.key_elevenlabs),
-        'uploadpost':  _get_effective_key('uploadpost',  bundle.key_uploadpost),
+    
+    # 2. Buscar si hay una key asignada directamente al usuario (ej. desde Admin Dashboard)
+    key_gemini_directa = APIKey.objects.filter(assigned_to=user, servicio='gemini').order_by('-assigned_at', '-id').first()
+    
+    keys = {
+        'gemini': key_gemini_directa if key_gemini_directa else bundle.key_gemini,
+        'elevenlabs': bundle.key_elevenlabs,
+        'uploadpost': bundle.key_uploadpost
     }
-
-    for servicio, key in keys_efectivas.items():
+    
+    for servicio, key in keys.items():
         if not key:
             continue
-
-        # Límite: monthly_limit si existe y > 0, sino daily_limit * 30, sino el default
-        if key.monthly_limit and key.monthly_limit > 0:
-            limite = key.monthly_limit
-        elif key.daily_limit and key.daily_limit > 0:
-            limite = key.daily_limit * 30
-        else:
-            limite = DEFAULT_LIMITS.get(servicio, 100)
-
+            
+        limite = key.monthly_limit or (key.daily_limit * 30 if getattr(key, 'daily_limit', None) else DEFAULT_LIMITS.get(servicio, 100))
+        
         # ELEVENLABS: Tiempo real 100%
         if servicio == 'elevenlabs':
             try:
@@ -132,11 +117,11 @@ def mi_uso_apis(request):
                     consumido = key.requests_this_month
             except Exception:
                 consumido = key.requests_this_month
-
+                
             porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
             if key.status in ['exhausted', 'dead']:
                 porcentaje = 100
-                consumido = limite
+                consumido = limite # Para que se vea coherente
 
             stats.append({
                 "servicio": "elevenlabs",
@@ -147,18 +132,18 @@ def mi_uso_apis(request):
                 "porcentaje": porcentaje,
                 "status": key.status
             })
-
+            
         # GEMINI / UPLOADPOST: Conteo Interno
         else:
             consumido = key.requests_this_month
             nombre_display = "Generación de Contenido IA" if servicio == 'gemini' else "Gestor de Redes"
             unidad_display = "peticiones" if servicio == 'gemini' else "publicaciones"
-
+            
             porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
             if key.status in ['exhausted', 'dead']:
                 porcentaje = 100
-                consumido = limite
-
+                consumido = limite # Para que se vea coherente
+                
             stats.append({
                 "servicio": servicio,
                 "nombre": nombre_display,
@@ -168,7 +153,7 @@ def mi_uso_apis(request):
                 "porcentaje": porcentaje,
                 "status": key.status
             })
-
+            
     return Response({
         "success": True,
         "bundle_nombre": bundle.nombre,
