@@ -1129,6 +1129,12 @@ def generar_pdf(request):
 
     try:
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        
+        print(f"[PAYLOAD] portadaUrl tipo: {type(data.get('portadaUrl')).__name__} | valor: {str(data.get('portadaUrl', ''))[:80]}")
+        print(f"[PAYLOAD] fotosRecorrido tipo: {type(data.get('fotosRecorrido')).__name__} | largo: {len(data.get('fotosRecorrido', []))}")
+        if data.get('fotosRecorrido'):
+            primera = data['fotosRecorrido'][0]
+            print(f"[PAYLOAD] primera foto tipo: {type(primera).__name__} | valor: {str(primera)[:80]}")
 
         context, temp_files, listado_id_hint, tipo_propiedad, ciudad = construir_contexto_pdf(data, request.user, request)
 
