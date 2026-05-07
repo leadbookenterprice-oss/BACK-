@@ -320,6 +320,7 @@ El prompt debe especificar en detalle:
 Devolvé SOLO el prompt de diseño (texto plano, sin markdown, sin explicaciones adicionales).
 Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe ser único y diferente cada vez."""
 
+        print(f"[DEBUG HTML] Iniciando Paso 1...")
         def _call_step1():
             return client.models.generate_content(
                 model='gemini-2.5-flash-lite',
@@ -327,6 +328,10 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
             ).text.strip()
 
         design_prompt = execute_with_gemini_retry(agente, _call_step1)
+        print(f"[DEBUG HTML] Respuesta Paso 1: {repr(design_prompt[:200] if design_prompt else 'NONE')}")
+        if not design_prompt:
+            print(f"[DEBUG HTML] Paso 1 falló - design_prompt vacío")
+            
         logger.info(f"[HTML Gen] Paso 1 completado. Prompt creativo generado ({len(design_prompt)} chars).")
 
         # ─── PASO 2: Generar HTML final con imágenes ─────────────────────────────
@@ -424,6 +429,7 @@ REGLAS ESTRICTAS:
 
         contents_step2.append(prompt_step2)
 
+        print(f"[DEBUG HTML] Iniciando Paso 2...")
         def _call_step2():
             return client.models.generate_content(
                 model='gemini-2.5-flash',
@@ -444,6 +450,7 @@ REGLAS ESTRICTAS:
         return html_output.strip()
 
     except Exception as e:
+        print(f"[DEBUG HTML] Excepción: {repr(e)}")
         # execute_with_gemini_retry ya manejó el 429 correctamente
         logger.error(f"Error en generar_html_gemini: {e}")
         return None
