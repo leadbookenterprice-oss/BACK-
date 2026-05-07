@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --acento: #00F5D4; }
+body { width: 1080px; height: 1350px; background: #080c10; font-family: 'Space Grotesk', sans-serif; color: #e8edf2; overflow: hidden; position: relative; }
+.bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; filter: brightness(0.65) saturate(0.9); }
+.overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(8,12,16,0.98) 0%, rgba(8,12,16,0.6) 45%, rgba(8,12,16,0.15) 100%); z-index: 2; }
+.accent-line { position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--acento); z-index: 10; }
+.content { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; justify-content: space-between; padding: 72px; }
+/* TOP */
+.top { display: flex; justify-content: space-between; align-items: flex-start; }
+.badge { background: transparent; border: 1px solid var(--acento); color: var(--acento); font-family: 'Space Mono', monospace; font-size: 20px; letter-spacing: 4px; padding: 12px 28px; text-transform: uppercase; }
+.logo { max-width: 180px; max-height: 70px; object-fit: contain; filter: brightness(0) invert(1); }
+/* BOTTOM */
+.bottom { display: flex; flex-direction: column; gap: 20px; }
+.ciudad { font-family: 'Space Mono', monospace; font-size: 14px; color: var(--acento); letter-spacing: 5px; text-transform: uppercase; }
+.titulo { font-family: 'Space Grotesk', sans-serif; font-size: 96px; font-weight: 700; line-height: 0.92; letter-spacing: -2px; color: #fff; }
+.precio-box { display: inline-block; align-self: flex-start; background: rgba(0,245,212,0.1); border: 1px solid var(--acento); padding: 14px 28px; font-family: 'Space Mono', monospace; font-size: 36px; font-weight: 700; color: var(--acento); }
+.stats { display: flex; gap: 1px; background: rgba(0,245,212,0.1); }
+.stat { flex: 1; background: #0d1117; padding: 18px 16px; text-align: center; }
+.stat-val { font-family: 'Space Mono', monospace; font-size: 34px; font-weight: 700; color: var(--acento); line-height: 1; }
+.stat-lbl { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-top: 4px; }
+.agent-row { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(0,245,212,0.3); padding-top: 20px; }
+.agent-name { font-family: 'Space Grotesk', sans-serif; font-size: 26px; font-weight: 700; color: #fff; }
+.agent-sub { font-family: 'Space Mono', monospace; font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-top: 4px; }
+.agent-phone { font-family: 'Space Mono', monospace; font-size: 18px; color: rgba(255,255,255,0.5); margin-top: 4px; }
+.qr-block { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.qr-block img { width: 100px; height: 100px; border: 2px solid var(--acento); padding: 4px; background: white; }
+.qr-lbl { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.2); }
+.watermark { position: fixed; bottom: 18px; right: 20px; width: 100px; opacity: 0.13; pointer-events: none; z-index: 9999; }
+</style>
+</head>
+<body>
+<div class="accent-line"></div>
+{% if portada_url %}<img src="{{ portada_url }}" class="bg">{% endif %}
+<div class="overlay"></div>
+<div class="content">
+  <div class="top">
+    <div class="badge">{{ operacion }}</div>
+    {% if logo_url %}<img src="{{ logo_url }}" class="logo">{% else %}<div></div>{% endif %}
+  </div>
+  <div class="bottom">
+    <div class="ciudad">{{ ciudad }}</div>
+    <div class="titulo">{{ titulo }}</div>
+    <div class="precio-box">{{ moneda }} {{ precio }}</div>
+    {% if caracteristicas %}
+    <div class="stats">
+      {% for s in caracteristicas|slice:":4" %}
+      <div class="stat"><div class="stat-val">{{ s.valor }}</div><div class="stat-lbl">{{ s.label }}</div></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="agent-row">
+      <div>
+        <div class="agent-name">{{ agente_nombre }}</div>
+        <div class="agent-sub">{{ agencia_nombre }}</div>
+        <div class="agent-phone">{{ agente_telefono }}</div>
+      </div>
+      {% if qr_url %}<div class="qr-block"><img src="{{ qr_url }}"><div class="qr-lbl">Contactar</div></div>{% endif %}
+    </div>
+  </div>
+</div>
+<img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+</body>
+</html>

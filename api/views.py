@@ -1351,7 +1351,19 @@ def generar_imagen_post(request):
         context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
 
         # Renderizar HTML y luego convertir a imagen PNG con Playwright
-        html_content = render_to_string('renders/post.html', context)
+        TEMPLATES_POST = [
+            'renders/post_dubai_night.html',
+            'renders/post_beverly_hills.html',
+            'renders/post_manhattan.html',
+            'renders/post_mediterraneo.html',
+            'renders/post_tech_modern.html',
+        ]
+        import random
+        listado_id_val = data.get('listado_id')
+        rng = random.Random(int(listado_id_val) if listado_id_val else 0)
+        template_post = rng.choice(TEMPLATES_POST)
+        html_content = render_to_string(template_post, context)
+        print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
         # Generar caption con IA (con fallback)

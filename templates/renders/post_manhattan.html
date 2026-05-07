@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;700&family=Source+Serif+4:wght@300;400&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --acento: #E63946; }
+body { width: 1080px; height: 1350px; background: #f5f5f3; font-family: 'Oswald', sans-serif; color: #111; overflow: hidden; position: relative; }
+.bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; filter: contrast(1.05); }
+.overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(0,0,0,0.97) 0%, rgba(0,0,0,0.55) 45%, rgba(0,0,0,0.1) 100%); z-index: 2; }
+.content { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; justify-content: space-between; padding: 0; }
+/* TOP */
+.top { display: flex; justify-content: space-between; align-items: center; padding: 48px 64px; background: rgba(0,0,0,0.5); }
+.badge { background: var(--acento); color: #fff; font-family: 'Oswald', sans-serif; font-size: 24px; font-weight: 700; letter-spacing: 4px; padding: 12px 28px; text-transform: uppercase; }
+.logo { max-width: 180px; max-height: 70px; object-fit: contain; filter: brightness(0) invert(1); }
+/* BOTTOM */
+.bottom { display: flex; flex-direction: column; gap: 0; }
+.text-block { padding: 40px 64px; }
+.ciudad { font-family: 'Oswald', sans-serif; font-size: 16px; color: var(--acento); letter-spacing: 5px; text-transform: uppercase; font-weight: 400; margin-bottom: 12px; }
+.titulo { font-family: 'Oswald', sans-serif; font-size: 100px; font-weight: 700; line-height: 0.92; color: #fff; text-transform: uppercase; letter-spacing: 2px; }
+.precio-bar { background: var(--acento); padding: 20px 64px; display: flex; align-items: baseline; gap: 16px; }
+.precio-lbl { font-size: 14px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.7); font-weight: 300; }
+.precio-val { font-family: 'Oswald', sans-serif; font-size: 44px; font-weight: 700; color: #fff; }
+.stats { display: flex; gap: 1px; background: #f5f5f3; }
+.stat { flex: 1; background: #111; padding: 22px 16px; text-align: center; }
+.stat-val { font-family: 'Oswald', sans-serif; font-size: 38px; font-weight: 700; color: var(--acento); line-height: 1; }
+.stat-lbl { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-top: 4px; }
+.agent-row { background: #111; display: flex; justify-content: space-between; align-items: center; padding: 28px 64px; border-top: 3px solid var(--acento); }
+.agent-name { font-family: 'Oswald', sans-serif; font-size: 26px; color: var(--acento); letter-spacing: 2px; text-transform: uppercase; }
+.agent-sub { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-top: 4px; }
+.agent-phone { font-size: 18px; color: rgba(255,255,255,0.7); margin-top: 4px; }
+.qr-block { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.qr-block img { width: 100px; height: 100px; border: 2px solid var(--acento); padding: 4px; background: white; }
+.qr-lbl { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); }
+.watermark { position: fixed; bottom: 18px; right: 20px; width: 100px; opacity: 0.13; pointer-events: none; z-index: 9999; }
+</style>
+</head>
+<body>
+{% if portada_url %}<img src="{{ portada_url }}" class="bg">{% endif %}
+<div class="overlay"></div>
+<div class="content">
+  <div class="top">
+    <div class="badge">{{ operacion }}</div>
+    {% if logo_url %}<img src="{{ logo_url }}" class="logo">{% else %}<div></div>{% endif %}
+  </div>
+  <div class="bottom">
+    <div class="text-block">
+      <div class="ciudad">{{ ciudad }}</div>
+      <div class="titulo">{{ titulo }}</div>
+    </div>
+    <div class="precio-bar"><span class="precio-lbl">Precio</span><span class="precio-val">{{ moneda }} {{ precio }}</span></div>
+    {% if caracteristicas %}
+    <div class="stats">
+      {% for s in caracteristicas|slice:":4" %}
+      <div class="stat"><div class="stat-val">{{ s.valor }}</div><div class="stat-lbl">{{ s.label }}</div></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="agent-row">
+      <div>
+        <div class="agent-name">{{ agente_nombre }}</div>
+        <div class="agent-sub">{{ agencia_nombre }}</div>
+        <div class="agent-phone">{{ agente_telefono }}</div>
+      </div>
+      {% if qr_url %}<div class="qr-block"><img src="{{ qr_url }}"><div class="qr-lbl">Contactar</div></div>{% endif %}
+    </div>
+  </div>
+</div>
+<img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+</body>
+</html>
