@@ -2919,35 +2919,13 @@ def proxy_pdf_view(request, listado_id):
         return Response({"error": str(e)}, status=500)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def descargar_pdf(request, listado_id):
-    from rest_framework_simplejwt.tokens import AccessToken
-    from rest_framework_simplejwt.exceptions import TokenError
-    
-    # Autenticar via query param ?token=... o header Authorization
-    token_str = request.GET.get('token')
-    user = None
-    if token_str:
-        try:
-            token = AccessToken(token_str)
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            user = User.objects.get(id=token['user_id'])
-        except (TokenError, Exception):
-            pass
-    
-    if not user and request.user.is_authenticated:
-        user = request.user
-        
-    if not user:
-        from django.http import HttpResponse
-        return HttpResponse('No autorizado', status=401)
-        
     try:
         from .models import Listado
         from django.http import HttpResponse
         from django.shortcuts import get_object_or_404
-        listado = get_object_or_404(Listado, id=listado_id, agente=user)
+        listado = get_object_or_404(Listado, id=listado_id, agente=request.user)
         datos = listado.datos or {}
         pdf_data = datos.get('resultados', {}).get('pdf', {})
         html_content = pdf_data.get('html', '') if isinstance(pdf_data, dict) else ''
