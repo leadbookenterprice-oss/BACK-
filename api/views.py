@@ -226,12 +226,13 @@ import concurrent.futures
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_guion(request):
-    if not puede_generar(request.user, 'ai'):
-        return Response({
-            "error": "limite_alcanzado", 
-            "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
-            "upgrade_url": "/precios"
-        }, status=status.HTTP_403_FORBIDDEN)
+    # TODO: re-habilitar cuando el sistema de planes esté estable
+    # if not puede_generar(request.user, 'ai'):
+    #     return Response({
+    #         "error": "limite_alcanzado", 
+    #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+    #         "upgrade_url": "/precios"
+    #     }, status=status.HTTP_403_FORBIDDEN)
 
     data = request.data
     tipo_video = data.get('tipoVideo', 'reel')
@@ -358,12 +359,13 @@ RESPONDE SOLO JSON, SIN PREAMBLE."""
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_listado(request):
-    if not puede_generar(request.user, 'ai'):
-        return Response({
-            "error": "limite_alcanzado", 
-            "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
-            "upgrade_url": "/precios"
-        }, status=status.HTTP_403_FORBIDDEN)
+    # TODO: re-habilitar cuando el sistema de planes esté estable
+    # if not puede_generar(request.user, 'ai'):
+    #     return Response({
+    #         "error": "limite_alcanzado", 
+    #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+    #         "upgrade_url": "/precios"
+    #     }, status=status.HTTP_403_FORBIDDEN)
             
     prompt_text = request.data.get("prompt", "")
     if not prompt_text:
@@ -633,12 +635,13 @@ def generar_carrusel(request):
     """Genera 5 imágenes de carrusel y un caption con Gemini."""
     try:
         user = request.user
-        if not puede_generar(user, 'image'):
-             return Response({
-                "error": "limite_alcanzado", 
-                "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
-                "upgrade_url": "/precios"
-            }, status=status.HTTP_403_FORBIDDEN)
+        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # if not puede_generar(user, 'image'):
+        #      return Response({
+        #         "error": "limite_alcanzado", 
+        #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+        #         "upgrade_url": "/precios"
+        #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
         fotos = data.get('fotosRecorrido', [])
@@ -829,15 +832,15 @@ class ListadosView(APIView):
         from .models import Agent
         user = Agent.objects.get(id=request.user.id)
         
-        # Verificar limites de plan (Nuevo sistema)
-        puede, usados, maximo = verificar_limite_plan(user)
-        if not puede:
-            return Response({
-                "error": f"Alcanzaste el límite de tu plan ({usados}/{maximo} listados este mes). Actualizá tu plan para continuar.",
-                "limite_alcanzado": True,
-                "usados": usados,
-                "maximo": maximo
-            }, status=403)
+        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # puede, usados, maximo = verificar_limite_plan(user)
+        # if not puede:
+        #     return Response({
+        #         "error": f"Alcanzaste el límite de tu plan ({usados}/{maximo} listados este mes). Actualizá tu plan para continuar.",
+        #         "limite_alcanzado": True,
+        #         "usados": usados,
+        #         "maximo": maximo
+        #     }, status=403)
             
         data = request.data
         
@@ -846,8 +849,9 @@ class ListadosView(APIView):
         if not isinstance(payload, dict):
             payload = {}
             
-        if not puede_generar(user, 'property'):
-            return Response({"error": "limite_alcanzado", "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción."}, status=status.HTTP_403_FORBIDDEN)
+        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # if not puede_generar(user, 'property'):
+        #     return Response({"error": "limite_alcanzado", "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción."}, status=status.HTTP_403_FORBIDDEN)
         
         titulo = payload.get('titulo') or f"Propiedad en {payload.get('ciudad', 'Desconocida')}"
         tipo_propiedad = payload.get('tipoPropiedad', payload.get('tipo_propiedad', ''))
@@ -1120,12 +1124,13 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_pdf(request):
-    if not puede_generar(request.user, 'property'):
-        return Response({
-            "error": "limite_alcanzado",
-            "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
-            "upgrade_url": "/precios"
-        }, status=status.HTTP_403_FORBIDDEN)
+    # TODO: re-habilitar cuando el sistema de planes esté estable
+    # if not puede_generar(request.user, 'property'):
+    #     return Response({
+    #         "error": "limite_alcanzado",
+    #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+    #         "upgrade_url": "/precios"
+    #     }, status=status.HTTP_403_FORBIDDEN)
 
     try:
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
@@ -1173,12 +1178,13 @@ def generar_pdf(request):
 def generar_imagen_post(request):
     """Genera imagen POST y la sube a Cloudinary"""
     try:
-        if not puede_generar(request.user, 'image'):
-            return Response({
-                "error": "limite_alcanzado", 
-                "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
-                "upgrade_url": "/precios"
-            }, status=status.HTTP_403_FORBIDDEN)
+        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # if not puede_generar(request.user, 'image'):
+        #     return Response({
+        #         "error": "limite_alcanzado", 
+        #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+        #         "upgrade_url": "/precios"
+        #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
         
@@ -1251,12 +1257,13 @@ def generar_imagen_post(request):
 def generar_imagen_story(request):
     """Genera imagen Story, la sube a Cloudinary y devuelve también Base64 como respaldo"""
     try:
-        if not puede_generar(request.user, 'image'):
-            return Response({
-                "error": "limite_alcanzado",
-                "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
-                "upgrade_url": "/precios"
-            }, status=status.HTTP_403_FORBIDDEN)
+        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # if not puede_generar(request.user, 'image'):
+        #     return Response({
+        #         "error": "limite_alcanzado",
+        #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+        #         "upgrade_url": "/precios"
+        #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
         
@@ -1327,12 +1334,13 @@ def generar_imagen_story(request):
 @permission_classes([IsAuthenticated])
 def generar_email(request):
     try:
-        if not puede_generar(request.user, 'ai'):
-            return Response({
-                "error": "limite_alcanzado", 
-                "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
-                "upgrade_url": "/precios"
-            }, status=status.HTTP_403_FORBIDDEN)
+        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # if not puede_generar(request.user, 'ai'):
+        #     return Response({
+        #         "error": "limite_alcanzado", 
+        #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+        #         "upgrade_url": "/precios"
+        #     }, status=status.HTTP_403_FORBIDDEN)
             
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
         
