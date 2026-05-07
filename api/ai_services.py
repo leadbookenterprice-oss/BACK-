@@ -22,31 +22,14 @@ def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
     client = genai.Client(api_key=key)
     system_prompt = kwargs.get('system_prompt', '')
     full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-    
-    try:
-        response = client.models.generate_content(
+
+    def _call():
+        return client.models.generate_content(
             model='gemini-2.5-flash-lite',
             contents=full_prompt,
-        )
-        return response.text
-    except Exception as e:
-        error_msg = str(e).lower()
-        if '429' in error_msg or 'quota' in error_msg or 'exhausted' in error_msg:
-            if agente:
-                try:
-                    from api.pool_manager import get_api_key
-                    from api.models import APIKey
-                    key_str = get_api_key(agente, 'gemini')
-                    if key_str:
-                        k = APIKey.objects.filter(api_key=key_str).first()
-                        if k:
-                            k.status = 'exhausted'
-                            k.requests_this_month = k.monthly_limit or 1500
-                            k.save()
-                except Exception as ex:
-                    logger.error(f"Error marcando Gemini como agotada: {ex}")
-            raise Exception("Llegaste al límite mensual de tu API de Inteligencia Artificial (Gemini).")
-        raise e
+        ).text
+
+    return execute_with_gemini_retry(agente, _call)
 
 def call_groq_api(prompt: str, **kwargs) -> str:
     """
@@ -204,7 +187,7 @@ def _get_leadbook_watermark_b64():
         return None
 
 
-def _mark_gemini_exhausted(agente):
+def _mark_gemini_exhausted(agente, is_monthly=False):
     """Marca la key de Gemini del agente como agotada en la DB."""
     try:
         from api.pool_manager import get_api_key
@@ -214,10 +197,57 @@ def _mark_gemini_exhausted(agente):
             k = APIKey.objects.filter(api_key=key_str).first()
             if k:
                 k.status = 'exhausted'
+                if is_monthly:
+                    k.is_monthly_exhausted = True
                 k.requests_this_month = k.monthly_limit or 1500
                 k.save()
     except Exception as ex:
         logger.error(f"Error marcando Gemini como agotada: {ex}")
+
+def execute_with_gemini_retry(agente, operation, max_retries=3):
+    """
+    Ejecuta una operación de Gemini con manejo inteligente de errores 429.
+    Distingue entre rate limits por minuto y cuota mensual agotada.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return operation()
+        except Exception as e:
+            error_msg = str(e).lower()
+            original_error_msg = str(e)
+            
+            if '429' in error_msg or 'quota' in error_msg or 'exhausted' in error_msg:
+                # 1. Error mensual/diario (Agotamiento real)
+                is_monthly = any(term in original_error_msg for term in [
+                    'GenerateRequestsPerDayPerProjectPerModel',
+                    'generate_content_free_tier_requests',
+                    'limit: 0'
+                ])
+                
+                # 2. Error por minuto (Rate limit)
+                is_minute = any(term in original_error_msg for term in [
+                    'GenerateContentInputTokensPerModelPerMinute',
+                    'GenerateRequestsPerMinutePerProjectPerModel'
+                ])
+                
+                if is_monthly or (not is_minute and '429' not in error_msg): 
+                    # Es un agotamiento real
+                    if agente:
+                        _mark_gemini_exhausted(agente, is_monthly=True)
+                    raise Exception("Llegaste al límite mensual de tu API de Inteligencia Artificial (Gemini).")
+                    
+                if is_minute or '429' in error_msg:
+                    # Rate limit temporal por minuto
+                    if attempt < max_retries:
+                        logger.warning(f"Rate limit de Gemini alcanzado (intento {attempt + 1}/{max_retries}). Esperando 60s...")
+                        time.sleep(60)
+                        continue
+                    else:
+                        logger.error("Rate limit de Gemini persistente tras 3 reintentos. Abortando sin marcar agotada.")
+                        raise Exception("Servidor de IA ocupado. Por favor, intentá nuevamente en unos minutos.")
+            
+            # Si no es un error relacionado a cuotas/rate limit, lanzar de inmediato
+            raise e
 
 
 def generar_html_gemini(context, agente):
@@ -290,11 +320,13 @@ El prompt debe especificar en detalle:
 Devolvé SOLO el prompt de diseño (texto plano, sin markdown, sin explicaciones adicionales).
 Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe ser único y diferente cada vez."""
 
-        response_step1 = client.models.generate_content(
-            model='gemini-2.5-flash-lite',
-            contents=prompt_step1,
-        )
-        design_prompt = response_step1.text.strip()
+        def _call_step1():
+            return client.models.generate_content(
+                model='gemini-2.5-flash-lite',
+                contents=prompt_step1,
+            ).text.strip()
+
+        design_prompt = execute_with_gemini_retry(agente, _call_step1)
         logger.info(f"[HTML Gen] Paso 1 completado. Prompt creativo generado ({len(design_prompt)} chars).")
 
         # ─── PASO 2: Generar HTML final con imágenes ─────────────────────────────
@@ -397,12 +429,13 @@ REGLAS ESTRICTAS:
 
         contents_step2.append(prompt_step2)
 
-        response_step2 = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=contents_step2,
-        )
+        def _call_step2():
+            return client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=contents_step2,
+            ).text.strip()
 
-        html_output = response_step2.text.strip()
+        html_output = execute_with_gemini_retry(agente, _call_step2)
 
         # Limpiar posibles backticks si la IA desobedece
         if html_output.startswith('```html'):
@@ -416,9 +449,6 @@ REGLAS ESTRICTAS:
         return html_output.strip()
 
     except Exception as e:
-        error_msg = str(e).lower()
-        if '429' in error_msg or 'quota' in error_msg or 'exhausted' in error_msg:
-            if agente:
-                _mark_gemini_exhausted(agente)
+        # execute_with_gemini_retry ya manejó el 429 correctamente
         logger.error(f"Error en generar_html_gemini: {e}")
         return None

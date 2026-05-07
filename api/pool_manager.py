@@ -48,11 +48,16 @@ def liberar_bundle(agente):
     return APIPoolService.release_bundle_from_user(agente)
 
 
-def marcar_agotada(agente, servicio):
-    """Marca la key individual como agotada."""
-    APIKey.objects.filter(
+def marcar_agotada(agente, servicio, is_monthly=False):
+    """Marca la key del servicio como agotada."""
+    keys = APIKey.objects.filter(
         assigned_to=agente,
         servicio__iexact=servicio,
         status__in=['available', 'active', 'assigned', 'in_bundle']
-    ).update(status='exhausted')
+    )
+    for k in keys:
+        k.status = 'exhausted'
+        if is_monthly:
+            k.is_monthly_exhausted = True
+        k.save(update_fields=['status', 'is_monthly_exhausted'])
 

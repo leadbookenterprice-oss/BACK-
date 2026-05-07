@@ -270,6 +270,7 @@ class APIKey(models.Model):
     label = models.CharField(max_length=100, blank=True, null=True, help_text='Nombre descriptivo interno')
     empresa = models.CharField(max_length=100, blank=True, null=True, help_text='Empresa/cuenta propietaria de la key')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='available')
+    is_monthly_exhausted = models.BooleanField(default=False, help_text='Indica si llegó al límite 100% de cuota mensual real')
     
     # Legacy: asignación directa a un usuario (mantener por compatibilidad)
     assigned_to = models.ForeignKey(
