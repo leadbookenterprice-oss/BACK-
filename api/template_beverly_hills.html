@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{TITULO}} - {{AGENCIA_NOMBRE}}</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --primario: {{COLOR_PRIMARIO}};
+  --secundario: {{COLOR_SECUNDARIO}};
+  --acento: {{COLOR_ACENTO}};
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; }
+
+.topbar { display: flex; justify-content: space-between; align-items: center; padding: 24px 48px; background: #fff; border-bottom: 1px solid #e8e4df; }
+.topbar .logo img { height: 36px; object-fit: contain; }
+.topbar .logo-text { font-family: 'Cormorant Garamond', serif; font-size: 24px; color: var(--primario); letter-spacing: 4px; text-transform: uppercase; }
+.badge-operacion { background: var(--primario); color: #fff; font-size: 10px; font-weight: 500; letter-spacing: 3px; padding: 8px 16px; text-transform: uppercase; }
+
+.hero { position: relative; height: 560px; overflow: hidden; }
+.hero img { width: 100%; height: 100%; object-fit: cover; }
+.hero-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 60%, transparent 100%); }
+.hero-content { position: absolute; bottom: 48px; left: 48px; right: 48px; }
+.hero-ciudad { font-size: 13px; color: rgba(255,255,255,0.7); letter-spacing: 4px; text-transform: uppercase; margin-bottom: 10px; font-weight: 300; }
+.hero-titulo { font-family: 'Cormorant Garamond', serif; font-size: 52px; font-weight: 300; line-height: 1.1; color: #fff; }
+
+.precio-bar { background: #fff; padding: 32px 48px; display: flex; align-items: center; gap: 40px; border-bottom: 1px solid #e8e4df; }
+.precio-label { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: #999; margin-bottom: 6px; }
+.precio-valor { font-family: 'Cormorant Garamond', serif; font-size: 44px; font-weight: 600; color: var(--primario); line-height: 1; }
+.divider { width: 1px; height: 48px; background: #e8e4df; }
+
+.stats { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--secundario); }
+.stat-item { padding: 28px 20px; text-align: center; border-right: 1px solid rgba(255,255,255,0.2); }
+.stat-item:last-child { border-right: none; }
+.stat-valor { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; color: #fff; margin-bottom: 6px; }
+.stat-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.6); }
+
+.descripcion { padding: 56px 48px; background: #fff; }
+.section-title { font-size: 10px; letter-spacing: 4px; text-transform: uppercase; color: var(--acento); margin-bottom: 24px; font-weight: 500; }
+.descripcion-texto { font-size: 16px; line-height: 2; color: #555; font-weight: 300; max-width: 720px; font-family: 'Cormorant Garamond', serif; font-size: 19px; }
+
+.amenidades { padding: 40px 48px; background: #fafaf8; border-top: 1px solid #e8e4df; border-bottom: 1px solid #e8e4df; }
+.amenidades-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.amenidad-chip { padding: 7px 16px; border: 1px solid #d0ccc6; color: #555; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; font-weight: 400; }
+
+.galeria { padding: 40px 48px; background: #fff; }
+.galeria-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+.galeria-foto { width: 100%; height: 440px; object-fit: cover; }
+
+.footer { background: var(--primario); padding: 40px 48px; display: flex; justify-content: space-between; align-items: center; }
+.agente-nombre { font-family: 'Cormorant Garamond', serif; font-size: 24px; color: #fff; margin-bottom: 6px; }
+.agente-agencia { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 10px; }
+.agente-contacto { font-size: 14px; color: rgba(255,255,255,0.8); }
+.agente-contacto a { color: #fff; text-decoration: none; }
+.qr-container img { width: 80px; height: 80px; }
+.qr-label { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-top: 6px; text-align: center; }
+.watermark { position: fixed; bottom: 12px; right: 16px; opacity: 0.1; font-size: 10px; color: #000; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">
+    {{#if LOGO_AGENCIA}}
+    <img src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">
+    {{else}}
+    <span class="logo-text">{{AGENCIA_NOMBRE}}</span>
+    {{/if}}
+  </div>
+  <span class="badge-operacion">{{OPERACION}}</span>
+</div>
+
+<div class="hero">
+  <img src="{{FOTO_PORTADA}}" alt="{{TITULO}}">
+  <div class="hero-overlay"></div>
+  <div class="hero-content">
+    <div class="hero-ciudad">{{CIUDAD}}</div>
+    <h1 class="hero-titulo">{{TITULO}}</h1>
+  </div>
+</div>
+
+<div class="precio-bar">
+  <div>
+    <div class="precio-label">Precio</div>
+    <div class="precio-valor">{{PRECIO}}</div>
+  </div>
+  <div class="divider"></div>
+  <div>
+    <div class="precio-label">Operación</div>
+    <div style="font-size:18px; font-weight:500; color:var(--primario);">{{OPERACION}}</div>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
+  <div class="stat-item"><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
+  <div class="stat-item"><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
+  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
+  <div class="stat-item"><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
+</div>
+
+<div class="descripcion">
+  <div class="section-title">Descripción</div>
+  <p class="descripcion-texto">{{DESCRIPCION}}</p>
+</div>
+
+<div class="amenidades">
+  <div class="section-title">Amenidades</div>
+  <div class="amenidades-grid">{{AMENIDADES}}</div>
+</div>
+
+<div class="galeria">
+  <div class="section-title">Galería de imágenes</div>
+  <div class="galeria-grid">
+    {{#if FOTO_1}}<img class="galeria-foto" src="{{FOTO_1}}" alt="">{{/if}}
+    {{#if FOTO_2}}<img class="galeria-foto" src="{{FOTO_2}}" alt="">{{/if}}
+    {{#if FOTO_3}}<img class="galeria-foto" src="{{FOTO_3}}" alt="">{{/if}}
+    {{#if FOTO_4}}<img class="galeria-foto" src="{{FOTO_4}}" alt="">{{/if}}
+  </div>
+</div>
+
+<div class="footer">
+  <div class="agente-info">
+    <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
+    <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
+    <div class="agente-contacto">
+      <a href="tel:{{AGENTE_TELEFONO}}">{{AGENTE_TELEFONO}}</a> &nbsp;·&nbsp;
+      <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
+    </div>
+  </div>
+  {{#if QR_CODE}}<div class="qr-container"><img src="data:image/png;base64,{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
+</div>
+
+<div class="watermark">Generado con LeadBook</div>
+</body>
+</html>

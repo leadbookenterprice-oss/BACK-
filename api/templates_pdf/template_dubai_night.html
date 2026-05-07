@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{TITULO}} - {{AGENCIA_NOMBRE}}</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --primario: {{COLOR_PRIMARIO}};
+  --secundario: {{COLOR_SECUNDARIO}};
+  --acento: {{COLOR_ACENTO}};
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
+
+/* TOP BAR */
+.topbar { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; background: #111; border-bottom: 1px solid var(--acento); }
+.topbar .logo img { height: 40px; object-fit: contain; }
+.topbar .logo-text { font-family: 'Playfair Display', serif; font-size: 22px; color: var(--acento); letter-spacing: 2px; text-transform: uppercase; }
+.badge-operacion { background: var(--acento); color: #000; font-size: 11px; font-weight: 500; letter-spacing: 2px; padding: 6px 14px; text-transform: uppercase; }
+
+/* HERO */
+.hero { position: relative; height: 520px; overflow: hidden; }
+.hero img { width: 100%; height: 100%; object-fit: cover; }
+.hero-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.4) 50%, rgba(0,0,0,0.1) 100%); }
+.hero-content { position: absolute; bottom: 40px; left: 40px; right: 40px; }
+.hero-titulo { font-family: 'Playfair Display', serif; font-size: 42px; font-weight: 900; line-height: 1.1; margin-bottom: 12px; text-shadow: 0 2px 20px rgba(0,0,0,0.8); }
+.hero-ciudad { font-size: 16px; color: var(--acento); letter-spacing: 3px; text-transform: uppercase; font-weight: 300; }
+
+/* PRECIO */
+.precio-bar { background: var(--primario); padding: 24px 40px; display: flex; align-items: center; justify-content: space-between; }
+.precio-label { font-size: 12px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.6); }
+.precio-valor { font-family: 'Playfair Display', serif; font-size: 38px; font-weight: 700; color: var(--acento); }
+
+/* STATS */
+.stats { display: grid; grid-template-columns: repeat(5, 1fr); background: #111; border-bottom: 1px solid #222; }
+.stat-item { padding: 24px 16px; text-align: center; border-right: 1px solid #222; }
+.stat-item:last-child { border-right: none; }
+.stat-icon { font-size: 22px; color: var(--acento); margin-bottom: 8px; }
+.stat-valor { font-size: 22px; font-weight: 500; margin-bottom: 4px; }
+.stat-label { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.4); }
+
+/* DESCRIPCION */
+.descripcion { padding: 48px 40px; background: #0f0f0f; border-bottom: 1px solid #1a1a1a; }
+.section-title { font-family: 'Playfair Display', serif; font-size: 13px; letter-spacing: 4px; text-transform: uppercase; color: var(--acento); margin-bottom: 20px; }
+.descripcion-texto { font-size: 16px; line-height: 1.9; color: rgba(255,255,255,0.75); font-weight: 300; max-width: 800px; }
+
+/* AMENIDADES */
+.amenidades { padding: 40px 40px; background: #0a0a0a; border-bottom: 1px solid #1a1a1a; }
+.amenidades-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.amenidad-chip { padding: 8px 18px; border: 1px solid var(--acento); color: var(--acento); font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+
+/* GALERIA */
+.galeria { padding: 40px 40px; background: #0f0f0f; }
+.galeria-grid { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; }
+.galeria-foto { width: 100%; height: 420px; object-fit: cover; }
+
+/* FOOTER */
+.footer { background: #111; padding: 40px 40px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--acento); }
+.agente-info { display: flex; flex-direction: column; gap: 6px; }
+.agente-nombre { font-family: 'Playfair Display', serif; font-size: 20px; color: var(--acento); }
+.agente-agencia { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.5); }
+.agente-contacto { font-size: 14px; color: rgba(255,255,255,0.7); }
+.agente-contacto a { color: var(--acento); text-decoration: none; }
+.qr-container { text-align: center; }
+.qr-container img { width: 90px; height: 90px; }
+.qr-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-top: 6px; }
+
+/* WATERMARK */
+.watermark { position: fixed; bottom: 12px; right: 16px; opacity: 0.12; font-family: 'Inter', sans-serif; font-size: 10px; color: #fff; letter-spacing: 1px; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">
+    {{#if LOGO_AGENCIA}}
+    <img src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">
+    {{else}}
+    <span class="logo-text">{{AGENCIA_NOMBRE}}</span>
+    {{/if}}
+  </div>
+  <span class="badge-operacion">{{OPERACION}}</span>
+</div>
+
+<div class="hero">
+  <img src="{{FOTO_PORTADA}}" alt="{{TITULO}}">
+  <div class="hero-overlay"></div>
+  <div class="hero-content">
+    <div class="hero-ciudad">{{CIUDAD}}</div>
+    <h1 class="hero-titulo">{{TITULO}}</h1>
+  </div>
+</div>
+
+<div class="precio-bar">
+  <div>
+    <div class="precio-label">Precio de venta</div>
+    <div class="precio-valor">{{PRECIO}}</div>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat-item">
+    <div class="stat-icon">⬛</div>
+    <div class="stat-valor">{{SUPERFICIE_TOTAL}}</div>
+    <div class="stat-label">m² total</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-icon">🛏</div>
+    <div class="stat-valor">{{RECAMARAS}}</div>
+    <div class="stat-label">recámaras</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-icon">🚿</div>
+    <div class="stat-valor">{{BANOS}}</div>
+    <div class="stat-label">baños</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-icon">⬜</div>
+    <div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div>
+    <div class="stat-label">m² cubiertos</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-icon">🚗</div>
+    <div class="stat-valor">{{ESTACIONAMIENTOS}}</div>
+    <div class="stat-label">estacionam.</div>
+  </div>
+</div>
+
+<div class="descripcion">
+  <div class="section-title">Sobre la propiedad</div>
+  <p class="descripcion-texto">{{DESCRIPCION}}</p>
+</div>
+
+<div class="amenidades">
+  <div class="section-title">Amenidades</div>
+  <div class="amenidades-grid">
+    {{AMENIDADES}}
+  </div>
+</div>
+
+<div class="galeria">
+  <div class="section-title">Galería</div>
+  <div class="galeria-grid">
+    {{#if FOTO_1}}<img class="galeria-foto" src="{{FOTO_1}}" alt="Foto 1">{{/if}}
+    {{#if FOTO_2}}<img class="galeria-foto" src="{{FOTO_2}}" alt="Foto 2">{{/if}}
+    {{#if FOTO_3}}<img class="galeria-foto" src="{{FOTO_3}}" alt="Foto 3">{{/if}}
+    {{#if FOTO_4}}<img class="galeria-foto" src="{{FOTO_4}}" alt="Foto 4">{{/if}}
+  </div>
+</div>
+
+<div class="footer">
+  <div class="agente-info">
+    <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
+    <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
+    <div class="agente-contacto">
+      <a href="tel:{{AGENTE_TELEFONO}}">{{AGENTE_TELEFONO}}</a> &nbsp;·&nbsp;
+      <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
+    </div>
+  </div>
+  {{#if QR_CODE}}
+  <div class="qr-container">
+    <img src="data:image/png;base64,{{QR_CODE}}" alt="QR WhatsApp">
+    <div class="qr-label">Contactar agente</div>
+  </div>
+  {{/if}}
+</div>
+
+<div class="watermark">Generado con LeadBook</div>
+
+</body>
+</html>

@@ -5,9 +5,129 @@ import logging
 import time
 import requests
 import os
+import random
+import re
 from api.tracking import track_api_call
 
 logger = logging.getLogger(__name__)
+
+TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates_pdf')
+
+TEMPLATE_COLORES = {
+    'template_dubai_night.html': {
+        'primario': '#1a0a2e',
+        'secundario': '#2d1b4e', 
+        'acento': '#c9a84c',
+    },
+    'template_beverly_hills.html': {
+        'primario': '#2c3e50',
+        'secundario': '#34495e',
+        'acento': '#e8c547',
+    },
+    'template_manhattan.html': {
+        'primario': '#111111',
+        'secundario': '#1a1a1a',
+        'acento': '#e63946',
+    },
+    'template_mediterraneo.html': {
+        'primario': '#6b4423',
+        'secundario': '#8b5e3c',
+        'acento': '#c17f3a',
+    },
+    'template_tech_modern.html': {
+        'primario': '#0d47a1',
+        'secundario': '#1565c0',
+        'acento': '#00e5ff',
+    },
+}
+
+def generar_html_desde_template(context, agente):
+    """
+    Genera HTML usando un template prediseñado.
+    Gemini solo elige los colores según el estilo de la propiedad.
+    """
+    # 1. Elegir template al azar
+    templates = list(TEMPLATE_COLORES.keys())
+    template_elegido = random.choice(templates)
+    
+    # 2. Leer el template
+    template_path = os.path.join(TEMPLATES_DIR, template_elegido)
+    with open(template_path, 'r', encoding='utf-8') as f:
+        html = f.read()
+    
+    # 3. Aplicar colores del template
+    colores = TEMPLATE_COLORES[template_elegido]
+    html = html.replace('{{COLOR_PRIMARIO}}', colores['primario'])
+    html = html.replace('{{COLOR_SECUNDARIO}}', colores['secundario'])
+    html = html.replace('{{COLOR_ACENTO}}', colores['acento'])
+    
+    # 4. Reemplazar datos de la propiedad
+    html = html.replace('{{TITULO}}', str(context.get('tipo_propiedad', '') + ' en ' + context.get('ciudad', '')))
+    html = html.replace('{{PRECIO}}', str(context.get('moneda', '$') + ' ' + str(context.get('precio', ''))))
+    html = html.replace('{{CIUDAD}}', str(context.get('ciudad', '')))
+    html = html.replace('{{OPERACION}}', str(context.get('operacion', 'VENTA')).upper())
+    html = html.replace('{{DESCRIPCION}}', str(context.get('descripcion', '')))
+    html = html.replace('{{RECAMARAS}}', str(context.get('recamaras', 'N/A')))
+    html = html.replace('{{BANOS}}', str(context.get('banos', 'N/A')))
+    html = html.replace('{{SUPERFICIE_TOTAL}}', str(context.get('superficie_total', 'N/A')))
+    html = html.replace('{{SUPERFICIE_CUBIERTA}}', str(context.get('superficie_cubierta', 'N/A')))
+    html = html.replace('{{ESTACIONAMIENTOS}}', str(context.get('estacionamientos', 'N/A')))
+    html = html.replace('{{AGENTE_NOMBRE}}', str(context.get('agente_nombre', '')))
+    html = html.replace('{{AGENTE_TELEFONO}}', str(context.get('agente_telefono', '')))
+    html = html.replace('{{AGENTE_EMAIL}}', str(context.get('agente_email', '')))
+    html = html.replace('{{AGENCIA_NOMBRE}}', str(context.get('agencia_nombre', '')))
+    
+    # 5. Logo de agencia
+    logo_url = context.get('logo_url_raw', '')
+    if logo_url:
+        html = html.replace('{{#if LOGO_AGENCIA}}', '')
+        html = html.replace('{{/if}}', '')
+        html = html.replace('{{LOGO_AGENCIA}}', logo_url)
+    else:
+        # Eliminar bloque condicional del logo, dejar solo el texto
+        html = re.sub(r'\{\{#if LOGO_AGENCIA\}\}.*?\{\{else\}\}', '', html, flags=re.DOTALL)
+        html = re.sub(r'\{\{/if\}\}', '', html)
+    
+    # 6. QR en base64 — CRÍTICO: reemplazar antes de cualquier otra cosa
+    qr_code = context.get('qr_code', '')
+    if qr_code:
+        html = html.replace('{{#if QR_CODE}}', '')
+        html = re.sub(r'\{\{/if\}\}', '', html)
+        html = html.replace('{{QR_CODE}}', qr_code)
+    else:
+        html = re.sub(r'\{\{#if QR_CODE\}\}.*?\{\{/if\}\}', '', html, flags=re.DOTALL)
+    
+    # 7. Foto de portada
+    portada_url = context.get('portada_url', '')
+    html = html.replace('{{FOTO_PORTADA}}', portada_url)
+    
+    # 8. Fotos de galería
+    fotos = context.get('fotos_recorrido_raw', [])
+    for i, foto_url in enumerate(fotos[:4], 1):
+        if isinstance(foto_url, dict):
+            from api.services.almacenamiento import AlmacenamientoCloudinary
+            foto_url = AlmacenamientoCloudinary.obtener_url_foto(foto_url)
+        html = html.replace(f'{{{{#if FOTO_{i}}}}}', '')
+        html = html.replace(f'{{{{FOTO_{i}}}}}', str(foto_url or ''))
+        html = re.sub(r'\{\{/if\}\}', '', html, count=1)
+    
+    # Limpiar placeholders de fotos no usadas
+    for i in range(len(fotos)+1, 5):
+        html = re.sub(rf'\{{{{#if FOTO_{i}\}}}}.*?\{{{{/if\}}}}', '', html, flags=re.DOTALL)
+    
+    # Limpiar cualquier placeholder restante
+    html = re.sub(r'\{\{#if [^}]+\}\}', '', html)
+    html = re.sub(r'\{\{else\}\}', '', html)
+    html = re.sub(r'\{\{/if\}\}', '', html)
+    html = re.sub(r'\{\{[^}]+\}\}', '', html)
+    
+    # 9. Amenidades — generar chips HTML
+    amenidades = context.get('amenidades', [])
+    chips_html = ''.join([f'<span class="amenidad-chip">{a}</span>' for a in amenidades])
+    html = html.replace('{{AMENIDADES}}', chips_html)
+    
+    logger.info(f"[HTML Template] Template elegido: {template_elegido}. HTML generado: {len(html)} chars.")
+    return html
 
 # Cascada de modelos para generación de contenido premium (Paso 2)
 GEMINI_MODELS_CASCADE = [

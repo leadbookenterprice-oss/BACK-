@@ -1222,10 +1222,15 @@ def generar_pdf(request):
         from django.http import HttpResponse
         from api.services.render_engine import render_html_to_pdf
         from api.services.almacenamiento import AlmacenamientoCloudinary
-        from api.ai_services import generar_html_gemini
+        from api.ai_services import generar_html_gemini, generar_html_desde_template
         from .models import Listado
 
-        html_string = generar_html_gemini(context, request.user)
+        try:
+            html_string = generar_html_desde_template(context, request.user)
+        except Exception as e:
+            print(f"[PDF] Error en sistema de templates: {e}. Usando fallback Gemini.")
+            html_string = generar_html_gemini(context, request.user)
+            
         if not html_string:
             print("[PDF] Fallback: Gemini falló, usando render_to_string estático")
             html_string = render_to_string('pdf/property_brochure_html.html', context)
