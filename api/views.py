@@ -3082,7 +3082,10 @@ def upload_fotos_listado(request):
         from api.services.almacenamiento import AlmacenamientoCloudinary
         
         if portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('data:image'):
+            print(f"[UPLOAD] portada_b64 tipo: {type(portada_b64).__name__}, es base64: {bool(portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('data:image'))}")
             obj = AlmacenamientoCloudinary.guardar_foto_propiedad(portada_b64, user_id, listado_id, tipo_foto='portada')
+            print(f"[UPLOAD] get_mejor_cuenta resultado: {AlmacenamientoCloudinary.get_mejor_cuenta()}")
+            print(f"[UPLOAD] resultado upload portada: {obj}")
             if obj:
                 response_data['portadaUrl'] = obj
             else:
