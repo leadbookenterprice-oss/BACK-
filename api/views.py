@@ -1324,8 +1324,22 @@ def generar_imagen_post(request):
                 {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
                 {"label": "Hab", "valor": data.get('recamaras')},
                 {"label": "Baños", "valor": data.get('banos')},
-            ]
+            ],
+            "agente_nombre": data.get('agenteNombre', ''),
+            "agente_telefono": data.get('agenteTelefono', ''),
+            "qr_url": generar_qr_url(f"Tel: {data.get('agenteTelefono', '')} | {data.get('agenciaNombre', '')}"),
         }
+        
+        fotos_raw = data.get('fotosRecorrido', [])
+        portada_val = fotos_raw[0] if fotos_raw else data.get('portadaUrl', '')
+        if isinstance(portada_val, dict) and 'public_id' in portada_val:
+            cloud = portada_val.get('cloudinary_account', 'df1vldrhb')
+            pid = portada_val.get('public_id', '')
+            portada_post = f"https://res.cloudinary.com/{cloud}/image/upload/{pid}"
+        else:
+            portada_post = str(portada_val) if portada_val else ''
+            
+        context["portada_url"] = portada_post
         context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
 
         # Renderizar HTML y luego convertir a imagen PNG con Playwright
@@ -1343,9 +1357,9 @@ def generar_imagen_post(request):
             img_url = AlmacenamientoCloudinary.guardar_post(
                 image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
-            public_id = None
             if not img_url:
                 raise Exception("Cloudinary no devolvió una URL válida")
+            public_id = img_url
         except Exception as cloud_err:
             print(f"[Cloudinary] Error crítico subiendo imagen: {cloud_err}")
             return Response({

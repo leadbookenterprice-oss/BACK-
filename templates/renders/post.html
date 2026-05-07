@@ -4,164 +4,77 @@
 <meta charset="UTF-8">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;700&display=swap');
-  
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  
-  :root {
-    --black: #080808;
-    --white: #F5F3EE;
-    --accent: #C8FF00;
-  }
-  
+  :root { --black: #080808; --white: #F5F3EE; --accent: #C8FF00; }
   body {
-    width: 1080px;
-    height: 1080px;
+    width: 1080px; height: 1080px;
     background: var(--black);
     font-family: 'DM Sans', sans-serif;
     color: var(--white);
-    overflow: hidden;
-    position: relative;
+    overflow: hidden; position: relative;
   }
-  
-  .bg-image {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    z-index: 1;
-  }
-  
+  .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
   .overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(0deg, rgba(8,8,8,0.95) 0%, rgba(8,8,8,0.6) 40%, rgba(8,8,8,0.2) 100%);
+    position: absolute; inset: 0;
+    background: linear-gradient(0deg, rgba(8,8,8,0.97) 0%, rgba(8,8,8,0.65) 45%, rgba(8,8,8,0.15) 100%);
     z-index: 2;
   }
-  
-  .content {
-    position: absolute;
-    inset: 0;
-    z-index: 3;
-    padding: 80px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-  }
-  
-  /* Top Section */
-  .top-section {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-  }
-  
-  .logo {
-    max-width: 250px;
-    max-height: 120px;
-    object-fit: contain;
-    filter: brightness(0) invert(1);
-  }
-  
+  .content { position: absolute; inset: 0; z-index: 3; padding: 72px; display: flex; flex-direction: column; justify-content: space-between; }
+
+  /* TOP */
+  .top-section { display: flex; justify-content: space-between; align-items: flex-start; }
   .badge {
-    background: var(--accent);
-    color: var(--black);
-    font-family: 'Space Mono', monospace;
-    font-size: 32px;
-    font-weight: 700;
-    letter-spacing: 4px;
-    padding: 16px 32px;
-    text-transform: uppercase;
+    background: var(--accent); color: var(--black);
+    font-family: 'Space Mono', monospace; font-size: 30px; font-weight: 700;
+    letter-spacing: 4px; padding: 14px 28px; text-transform: uppercase;
   }
-  
-  /* Bottom Section */
-  .bottom-section {
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
-  }
-  
+  .logo { max-width: 220px; max-height: 100px; object-fit: contain; filter: brightness(0) invert(1); }
+
+  /* BOTTOM */
+  .bottom-section { display: flex; flex-direction: column; gap: 20px; }
   .title {
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 140px;
-    line-height: 0.9;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    color: var(--white);
-    text-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    font-family: 'Bebas Neue', sans-serif; font-size: 120px;
+    line-height: 0.9; letter-spacing: 3px; text-transform: uppercase;
   }
-  
-  .title span {
-    color: var(--accent);
-  }
-  
+  .title span { color: var(--accent); }
   .price-box {
-    display: inline-block;
-    align-self: flex-start;
-    border: 2px solid var(--white);
-    padding: 16px 32px;
-    font-family: 'Space Mono', monospace;
-    font-size: 48px;
-    font-weight: 700;
-    background: rgba(255,255,255,0.1);
-    backdrop-filter: blur(10px);
+    display: inline-block; align-self: flex-start;
+    border: 2px solid var(--white); padding: 14px 28px;
+    font-family: 'Space Mono', monospace; font-size: 44px; font-weight: 700;
+    background: rgba(255,255,255,0.08); backdrop-filter: blur(10px);
   }
-  
-  .stats-grid {
-    display: flex;
-    gap: 2px;
-    margin-top: 16px;
-    background: rgba(255,255,255,0.2);
-  }
-  
-  .stat-item {
-    flex: 1;
-    background: rgba(8,8,8,0.85);
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  
-  .stat-value {
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 56px;
-    color: var(--accent);
-    line-height: 1;
-  }
-  
-  .stat-label {
-    font-family: 'Space Mono', monospace;
-    font-size: 18px;
-    color: rgba(255,255,255,0.6);
-    text-transform: uppercase;
-    letter-spacing: 2px;
-  }
+  .stats-grid { display: flex; gap: 2px; background: rgba(255,255,255,0.15); }
+  .stat-item { flex: 1; background: rgba(8,8,8,0.85); padding: 20px 24px; display: flex; flex-direction: column; gap: 6px; }
+  .stat-value { font-family: 'Bebas Neue', sans-serif; font-size: 48px; color: var(--accent); line-height: 1; }
+  .stat-label { font-family: 'Space Mono', monospace; font-size: 16px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 2px; }
+
+  /* AGENTE + QR */
+  .agent-row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+  .agent-info { display: flex; flex-direction: column; gap: 4px; }
+  .agent-name { font-family: 'DM Sans', sans-serif; font-size: 28px; font-weight: 700; color: var(--white); }
+  .agent-phone { font-family: 'Space Mono', monospace; font-size: 22px; color: rgba(255,255,255,0.6); }
+  .qr-block { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .qr-block img { width: 110px; height: 110px; border: 3px solid var(--accent); padding: 4px; background: white; }
+  .qr-label { font-family: 'Space Mono', monospace; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.4); }
+
+  /* WATERMARK */
+  .watermark { position: fixed; bottom: 18px; right: 20px; width: 100px; opacity: 0.13; pointer-events: none; z-index: 9999; }
 </style>
 </head>
 <body>
-  {% if portada_url %}
-    <img src="{{ portada_url }}" class="bg-image" />
-  {% endif %}
+  {% if portada_url %}<img src="{{ portada_url }}" class="bg-image" />{% endif %}
   <div class="overlay"></div>
-  
   <div class="content">
     <div class="top-section">
-      {% if logo_url %}
-        <img src="{{ logo_url }}" class="logo" />
-      {% else %}
-        <div></div>
-      {% endif %}
       <div class="badge">{{ operacion }}</div>
+      {% if logo_url %}<img src="{{ logo_url }}" class="logo" />{% else %}<div></div>{% endif %}
     </div>
-    
     <div class="bottom-section">
       <div class="title">{{ tipoPropiedad }}<br><span>{{ ciudad }}</span></div>
       <div class="price-box">{{ moneda }} {{ precio }}</div>
-      
       {% if caracteristicas %}
       <div class="stats-grid">
-        {% for stat in caracteristicas|slice:":3" %}
+        {% for stat in caracteristicas|slice:":4" %}
         <div class="stat-item">
           <div class="stat-value">{{ stat.valor }}</div>
           <div class="stat-label">{{ stat.label }}</div>
@@ -169,7 +82,20 @@
         {% endfor %}
       </div>
       {% endif %}
+      <div class="agent-row">
+        <div class="agent-info">
+          <div class="agent-name">{{ agente_nombre }}</div>
+          <div class="agent-phone">{{ agente_telefono }}</div>
+        </div>
+        {% if qr_url %}
+        <div class="qr-block">
+          <img src="{{ qr_url }}" alt="QR">
+          <div class="qr-label">Contactar</div>
+        </div>
+        {% endif %}
+      </div>
     </div>
   </div>
+  <img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
 </body>
 </html>
