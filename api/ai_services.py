@@ -78,10 +78,11 @@ def call_groq_api(prompt: str, **kwargs) -> str:
 
 def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
     import os
+    import time
     for attempt in range(retries):
         try:
-            # Intenta Gemini primero
-            if os.environ.get('GEMINI_API_KEY') or getattr(settings, 'GEMINI_API_KEY', None):
+            # Intenta Gemini
+            if os.environ.get('GEMINI_API_KEY') or getattr(settings, 'GEMINI_API_KEY', None) or agente is not None:
                 result = call_gemini_api(prompt, agente=agente, **kwargs)
                 if result:
                     return result
@@ -90,19 +91,6 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
             if attempt < retries - 1:
                 time.sleep(2)  # espera antes de reintentar
                 continue
-        
-        try:
-            # Intenta Groq si Gemini falla
-            if os.environ.get('GROQ_API_KEY') or getattr(settings, 'GROQ_API_KEY', None):
-                result = call_groq_api(prompt, **kwargs)
-                if result:
-                    return result
-        except Exception as e:
-            print(f"Groq attempt {attempt+1}/{retries} failed: {str(e)}")
-            if attempt < retries - 1:
-                time.sleep(2)
-                continue
-        
         break
     
     return None  # fallback local manejará esto

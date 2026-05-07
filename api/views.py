@@ -305,7 +305,7 @@ ESTRUCTURA:
 RESPONDE SOLO JSON, SIN PREAMBLE."""
         try:
             with concurrent.futures.ThreadPoolExecutor() as ex:
-                future = ex.submit(smart_call, prompt, 3, request.user)
+                future = ex.submit(call_gemini_api, prompt, agente=request.user)
                 descripcion_ia = future.result(timeout=15)
         except Exception:
             descripcion_ia = None
@@ -2888,7 +2888,7 @@ REQUISITOS:
 - Responde SOLO el texto, sin JSON, sin comillas, sin explicaciones"""
 
     try:
-        result = smart_call(prompt, agente=request.user)
+        result = call_gemini_api(prompt, agente=request.user)
         if not result:
             return Response({"error": "No se pudo generar texto"}, status=503)
         return Response({"texto": result.strip()})
