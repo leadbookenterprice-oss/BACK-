@@ -2921,70 +2921,45 @@ def proxy_pdf_view(request, listado_id):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def descargar_pdf(request, listado_id):
-    """
-    Descarga el PDF desde Cloudinary internamente y lo sirve al browser
-    como attachment para forzar la descarga, evadiendo problemas de CORS.
-    """
     try:
         from .models import Listado
-        listado = Listado.objects.get(id=listado_id)
-        
-        # Buscar URL en los datos del listado
-        res = listado.datos.get('resultados', {}) if listado.datos else {}
-        pdf_data = res.get('pdf', {})
-        pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else pdf_data
-        
-        if not pdf_url:
-            return Response({"error": "URL de PDF no encontrada"}, status=404)
-
-        # Si es URL local, redirigir directamente
-        if not pdf_url.startswith('http'):
-            from django.shortcuts import redirect
-            absolute_url = request.build_absolute_uri(pdf_url)
-            if 'localhost' not in absolute_url and '127.0.0.1' not in absolute_url:
-                absolute_url = absolute_url.replace('http://', 'https://')
-            return redirect(absolute_url)
-
-        # Petición interna a Cloudinary
-        import cloudinary
-        import requests as req
-        import re
-        
-        # Construir URL pública sin firma
+        from django.shortcuts import redirect as django_redirect
+        import re, time, cloudinary, cloudinary.utils
         from api.services.almacenamiento import AlmacenamientoCloudinary
-        creds, _ = AlmacenamientoCloudinary.get_mejor_cuenta()
-        if creds:
-            cloudinary.config(
-                cloud_name=creds['cloud_name'],
-                api_key=creds['api_key'],
-                api_secret=creds['api_secret']
-            )
+
+        listado = Listado.objects.get(id=listado_id)
+        datos = listado.datos or {}
+        pdf_data = datos.get('resultados', {}).get('pdf', {})
+        pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else str(pdf_data or '')
+
+        if not pdf_url:
+            return Response({"error": "PDF no encontrado"}, status=404)
 
         match = re.search(r'/raw/upload/(?:v\d+/)?(.+)', pdf_url)
-        if match:
-            public_id = match.group(1)
-            # Generar URL firmada con SDK
-            signed_url, _ = cloudinary.utils.cloudinary_url(
-                public_id,
-                resource_type='raw',
-                type='upload',
-                sign_url=True,
-                expires_at=int(__import__('time').time()) + 300
-            )
-            pdf_url = signed_url
-        
-        # Descargar usando requests con timeout
-        r = req.get(pdf_url, timeout=30)
-        if r.status_code == 200:
-            from django.http import HttpResponse
-            response = HttpResponse(r.content, content_type='application/pdf')
-            response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
-            response['Access-Control-Allow-Origin'] = '*'
-            return response
-        else:
-            return Response({
-                "error": f"Cloudinary respondió con error {r.status_code}"
-            }, status=status.HTTP_502_BAD_GATEWAY)
+        if not match:
+            return django_redirect(pdf_url)
+
+        public_id = match.group(1)
+
+        creds, _ = AlmacenamientoCloudinary.get_mejor_cuenta()
+        if not creds:
+            return django_redirect(pdf_url)
+
+        cloudinary.config(
+            cloud_name=creds['cloud_name'],
+            api_key=creds['api_key'],
+            api_secret=creds['api_secret']
+        )
+
+        signed_url = cloudinary.utils.cloudinary_url(
+            public_id,
+            resource_type='raw',
+            sign_url=True,
+            attachment=True,
+            expires_at=int(time.time()) + 120
+        )[0]
+
+        return django_redirect(signed_url)
 
     except Listado.DoesNotExist:
         return Response({"error": "Listado no encontrado"}, status=404)
