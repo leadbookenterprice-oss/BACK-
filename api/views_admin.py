@@ -294,7 +294,7 @@ def admin_apikeys_pool(request):
     servicio = request.query_params.get('servicio')
     keys = APIKey.objects.all().order_by('servicio', '-created_at')
     if servicio:
-        keys = keys.filter(servicio__iexact=servicio)
+        keys = keys.filter(servicio__icontains=servicio)
         
     # Límite por defecto para el cálculo de porcentaje
     DEFAULT_LIMITS = {
@@ -347,6 +347,42 @@ def admin_apikeys_pool_crear(request):
         daily_limit=daily_limit,
     )
     return Response({"success": True, "id": k.id})
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_apikeys_pool_bulk(request):
+    """
+    Carga masiva de keys desde el dashboard.
+    Mapea 'service' -> 'servicio' y 'key' -> 'api_key' para compatibilidad con el frontend.
+    """
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    
+    keys_data = request.data.get('keys', [])
+    creadas = 0
+    for k in keys_data:
+        # Usamos los nombres de campos que envía el frontend en ApiPoolPage.jsx
+        service_val = k.get('service') or k.get('servicio', 'gemini')
+        key_val = k.get('key') or k.get('api_key')
+        
+        if not key_val:
+            continue
+
+        APIKey.objects.create(
+            api_key=key_val,
+            servicio=service_val.lower().strip() if isinstance(service_val, str) else service_val,
+            label=k.get('label', '-'),
+            status='available',
+            daily_limit=k.get('daily_limit', 1500),
+            monthly_limit=k.get('monthly_limit', None),
+        )
+        creadas += 1
+        
+    return Response({
+        'success': True, 
+        'creadas': creadas, 
+        'mensaje': f'{creadas} keys creadas exitosamente'
+    })
 
 @api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([AllowAny])
