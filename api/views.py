@@ -902,12 +902,82 @@ class ListadoDetalleView(APIView):
             listado = Listado.objects.get(pk=pk)
         except Listado.DoesNotExist:
             return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-            
+
         if listado.agente.id != request.user.id:
             return Response({"error": "No tienes permiso para eliminar este listado"}, status=status.HTTP_403_FORBIDDEN)
-            
+
+        # ── Eliminar assets de Cloudinary antes de borrar el registro ─────────
+        datos = listado.datos or {}
+        public_ids_a_eliminar = []  # [(public_id, resource_type, cloud_name, api_key, api_secret)]
+
+        def _extraer_public_id(obj):
+            """Extrae public_id y credenciales de un dict de asset de Cloudinary."""
+            if isinstance(obj, dict) and obj.get('public_id'):
+                return (
+                    obj['public_id'],
+                    obj.get('resource_type', 'image'),
+                    obj.get('cloudinary_account') or obj.get('cloud_name'),
+                    obj.get('api_key'),
+                    obj.get('api_secret'),
+                )
+            return None
+
+        # Portada
+        portada = datos.get('portadaUrl') or datos.get('portada_url')
+        ref = _extraer_public_id(portada)
+        if ref:
+            public_ids_a_eliminar.append(ref)
+
+        # Fotos de galería
+        for foto in (datos.get('fotosRecorrido') or datos.get('fotos_recorrido') or []):
+            ref = _extraer_public_id(foto)
+            if ref:
+                public_ids_a_eliminar.append(ref)
+
+        # Assets generados en resultados
+        resultados = datos.get('resultados') or {}
+        for key, val in resultados.items():
+            if isinstance(val, dict):
+                ref = _extraer_public_id(val)
+                if ref:
+                    public_ids_a_eliminar.append(ref)
+                # Slides de carrusel
+                for slide in (val.get('slides') or []):
+                    ref = _extraer_public_id(slide)
+                    if ref:
+                        public_ids_a_eliminar.append(ref)
+            elif isinstance(val, list):
+                for item in val:
+                    ref = _extraer_public_id(item)
+                    if ref:
+                        public_ids_a_eliminar.append(ref)
+
+        # Eliminar en Cloudinary — fallo individual no interrumpe la operación
+        import cloudinary
+        import cloudinary.uploader
+        from api.services.almacenamiento import AlmacenamientoCloudinary
+        from django.conf import settings
+
+        for (pub_id, res_type, cloud_name, api_key_val, api_secret_val) in public_ids_a_eliminar:
+            try:
+                # Usar credenciales del asset si las tiene, sino la cuenta global
+                if cloud_name and api_key_val and api_secret_val:
+                    cld_cfg = cloudinary.Config(
+                        cloud_name=cloud_name,
+                        api_key=api_key_val,
+                        api_secret=api_secret_val,
+                    )
+                    cloudinary.uploader.destroy(pub_id, resource_type=res_type, config=cld_cfg)
+                else:
+                    cloudinary.uploader.destroy(pub_id, resource_type=res_type)
+                logger.info(f"[Eliminar] Asset Cloudinary eliminado: {pub_id}")
+            except Exception as cld_err:
+                logger.warning(f"[Eliminar] No se pudo eliminar asset {pub_id} de Cloudinary: {cld_err}")
+
+        # ── Borrar el registro de PostgreSQL ──────────────────────────────────
         listado.delete()
         return Response({"mensaje": "Listado eliminado"}, status=status.HTTP_200_OK)
+
 
     def put(self, request, pk):
         try:
