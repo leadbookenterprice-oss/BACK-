@@ -91,6 +91,7 @@ def generar_html_desde_template(context, agente):
     
     # 6. QR en base64 — CRÍTICO: reemplazar antes de cualquier otra cosa
     qr_code = context.get('qr_code', '')
+    print(f"[Template] QR code presente: {bool(qr_code)}, largo: {len(str(qr_code))}")
     if qr_code:
         html = html.replace('{{#if QR_CODE}}', '')
         html = re.sub(r'\{\{/if\}\}', '', html)
@@ -99,7 +100,13 @@ def generar_html_desde_template(context, agente):
         html = re.sub(r'\{\{#if QR_CODE\}\}.*?\{\{/if\}\}', '', html, flags=re.DOTALL)
     
     # 7. Foto de portada
-    portada_url = context.get('portada_url', '')
+    portada_val = context.get('portada_url', '')
+    if isinstance(portada_val, dict) and 'public_id' in portada_val:
+        from api.services.almacenamiento import AlmacenamientoCloudinary
+        portada_url = AlmacenamientoCloudinary.obtener_url_foto(portada_val)
+    else:
+        portada_url = str(portada_val)
+    print(f"[Template] Portada URL: {portada_url[:80] if portada_url else 'VACÍA'}")
     html = html.replace('{{FOTO_PORTADA}}', portada_url)
     
     # 8. Fotos de galería
