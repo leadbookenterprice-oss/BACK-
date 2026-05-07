@@ -2919,51 +2919,30 @@ def proxy_pdf_view(request, listado_id):
         return Response({"error": str(e)}, status=500)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def descargar_pdf(request, listado_id):
     try:
         from .models import Listado
-        from django.shortcuts import redirect as django_redirect
-        import re, time, cloudinary, cloudinary.utils
-        from api.services.almacenamiento import AlmacenamientoCloudinary
-
-        listado = Listado.objects.get(id=listado_id)
+        from django.http import HttpResponse
+        from django.shortcuts import get_object_or_404
+        listado = get_object_or_404(Listado, id=listado_id, agente=request.user)
         datos = listado.datos or {}
         pdf_data = datos.get('resultados', {}).get('pdf', {})
-        pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else str(pdf_data or '')
-
-        if not pdf_url:
-            return Response({"error": "PDF no encontrado"}, status=404)
-
-        match = re.search(r'/raw/upload/(?:v\d+/)?(.+)', pdf_url)
-        if not match:
-            return django_redirect(pdf_url)
-
-        public_id = match.group(1)
-
-        creds, _ = AlmacenamientoCloudinary.get_mejor_cuenta()
-        if not creds:
-            return django_redirect(pdf_url)
-
-        cloudinary.config(
-            cloud_name=creds['cloud_name'],
-            api_key=creds['api_key'],
-            api_secret=creds['api_secret']
-        )
-
-        signed_url = cloudinary.utils.cloudinary_url(
-            public_id,
-            resource_type='raw',
-            sign_url=True,
-            attachment=True,
-            expires_at=int(time.time()) + 120
-        )[0]
-
-        return django_redirect(signed_url)
-
+        html_content = pdf_data.get('html', '') if isinstance(pdf_data, dict) else ''
+        if not html_content:
+            return Response({"error": "No hay PDF generado para este listado"}, status=404)
+        from api.services.render_engine import render_html_to_pdf
+        pdf_bytes = render_html_to_pdf(html_content)
+        if not pdf_bytes:
+            return Response({"error": "Error al generar PDF"}, status=500)
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
+        response['Access-Control-Allow-Origin'] = '*'
+        return response
     except Listado.DoesNotExist:
         return Response({"error": "Listado no encontrado"}, status=404)
     except Exception as e:
+        logger.error(f"Error en descargar_pdf: {e}")
         return Response({"error": str(e)}, status=500)
 
 @api_view(['GET'])
