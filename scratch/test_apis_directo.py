@@ -32,12 +32,12 @@ print("EMAIL_HOST_USER:    ", settings.EMAIL_HOST_USER or "(vacío)")
 print("EMAIL_BACKEND:      ", settings.EMAIL_BACKEND)
 
 # --- Gemini ---
-banner("Gemini (gemini-2.0-flash-lite)")
+banner("Gemini (gemini-2.5-flash-lite)")
 try:
     from google import genai
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     resp = client.models.generate_content(
-        model='gemini-2.0-flash-lite',
+        model='gemini-2.5-flash-lite',
         contents='Respondé con "OK" si me estás leyendo.',
     )
     print("Respuesta:", resp.text[:100])

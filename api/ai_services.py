@@ -9,6 +9,15 @@ from api.tracking import track_api_call
 
 logger = logging.getLogger(__name__)
 
+# Cascada de modelos para generación de contenido premium (Paso 2)
+GEMINI_MODELS_CASCADE = [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash-lite",
+]
+
 
 # Excepción especial para cuota mensual de Gemini agotada.
 # Los views la capturan y devuelven HTTP 429 con mensaje canonico.
@@ -252,7 +261,7 @@ def generar_html_gemini(context, agente):
     """
     Genera una ficha HTML inmobiliaria en DOS pasos:
       Paso 1 - gemini-2.5-flash-lite: genera un prompt creativo de diseño (sin imágenes)
-      Paso 2 - gemini-2.5-flash: usa ese prompt + todas las imágenes para generar el HTML final
+      Paso 2 - Cascada de modelos (2.5 Pro -> 2.5 Flash -> 3 Flash -> ...): genera el HTML final
     """
     import base64
     from google.genai import types
@@ -468,16 +477,37 @@ REGLAS ESTRICTAS:
         contents_step2.append(prompt_step2)
 
         print(f"[HTML] ▶ Paso 2 - Largo del prompt texto: {len(prompt_step2)} chars")
-        print(f"[HTML] ▶ Paso 2 - Enviando request a gemini-2.5-flash-lite...")
+        print(f"[HTML] ▶ Paso 2 - Iniciando cascada de modelos...")
         t3 = time.time()
         
-        def _call_step2():
-            return client.models.generate_content(
-                model='gemini-2.5-flash-lite',
-                contents=contents_step2,
-            ).text.strip()
+        html_output = None
+        last_error = None
+        
+        for model_name in GEMINI_MODELS_CASCADE:
+            print(f"[HTML] ▶ Paso 2 - Intentando con modelo: {model_name}...")
+            try:
+                def _call_step2():
+                    return client.models.generate_content(
+                        model=model_name,
+                        contents=contents_step2,
+                    ).text.strip()
 
-        html_output = execute_with_gemini_retry(agente, _call_step2)
+                html_output = execute_with_gemini_retry(agente, _call_step2)
+                if html_output:
+                    print(f"[HTML] ✅ Paso 2 exitoso con modelo: {model_name}")
+                    break
+            except GeminiQuotaExhaustedError as e:
+                logger.warning(f"Modelo {model_name} agotado o con cuota insuficiente: {e}. Probando siguiente en cascada...")
+                last_error = e
+                continue
+            except Exception as e:
+                logger.error(f"Error inesperado con modelo {model_name}: {e}. Intentando siguiente...")
+                last_error = e
+                continue
+
+        if not html_output:
+            logger.error(f"Paso 2 falló con todos los modelos de la cascada. Último error: {last_error}")
+            return None
         
         print(f"[HTML] ✅ Paso 2 - Respuesta recibida en {time.time()-t3:.2f}s. Largo HTML: {len(html_output) if html_output else 0} chars")
         if html_output:

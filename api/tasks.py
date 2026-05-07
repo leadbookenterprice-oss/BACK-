@@ -184,7 +184,7 @@ def health_check_all_keys():
     for key in keys:
         try:
             if key.servicio == 'gemini':
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={key.api_key}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key.api_key}"
                 res = requests.post(url, json={"contents":[{"parts":[{"text":"hello"}]}]}, timeout=5)
                 is_healthy = res.status_code == 200
             elif key.servicio == 'elevenlabs':

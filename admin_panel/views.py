@@ -267,7 +267,7 @@ def admin_api_keys_test(request, pk):
     error = None
     try:
         if key.servicio == 'gemini':
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={key.api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key.api_key}"
             res = requests.post(url, json={"contents":[{"parts":[{"text":"hello"}]}]}, timeout=5)
             is_healthy = res.status_code == 200
             if not is_healthy: error = res.text

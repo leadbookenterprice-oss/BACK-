@@ -67,7 +67,7 @@ try:
     from google import genai
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     resp = client.models.generate_content(
-        model='gemini-2.0-flash-lite',
+        model='gemini-2.5-flash-lite',
         contents='Respondé en 1 palabra si me estás leyendo: OK o NO.',
     )
     print("Respuesta:", (resp.text or "")[:200])
