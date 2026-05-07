@@ -356,7 +356,7 @@ Sé muy específico con los valores CSS y las fuentes exactas. El resultado debe
         if context.get('portada_url'):
             add_image_part(context['portada_url'])
 
-        # Watermark en texto puro — sin base64 para no quemar tokens
+        # Preparar watermark LeadBook (solo texto para ahorrar tokens)
         watermark_html = '<div style="position:fixed;bottom:16px;right:16px;opacity:0.15;font-family:sans-serif;font-size:11px;color:#888;pointer-events:none;z-index:9999;">Generado con LeadBook</div>'
 
         # QR embed
@@ -420,7 +420,7 @@ REGLAS ESTRICTAS:
 - Todo CSS en <style> en el <head>.
 - Incluir Google Fonts según el diseño especificado.
 - El HTML debe ser 100% autónomo (sin archivos externos salvo Google Fonts).
-- La Única imagen adjunta binaria es la foto de portada. Para el logo y la galería usá EXCLUSIVAMENTE las URLs proporcionadas en sus atributos src."""
+- La ÚNICA imagen adjunta binaria es la foto de portada. Para el logo y la galería usá EXCLUSIVAMENTE las URLs proporcionadas en sus atributos src."""
 
         contents_step2.append(prompt_step2)
 
