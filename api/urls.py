@@ -101,6 +101,7 @@ urlpatterns = [
     path('admin/apikeys/pool/', admin_apikeys_pool),
     path('admin/apikeys/pool/crear/', admin_apikeys_pool_crear),
     path('admin/apikeys/pool/<int:key_id>/', admin_apikeys_pool_detail),
+    path('admin/apikeys/pool/<int:key_id>/detalle/', admin_apikeys_pool_detail),
     path('admin/apikeys/global/', admin_apikeys_global),
     path('admin/apikeys/pool/auto-repair/', admin_apikeys_auto_repair),
     path('admin/pool/estado/', admin_pool_estado),
