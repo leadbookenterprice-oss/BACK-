@@ -447,20 +447,20 @@ DATOS DEL AGENTE:
 - Teléfono: {context.get('agente_telefono', '')} | Email: {context.get('agente_email', '')}
 
 IMÁGENES:
-- Portada: Adjunta como binario nativo. Usala en el Hero Section.
+- Portada: La imagen adjunta binaria es la FOTO DE PORTADA y DEBE ser usada exclusivamente en el Hero Section como imagen de fondo. No uses ninguna URL de galería para el hero.
 - Logo Agencia (URL): {logo_url_str}
 - Galería (URLs):
 {fotos_galeria_str}
 
 GUÍA DE SECCIONES PREMIUM:
 1. TOP BAR: Logo alineado, diseño minimalista, sticky.
-2. HERO: Altura 500px, centrada, con un gradiente oscuro cinematográfico (bottom-to-top). Título de la propiedad impactante en tipografía Display grande. Badge de operación en color acento.
+2. HERO: Altura 500px, centrada, con un gradiente oscuro cinematográfico (bottom-to-top). Título de la propiedad impactante en tipografía Display grande. Badge de operación en color acento. La imagen de fondo DEBE ser la portada adjunta.
 3. PRECIO: Superpuesto elegantemente sobre el gradiente del hero o en una transición inmediata.
 4. STATS BAR: Fondo de color sólido (oscuro o acento). 5 columnas con ICONOS SVG INLINE únicos (house, bed, bath, ruler, car). Números en bold grande, etiquetas en uppercase pequeño.
 5. DESCRIPCIÓN: Fondo off-white sutil. Usá comillas decorativas gigantes (opacity 0.1) en color acento al inicio. Interlineado de 1.8 para máxima legibilidad.
 6. AMENIDADES: Layout flex-wrap. Chips con bordes redondeados, hover animation (scale 1.05) e ICONOS SVG lógicos para cada una.
-7. GALERÍA: Foto 1 a full-width (350px). Resto en grid de 2 columnas. Bordes redondeados (12px), box-shadow suave y hover effect de zoom sutil.
-8. FOOTER: Fondo oscuro. Avatar del agente circular con borde acento. QR Code ({qr_img_tag}) bien posicionado. Marca de agua LeadBook: {watermark_html}
+7. GALERÍA: Layout de 1 columna (full width). Cada imagen debe ocupar el 100% del ancho disponible con una altura mínima de 400px. Bordes redondeados (12px), box-shadow suave y hover effect de zoom sutil.
+8. FOOTER: Fondo oscuro. Avatar del agente circular con borde acento. Botones de contacto funcionales: WhatsApp (https://wa.me/{str(context.get('agente_telefono', '')).replace(' ', '').replace('+', '').replace('-', '')}) y Email (mailto:{context.get('agente_email', '')}). Ambos deben abrirse en nueva pestaña (target="_blank"). QR Code ({qr_img_tag}) bien posicionado. Marca de agua LeadBook: {watermark_html}
 
 REGLAS TÉCNICAS:
 - CSS en <style> dentro del <head>.
