@@ -67,8 +67,15 @@ body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
 .qr-container img { width: 90px; height: 90px; }
 .qr-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-top: 6px; }
 
-/* WATERMARK */
-.watermark { position: fixed; bottom: 12px; right: 16px; opacity: 0.12; font-family: 'Inter', sans-serif; font-size: 10px; color: #fff; letter-spacing: 1px; pointer-events: none; }
+.watermark {
+  position: fixed;
+  bottom: 18px;
+  right: 20px;
+  width: 120px;
+  opacity: 0.13;
+  pointer-events: none;
+  z-index: 9999;
+}
 </style>
 </head>
 <body>
@@ -158,13 +165,13 @@ body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
   </div>
   {{#if QR_CODE}}
   <div class="qr-container">
-    <img src="data:image/png;base64,{{QR_CODE}}" alt="QR WhatsApp">
+    <img src="{{QR_CODE}}" alt="QR WhatsApp">
     <div class="qr-label">Contactar agente</div>
   </div>
   {{/if}}
 </div>
 
-<div class="watermark">Generado con LeadBook</div>
+<img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
 
 </body>
 </html>

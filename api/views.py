@@ -82,18 +82,9 @@ import uuid
 import os
 import time
 
-import qrcode
-import base64
-from io import BytesIO
-
-def generar_qr_base64(texto):
-    qr = qrcode.QRCode(version=1, box_size=4, border=2)
-    qr.add_data(texto)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buffer = BytesIO()
-    img.save(buffer, format='PNG')
-    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+def generar_qr_url(texto):
+    import urllib.parse
+    return f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(texto)}"
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -1162,7 +1153,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
 
     # QR Code del agente
     qr_data    = f"Tel: {agente_telefono} | Email: {agente_email} | {agencia_nombre}"
-    qr_base64_ = generar_qr_base64(qr_data)
+    qr_base64_ = generar_qr_url(qr_data)
 
     # ─── Construir contexto del template ─────────────────────────────────
     context = {
