@@ -23,13 +23,12 @@ def get_api_key(agente, servicio):
         # No tiene bundle activo, pasamos a keys directas
         pass
 
-    # 2. Buscar key individual directa (assigned o in_bundle o activa)
+    # 2. Buscar key individual directa — cualquier status mientras esté asignada al usuario
     cuenta = APIKey.objects.filter(
         assigned_to=agente,
         servicio__iexact=servicio,
-        status__in=['available', 'active', 'assigned', 'in_bundle']
-    ).first()
-    
+    ).exclude(status__in=['dead', 'disabled']).first()
+
     if cuenta:
         return cuenta.api_key
 
