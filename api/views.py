@@ -82,15 +82,17 @@ import uuid
 import os
 import time
 
-import urllib.parse, urllib.request, tempfile
 def generar_qr_url(texto):
+    import urllib.parse, urllib.request
     url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(texto)}"
     try:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-        urllib.request.urlretrieve(url, tmp.name)
-        return f"file://{tmp.name}"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            png_bytes = resp.read()
+        import base64
+        b64 = base64.b64encode(png_bytes).decode()
+        return f"data:image/png;base64,{b64}"
     except Exception as e:
-        print(f"[QR] Error descargando imagen: {e}")
+        print(f"[QR] Error: {e}")
         return ''
 
 def get_client_ip(request):
@@ -1327,6 +1329,7 @@ def generar_imagen_post(request):
             ],
             "agente_nombre": data.get('agenteNombre', ''),
             "agente_telefono": data.get('agenteTelefono', ''),
+            "agencia_nombre": data.get('agenciaNombre', '') or data.get('agencia_nombre', ''),
             "qr_url": generar_qr_url(f"Tel: {data.get('agenteTelefono', '')} | {data.get('agenciaNombre', '')}"),
         }
         
@@ -1344,7 +1347,7 @@ def generar_imagen_post(request):
 
         # Renderizar HTML y luego convertir a imagen PNG con Playwright
         html_content = render_to_string('renders/post.html', context)
-        image_stream = render_html_to_image(html_content, 1080, 1080)
+        image_stream = render_html_to_image(html_content, 1080, 1350)
 
         # Generar caption con IA (con fallback)
         prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres, usá hashtags y emojis."

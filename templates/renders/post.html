@@ -7,7 +7,7 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root { --black: #080808; --white: #F5F3EE; --accent: #C8FF00; }
   body {
-    width: 1080px; height: 1080px;
+    width: 1080px; height: 1350px;
     background: var(--black);
     font-family: 'DM Sans', sans-serif;
     color: var(--white);
@@ -19,7 +19,7 @@
     background: linear-gradient(0deg, rgba(8,8,8,0.97) 0%, rgba(8,8,8,0.65) 45%, rgba(8,8,8,0.15) 100%);
     z-index: 2;
   }
-  .content { position: absolute; inset: 0; z-index: 3; padding: 72px; display: flex; flex-direction: column; justify-content: space-between; }
+  .content { position: absolute; inset: 0; z-index: 3; padding: 80px 72px; display: flex; flex-direction: column; justify-content: space-between; }
 
   /* TOP */
   .top-section { display: flex; justify-content: space-between; align-items: flex-start; }
@@ -53,6 +53,7 @@
   .agent-info { display: flex; flex-direction: column; gap: 4px; }
   .agent-name { font-family: 'DM Sans', sans-serif; font-size: 28px; font-weight: 700; color: var(--white); }
   .agent-phone { font-family: 'Space Mono', monospace; font-size: 22px; color: rgba(255,255,255,0.6); }
+  .agent-agency { font-family: 'Space Mono', monospace; font-size: 18px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 2px; }
   .qr-block { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .qr-block img { width: 110px; height: 110px; border: 3px solid var(--accent); padding: 4px; background: white; }
   .qr-label { font-family: 'Space Mono', monospace; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.4); }
@@ -86,6 +87,7 @@
         <div class="agent-info">
           <div class="agent-name">{{ agente_nombre }}</div>
           <div class="agent-phone">{{ agente_telefono }}</div>
+          {% if agencia_nombre %}<div class="agent-agency">{{ agencia_nombre }}</div>{% endif %}
         </div>
         {% if qr_url %}
         <div class="qr-block">
