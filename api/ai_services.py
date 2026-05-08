@@ -50,11 +50,24 @@ def generar_html_desde_template(context, agente):
     print(f"[Template DEBUG] portada_url raw: {repr(context.get('portada_url', 'NO EXISTE'))}")
     print(f"[Template DEBUG] portadaUrl raw: {repr(context.get('portadaUrl', 'NO EXISTE'))}")
     
-    # 1. Elegir template al azar (sincronizado con Post usando listado_id)
+    # 1. Elegir template al azar (siempre aleatorio al regenerar)
     templates = list(TEMPLATE_COLORES.keys())
-    listado_id = context.get('listado_id', 0)
-    rng = random.Random(int(listado_id) if listado_id else random.randint(0, 9999))
-    template_elegido = rng.choice(templates)
+    template_elegido = random.choice(templates)  # siempre aleatorio al regenerar
+
+    # Guardar template en DB para persistencia
+    listado_id = context.get('listado_id')
+    if listado_id:
+        try:
+            from .models import Listado
+            listado = Listado.objects.filter(id=listado_id).first()
+            if listado:
+                datos = listado.datos or {}
+                datos['template'] = template_elegido.replace('.html', '').replace('template_', '')
+                listado.datos = datos
+                listado.save(update_fields=['datos'])
+                print(f"[Template] Guardado template en DB: {datos['template']}")
+        except Exception as e:
+            print(f"[Template] Error guardando template: {e}")
     
     # 2. Leer el template
     template_path = os.path.join(TEMPLATES_DIR, template_elegido)

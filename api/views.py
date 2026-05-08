@@ -1387,10 +1387,24 @@ def generar_imagen_post(request):
             'renders/post_mediterraneo.html',
             'renders/post_tech_modern.html',
         ]
-        import random
+        template_post = None
         listado_id_val = data.get('listado_id')
-        rng = random.Random(int(listado_id_val) if listado_id_val else 0)
-        template_post = rng.choice(TEMPLATES_POST)
+        if listado_id_val:
+            try:
+                from .models import Listado
+                listado = Listado.objects.filter(id=listado_id_val).first()
+                if listado and listado.datos:
+                    template_nombre = listado.datos.get('template', '')
+                    if template_nombre:
+                        template_post = f'renders/post_{template_nombre}.html'
+                        print(f"[POST] Template leído de DB: {template_post}")
+            except Exception as e:
+                print(f"[POST] Error leyendo template: {e}")
+
+        if not template_post:
+            import random
+            template_post = random.choice(TEMPLATES_POST)
+            print(f"[POST] Template elegido al azar (fallback): {template_post}")
         html_content = render_to_string(template_post, context)
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
