@@ -93,7 +93,7 @@ def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio=
     detalle = f"{tipo_propiedad} en {ciudad}".strip(' en') if tipo_propiedad or ciudad else "propiedad"
     precio_str = f" por {moneda} {precio}".strip() if precio else ""
     op_str = f" en {operacion}".lower() if operacion else ""
-    mensaje = f"Hola! Vi tu publicación en LeadBook y me interesa {detalle}{op_str}{precio_str}. ¿Podés darme más información?"
+    mensaje = f"Hola! Me interesa {detalle}{op_str}{precio_str}. ¿Podés darme más información?"
     # Armar URL de WhatsApp
     wa_url = f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(mensaje)}"
     # Generar QR de la URL de WhatsApp
