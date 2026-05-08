@@ -1225,6 +1225,8 @@ def generar_pdf(request):
         from api.ai_services import generar_html_gemini, generar_html_desde_template
         from .models import Listado
 
+        context['listado_id'] = listado_id_hint
+
         try:
             html_string = generar_html_desde_template(context, request.user)
         except Exception as e:

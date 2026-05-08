@@ -50,9 +50,11 @@ def generar_html_desde_template(context, agente):
     print(f"[Template DEBUG] portada_url raw: {repr(context.get('portada_url', 'NO EXISTE'))}")
     print(f"[Template DEBUG] portadaUrl raw: {repr(context.get('portadaUrl', 'NO EXISTE'))}")
     
-    # 1. Elegir template al azar
+    # 1. Elegir template al azar (sincronizado con Post usando listado_id)
     templates = list(TEMPLATE_COLORES.keys())
-    template_elegido = random.choice(templates)
+    listado_id = context.get('listado_id', 0)
+    rng = random.Random(int(listado_id) if listado_id else random.randint(0, 9999))
+    template_elegido = rng.choice(templates)
     
     # 2. Leer el template
     template_path = os.path.join(TEMPLATES_DIR, template_elegido)
