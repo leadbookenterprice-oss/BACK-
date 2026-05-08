@@ -1169,7 +1169,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
             from .plan_utils import registrar_uso
             registrar_uso(user, 'ai')
         if not descripcion:
-            descripcion = f"Esta {tipo_propiedad} en {operacion} ubicada en {ciudad} representa una oportunidad única en el mercado inmobiliario. Con una superficie de {superficie_cubierta}m2 y acabados de primera calidad, ofrece el equilibrio perfecto entre confort y diseño.\n\nSu distribución inteligente permite aprovechar cada espacio al máximo, mientras que las amenidades incluidas elevan la experiencia de vida. Precio: {moneda} {precio}. No pierda la oportunidad de conocerla."
+            raise GeminiQuotaExhaustedError("Límite diario de IA alcanzado. Intentá de nuevo mañana.")
 
 
     # QR Code del agente
