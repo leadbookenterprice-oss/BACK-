@@ -3233,3 +3233,30 @@ def marcar_todas_leidas(request):
     from .models import Notificacion
     Notificacion.objects.filter(usuario=request.user, leida=False).update(leida=True)
     return Response({'ok': True})
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def estado_cuota_ia(request):
+    from .models import UserAPIQuota, Suscripcion
+    try:
+        quota = UserAPIQuota.objects.get(user=request.user, service='gemini')
+        agotada = quota.is_blocked
+        usado = quota.requests_today
+        limite = quota.daily_limit
+    except UserAPIQuota.DoesNotExist:
+        agotada = False
+        usado = 0
+        limite = 1500
+    
+    try:
+        suscripcion = request.user.suscripcion
+        ai_used = suscripcion.ai_used
+    except:
+        ai_used = usado
+
+    return Response({
+        'agotada': agotada,
+        'usado': ai_used,
+        'limite': limite,
+        'porcentaje': min(100, int((ai_used / limite) * 100)) if limite > 0 else 0
+    })
