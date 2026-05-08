@@ -1727,10 +1727,10 @@ def mp_checkout_api_extra(request):
     servicio = request.data.get('servicio', 'gemini')
     
     PRECIOS_EXTRA = {
-        'gemini':       {'nombre': 'Contenido IA — Adicional (+1500 créditos)',     'precio': 2000},
-        'elevenlabs':   {'nombre': 'Voces Neurales — Adicional (+10.000 caracteres)', 'precio': 2000},
-        'uploadpost':   {'nombre': 'Gestor de Redes — Adicional (+10 publicaciones)', 'precio': 2000},
-        'pack_completo':{'nombre': 'Pack Completo — Todos los recursos',              'precio': 4000},
+        'gemini':       {'nombre': 'Contenido IA — Adicional (+1500 créditos)',     'precio': 1},
+        'elevenlabs':   {'nombre': 'Voces Neurales — Adicional (+10.000 caracteres)', 'precio': 1},
+        'uploadpost':   {'nombre': 'Gestor de Redes — Adicional (+10 publicaciones)', 'precio': 1},
+        'pack_completo':{'nombre': 'Pack Completo — Todos los recursos',              'precio': 1},
     }
     
     if servicio not in PRECIOS_EXTRA:
