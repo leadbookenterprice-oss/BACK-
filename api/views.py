@@ -1839,8 +1839,8 @@ def mp_webhook(request):
                     agent.plan_activo = True
                     agent.save()
                     print(f"[MP] Plan actualizado: user {user_id} → {tipo}")
-                agent.plan_activo = True
-                agent.save()
+
+
 
             except Agent.DoesNotExist:
                 print(f"[MP] Usuario no encontrado: {user_id}")
