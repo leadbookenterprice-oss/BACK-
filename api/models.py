@@ -421,7 +421,7 @@ class APIRequestLog(models.Model):
 class UserAPIQuota(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='api_quotas')
     service = models.CharField(max_length=50)
-    daily_limit = models.IntegerField(default=20)  # Free tier Gemini: 20 req/día
+    daily_limit = models.IntegerField(default=1500)
     monthly_limit = models.IntegerField(null=True, blank=True)
     requests_today = models.IntegerField(default=0)
     requests_this_month = models.IntegerField(default=0)
