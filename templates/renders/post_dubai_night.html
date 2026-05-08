@@ -9,12 +9,10 @@
 body { width: 1080px; height: 1350px; background: #0a0a0a; font-family: 'Inter', sans-serif; color: #f0ede6; overflow: hidden; position: relative; }
 .bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
 .overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(0,0,0,0.97) 0%, rgba(0,0,0,0.6) 45%, rgba(0,0,0,0.15) 100%); z-index: 2; }
-.content { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; justify-content: space-between; padding: 72px; }
-/* TOP */
+.content { position: absolute; top: 0; left: 0; right: 0; bottom: 48px; z-index: 3; display: flex; flex-direction: column; justify-content: space-between; padding: 72px 72px 40px; }
 .top { display: flex; justify-content: space-between; align-items: flex-start; }
 .badge { background: var(--acento); color: #000; font-family: 'Inter', sans-serif; font-size: 24px; font-weight: 500; letter-spacing: 4px; padding: 12px 28px; text-transform: uppercase; }
 .logo { max-width: 200px; max-height: 80px; object-fit: contain; filter: brightness(0) invert(1); }
-/* BOTTOM */
 .bottom { display: flex; flex-direction: column; gap: 20px; }
 .ciudad { font-size: 18px; color: var(--acento); letter-spacing: 4px; text-transform: uppercase; font-weight: 300; }
 .titulo { font-family: 'Playfair Display', serif; font-size: 96px; font-weight: 900; line-height: 0.95; text-shadow: 0 4px 24px rgba(0,0,0,0.5); }
@@ -24,13 +22,16 @@ body { width: 1080px; height: 1350px; background: #0a0a0a; font-family: 'Inter',
 .stat-val { font-size: 36px; font-weight: 500; color: var(--acento); font-family: 'Playfair Display', serif; line-height: 1; }
 .stat-lbl { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-top: 4px; }
 .agent-row { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--acento); padding-top: 20px; }
+.agent-info { display: flex; flex-direction: column; gap: 4px; }
 .agent-name { font-family: 'Playfair Display', serif; font-size: 26px; color: var(--acento); }
-.agent-sub { font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-top: 4px; }
-.agent-phone { font-size: 18px; color: rgba(255,255,255,0.7); margin-top: 4px; }
-.qr-block { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.qr-block img { width: 100px; height: 100px; border: 2px solid var(--acento); padding: 4px; background: white; }
+.agent-sub { font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.5); }
+.agent-phone { font-size: 18px; color: rgba(255,255,255,0.7); }
+.qr-block { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.qr-block img { width: 180px; height: 180px; border: 3px solid var(--acento); padding: 8px; background: white; }
 .qr-lbl { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); }
-.watermark { position: fixed; bottom: 18px; right: 20px; width: 100px; opacity: 0.13; pointer-events: none; z-index: 9999; }
+.watermark-strip { position: absolute; bottom: 0; left: 0; right: 0; height: 48px; background: rgba(10,10,10,0.95); z-index: 4; display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid rgba(201,168,76,0.2); }
+.watermark-strip img { height: 22px; opacity: 0.4; }
+.watermark-strip span { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.25); font-family: 'Inter', sans-serif; }
 </style>
 </head>
 <body>
@@ -53,15 +54,18 @@ body { width: 1080px; height: 1350px; background: #0a0a0a; font-family: 'Inter',
     </div>
     {% endif %}
     <div class="agent-row">
-      <div>
+      <div class="agent-info">
         <div class="agent-name">{{ agente_nombre }}</div>
         <div class="agent-sub">{{ agencia_nombre }}</div>
         <div class="agent-phone">{{ agente_telefono }}</div>
       </div>
-      {% if qr_url %}<div class="qr-block"><img src="{{ qr_url }}"><div class="qr-lbl">Contactar</div></div>{% endif %}
+      {% if qr_url %}<div class="qr-block"><img src="{{ qr_url }}" alt="WhatsApp"><div class="qr-lbl">Contactar</div></div>{% endif %}
     </div>
   </div>
 </div>
-<img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+<div class="watermark-strip">
+  <img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+  <span>Generado con LeadBook</span>
+</div>
 </body>
 </html>
