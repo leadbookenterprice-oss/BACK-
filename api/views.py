@@ -1469,6 +1469,14 @@ def generar_imagen_post(request):
             "texto": caption
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
+        from .models import UserAPIQuota
+        quota, _ = UserAPIQuota.objects.get_or_create(
+            user=request.user, service='gemini',
+            defaults={'daily_limit': 1500, 'requests_today': 0}
+        )
+        quota.is_blocked = True
+        quota.requests_today = quota.daily_limit
+        quota.save()
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         import traceback
