@@ -545,3 +545,19 @@ class Notificacion(models.Model):
 
     def __str__(self):
         return f"{self.usuario} - {self.titulo}"
+
+
+class BundleAPIExtra(models.Model):
+    """APIs adicionales de Gemini compradas por el usuario"""
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='apis_extra')
+    api_key = models.ForeignKey('APIKey', on_delete=models.SET_NULL, null=True, related_name='extras')
+    servicio = models.CharField(max_length=50, default='gemini')
+    activa = models.BooleanField(default=True)
+    comprada_en = models.DateTimeField(auto_now_add=True)
+    pago_id = models.CharField(max_length=200, null=True, blank=True)
+
+    class Meta:
+        ordering = ['-comprada_en']
+
+    def __str__(self):
+        return f"{self.usuario} - {self.servicio} extra ({self.comprada_en.date()})"
