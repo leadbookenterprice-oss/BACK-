@@ -336,8 +336,10 @@ def admin_apikeys_pool(request):
                 assigned_user_id = bundle_asig.usuario_id
 
         if assigned_user_id:
+            print(f"[POOL DEBUG] Buscando quota: user_id={assigned_user_id} service={k.servicio}")
             from .models import UserAPIQuota
             q = UserAPIQuota.objects.filter(user_id=assigned_user_id, service=k.servicio).first()
+            print(f"[POOL DEBUG] Resultado: q={q} requests_today={q.requests_today if q else 'NO ENCONTRADO'}")
             if q:
                 user_daily_used = q.requests_today
                 user_daily_limit = q.daily_limit or 1500
