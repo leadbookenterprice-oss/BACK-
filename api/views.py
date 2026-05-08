@@ -1316,7 +1316,7 @@ def generar_pdf(request):
         from .models import UserAPIQuota
         quota, _ = UserAPIQuota.objects.get_or_create(
             user=request.user, service='gemini',
-            defaults={'daily_limit': 1500, 'requests_today': 0}
+            defaults={'daily_limit': 1500, 'monthly_limit': 1500}
         )
         quota.is_blocked = True
         quota.requests_today = quota.daily_limit
@@ -1472,7 +1472,7 @@ def generar_imagen_post(request):
         from .models import UserAPIQuota
         quota, _ = UserAPIQuota.objects.get_or_create(
             user=request.user, service='gemini',
-            defaults={'daily_limit': 1500, 'requests_today': 0}
+            defaults={'daily_limit': 1500, 'monthly_limit': 1500}
         )
         quota.is_blocked = True
         quota.requests_today = quota.daily_limit
@@ -1727,7 +1727,10 @@ def mp_checkout_api_extra(request):
     servicio = request.data.get('servicio', 'gemini')
     
     PRECIOS_EXTRA = {
-        'gemini': {'nombre': 'Generación de Contenido IA — Adicional', 'precio': 5000},
+        'gemini':       {'nombre': 'Contenido IA — Adicional (+1500 créditos)',     'precio': 2000},
+        'elevenlabs':   {'nombre': 'Voces Neurales — Adicional (+10.000 caracteres)', 'precio': 2000},
+        'uploadpost':   {'nombre': 'Gestor de Redes — Adicional (+10 publicaciones)', 'precio': 2000},
+        'pack_completo':{'nombre': 'Pack Completo — Todos los recursos',              'precio': 4000},
     }
     
     if servicio not in PRECIOS_EXTRA:
@@ -1805,34 +1808,57 @@ def mp_webhook(request):
                 agent = Agent.objects.get(id=int(user_id))
                 if tipo.startswith('extra_'):
                     # Compra de API adicional
-                    servicio = tipo.replace('extra_', '')
-                    from .models import APIKey, BundleAPIExtra
-                    # Buscar una APIKey disponible del servicio que no esté asignada como extra
-                    keys_ya_usadas = BundleAPIExtra.objects.filter(
-                        usuario=agent, servicio=servicio, activa=True
-                    ).values_list('api_key_id', flat=True)
-                    key_disponible = APIKey.objects.filter(
-                        servicio=servicio,
-                        status='available'
-                    ).exclude(id__in=keys_ya_usadas).first()
-                    
-                    if key_disponible:
-                        BundleAPIExtra.objects.create(
-                            usuario=agent,
-                            api_key=key_disponible,
-                            servicio=servicio,
-                            activa=True,
-                            pago_id=str(data_id)
-                        )
-                        # Actualizar el límite en UserAPIQuota
-                        from .models import UserAPIQuota
-                        quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=servicio)
-                        quota.is_blocked = False
-                        quota.monthly_limit = (quota.monthly_limit or 1500) + 1500
-                        quota.save()
-                        print(f"[MP] API extra asignada: user {user_id} → {servicio} extra")
+                    if tipo == 'extra_pack_completo':
+                        for svc in ['gemini', 'elevenlabs', 'uploadpost']:
+                            keys_ya_usadas = BundleAPIExtra.objects.filter(
+                                usuario=agent, servicio=svc, activa=True
+                            ).values_list('api_key_id', flat=True)
+                            key_disponible = APIKey.objects.filter(
+                                servicio=svc, status__in=['available', 'active']
+                            ).exclude(id__in=keys_ya_usadas).first()
+                            if key_disponible:
+                                BundleAPIExtra.objects.create(
+                                    usuario=agent, api_key=key_disponible,
+                                    servicio=svc, activa=True, pago_id=str(data_id)
+                                )
+                                from .models import UserAPIQuota
+                                quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=svc)
+                                quota.is_blocked = False
+                                # Incrementos específicos por servicio
+                                inc = 1500 if svc == 'gemini' else 10000 if svc == 'elevenlabs' else 10
+                                quota.monthly_limit = (quota.monthly_limit or (1500 if svc=='gemini' else 10000 if svc=='elevenlabs' else 10)) + inc
+                                quota.daily_limit = (quota.daily_limit or (1500 if svc=='gemini' else 10000 if svc=='elevenlabs' else 10)) + inc
+                                quota.save()
+                        print(f"[MP] Pack completo asignado: user {user_id}")
                     else:
-                        print(f"[MP] No hay APIKey disponible para {servicio}")
+                        servicio = tipo.replace('extra_', '')
+                        from .models import APIKey, BundleAPIExtra
+                        # Buscar una APIKey disponible del servicio que no esté asignada como extra
+                        keys_ya_usadas = BundleAPIExtra.objects.filter(
+                            usuario=agent, servicio=servicio, activa=True
+                        ).values_list('api_key_id', flat=True)
+                        key_disponible = APIKey.objects.filter(
+                            servicio=servicio,
+                            status__in=['available', 'active']
+                        ).exclude(id__in=keys_ya_usadas).first()
+                        
+                        if key_disponible:
+                            BundleAPIExtra.objects.create(
+                                usuario=agent, api_key=key_disponible,
+                                servicio=servicio, activa=True, pago_id=str(data_id)
+                            )
+                            # Actualizar el límite en UserAPIQuota
+                            from .models import UserAPIQuota
+                            quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=servicio)
+                            quota.is_blocked = False
+                            # Aumentar límites (mensual y diario)
+                            inc = 1500 if servicio == 'gemini' else 10000 if servicio == 'elevenlabs' else 10
+                            quota.monthly_limit = (quota.monthly_limit or inc) + inc
+                            quota.daily_limit = (quota.daily_limit or inc) + inc
+                            quota.save()
+                            print(f"[MP] API extra asignada: user {user_id} → {servicio} extra")
+                        else:
+                            print(f"[MP] No hay APIKey disponible para {servicio}")
                 else:
                     # Compra de plan normal
                     agent.plan_nombre = tipo
