@@ -3395,7 +3395,7 @@ def estado_cuota_ia(request):
     })
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def debug_quota(request):
     from .models import UserAPIQuota, APIKey, APIBundleAssignment
     quotas = list(UserAPIQuota.objects.values(
