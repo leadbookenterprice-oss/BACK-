@@ -1346,6 +1346,8 @@ def generar_imagen_post(request):
             "ciudad": data.get('ciudad', ''),
             "precio": data.get('precio', ''),
             "moneda": data.get('moneda', 'USD'),
+            "titulo": f"{data.get('tipoPropiedad', '')} en {data.get('ciudad', '')}",
+            "agente_email": data.get('agenteEmail', '') or data.get('agente_email', ''),
             "logo_url": data.get('logoAgenciaUrl'),
             "caracteristicas": [
                 {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
