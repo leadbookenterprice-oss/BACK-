@@ -3411,6 +3411,12 @@ def debug_quota(request):
         # Corregir límites incorrectos por servicio
         UserAPIQuota.objects.filter(service='uploadpost', daily_limit__gt=100).update(daily_limit=10)
         UserAPIQuota.objects.filter(service='gemini', daily_limit__lt=100).update(daily_limit=1500)
+        
+        # Reset extras de prueba (pago_id = 'manual_admin')
+        from .models import BundleAPIExtra
+        extras_borradas = BundleAPIExtra.objects.filter(pago_id='manual_admin').delete()
+        print(f"[DEBUG] Extras de prueba borradas: {extras_borradas}")
+        
         return Response({'desbloqueados': desbloqueados})
     
     quotas = list(UserAPIQuota.objects.values(

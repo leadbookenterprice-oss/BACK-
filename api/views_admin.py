@@ -287,100 +287,94 @@ def admin_apikeys_resumen(request):
     })
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
 def admin_apikeys_pool(request):
     if not _is_staff_check(request):
         return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    
+    from .models import BundleAPIExtra, UserAPIQuota
     
     servicio = request.query_params.get('servicio')
     keys = APIKey.objects.all().select_related('assigned_to').order_by('servicio', '-created_at')
     if servicio:
         keys = keys.filter(servicio__icontains=servicio)
-        
-    # Límite por defecto para el cálculo de porcentaje
-    DEFAULT_LIMITS = {
-        'gemini': 1500,
-        'elevenlabs': 10000,
-        'uploadpost': 10
-    }
+    
+    DEFAULT_LIMITS = {'gemini': 1500, 'elevenlabs': 10000, 'uploadpost': 10}
     
     data = []
     for k in keys:
         limite = k.monthly_limit or DEFAULT_LIMITS.get(k.servicio, 100)
-        consumo = k.requests_this_month
+        consumo = k.requests_this_month or 0
         porcentaje = min(100, int((consumo / limite) * 100)) if limite else 0
-
-        # Si tiene usuario asignado, cruzar con UserAPIQuota para datos reales
-        user_daily_used = k.requests_today
-        print(f"[POOL DEBUG A] key_id={k.id} servicio={k.servicio} assigned_to_id={k.assigned_to_id} requests_today={k.requests_today}")
-        user_daily_limit = k.daily_limit or 1500
-        user_is_blocked = False
         
-        # Buscar usuario via assigned_to directo O via bundle
+        user_daily_used = k.requests_today or 0
+        user_daily_limit = k.daily_limit or DEFAULT_LIMITS.get(k.servicio, 1500)
+        user_is_blocked = False
+        extras_list = []
+        
+        # Obtener user_id — directo o via bundle
         assigned_user_id = k.assigned_to_id
         if not assigned_user_id:
             from .models import APIBundleAssignment
-            bundle_asig = APIBundleAssignment.objects.filter(
-                activo=True,
-                bundle__key_gemini=k
-            ).first() if k.servicio == 'gemini' else None
-            if not bundle_asig:
-                bundle_asig = APIBundleAssignment.objects.filter(
-                    activo=True,
-                    bundle__key_elevenlabs=k
-                ).first() if k.servicio == 'elevenlabs' else None
-            if not bundle_asig:
-                bundle_asig = APIBundleAssignment.objects.filter(
-                    activo=True,
-                    bundle__key_uploadpost=k
-                ).first() if k.servicio == 'uploadpost' else None
+            svc = k.servicio
+            bundle_asig = None
+            if svc == 'gemini':
+                bundle_asig = APIBundleAssignment.objects.filter(activo=True, bundle__key_gemini=k).first()
+            elif svc == 'elevenlabs':
+                bundle_asig = APIBundleAssignment.objects.filter(activo=True, bundle__key_elevenlabs=k).first()
+            elif svc == 'uploadpost':
+                bundle_asig = APIBundleAssignment.objects.filter(activo=True, bundle__key_uploadpost=k).first()
             if bundle_asig:
                 assigned_user_id = bundle_asig.usuario_id
-
+        
+        # Cruzar con UserAPIQuota y BundleAPIExtra
         if assigned_user_id:
-            print(f"[POOL DEBUG] Buscando quota: user_id={assigned_user_id} service={k.servicio}")
-            from .models import UserAPIQuota, BundleAPIExtra
             q = UserAPIQuota.objects.filter(user_id=assigned_user_id, service=k.servicio).first()
-            print(f"[POOL DEBUG] Resultado: q={q} requests_today={q.requests_today if q else 'NO ENCONTRADO'}")
             if q:
-                user_daily_used = q.requests_today
-                user_daily_limit = q.daily_limit or 1500
-                user_is_blocked = q.is_blocked
+                user_daily_used = q.requests_today or 0
+                user_daily_limit = q.daily_limit or DEFAULT_LIMITS.get(k.servicio, 1500)
+                user_is_blocked = q.is_blocked or False
                 if user_is_blocked:
                     user_daily_used = user_daily_limit
                     porcentaje = 100
-
+            
+            extras_qs = BundleAPIExtra.objects.filter(
+                usuario_id=assigned_user_id,
+                servicio=k.servicio,
+                activa=True
+            ).select_related('api_key')
+            
+            extras_list = [{
+                'id': e.id,
+                'servicio': e.servicio,
+                'api_key_preview': e.api_key.api_key[:10] + '...' if e.api_key else '',
+                'comprada_en': e.comprada_en.strftime('%d/%m/%Y') if e.comprada_en else '',
+                'pago_id': e.pago_id or '',
+            } for e in extras_qs]
+        
         data.append({
-            "id": k.id,
-            "servicio": k.servicio,
-            "status": k.status,
-            "key_masked": k.api_key[:10] + "..." if k.api_key else "",
-            "requests_today": user_daily_used,
-            "daily_limit": user_daily_limit,
-            "requests_this_month": consumo,
-            "monthly_limit": limite,
-            "porcentaje_uso": porcentaje,
-            "total_requests": k.total_requests,
-            "error_count": k.error_count,
-            "last_used": k.last_used_at.isoformat() if k.last_used_at else None,
-            "health": k.last_health_status,
-            "assigned_to_email": k.assigned_to.email if k.assigned_to else None,
-            "assigned_to_id": k.assigned_to.id if k.assigned_to else None,
-            "assigned_to_nombre": k.assigned_to.nombre if k.assigned_to else None,
-            "is_blocked": user_is_blocked,
-            "extras": [
-                {
-                    "id": e.id,
-                    "servicio": e.servicio,
-                    "api_key": e.api_key.api_key if e.api_key else "",
-                    "comprada_en": e.comprada_en.isoformat() if e.comprada_en else None,
-                    "activa": e.activa,
-                }
-                for e in BundleAPIExtra.objects.filter(
-                    usuario_id=assigned_user_id, activa=True
-                ).select_related('api_key')
-            ] if assigned_user_id else [],
+            'id': k.id,
+            'servicio': k.servicio,
+            'service': k.servicio,
+            'status': k.status,
+            'api_key': k.api_key,
+            'key_masked': k.api_key[:10] + '...' if k.api_key else '',
+            'assigned_to': k.assigned_to.email if k.assigned_to else None,
+            'assigned_to_email': k.assigned_to.email if k.assigned_to else None,
+            'assigned_to_id': assigned_user_id,
+            'assigned_to_nombre': k.assigned_to.nombre if k.assigned_to else None,
+            'requests_today': user_daily_used,
+            'daily_limit': user_daily_limit,
+            'requests_this_month': consumo,
+            'monthly_limit': limite,
+            'porcentaje_uso': porcentaje,
+            'total_requests': k.total_requests or 0,
+            'error_count': k.error_count or 0,
+            'last_used': k.last_used_at.isoformat() if k.last_used_at else None,
+            'last_health_status': k.last_health_status,
+            'is_blocked': user_is_blocked,
+            'extras': extras_list,
         })
+    
     return Response(data)
 
 @api_view(['POST'])
@@ -453,12 +447,25 @@ def admin_add_extra_api(request, user_id):
         key_disponible = APIKey.objects.filter(
             servicio=servicio, status__in=['available', 'active']
         ).exclude(id__in=keys_ya_usadas).first()
+        
         if not key_disponible:
-            return Response({'error': 'No hay keys disponibles'}, status=400)
+            # Intentar con keys exhausted también
+            key_disponible = APIKey.objects.filter(
+                servicio=servicio
+            ).exclude(id__in=keys_ya_usadas).first()
+            if not key_disponible:
+                return Response({'error': 'No hay keys disponibles'}, status=400)
+                
+        print(f"[ADD EXTRA] user_id={user_id} servicio={servicio} key={key_disponible.api_key[:10] if key_disponible else 'NONE'}")
+        
         BundleAPIExtra.objects.create(
             usuario=agent, api_key=key_disponible,
             servicio=servicio, activa=True, pago_id='manual_admin'
         )
+        
+        count = BundleAPIExtra.objects.filter(usuario=agent, servicio=servicio).count()
+        print(f"[ADD EXTRA] Total extras para user {user_id}: {count}")
+        
         quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=servicio)
         quota.is_blocked = False
         quota.daily_limit = (quota.daily_limit or 1500) + 1500
