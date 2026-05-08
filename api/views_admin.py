@@ -292,7 +292,7 @@ def admin_apikeys_pool(request):
         return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
     
     servicio = request.query_params.get('servicio')
-    keys = APIKey.objects.all().order_by('servicio', '-created_at')
+    keys = APIKey.objects.all().select_related('assigned_to').order_by('servicio', '-created_at')
     if servicio:
         keys = keys.filter(servicio__icontains=servicio)
         
