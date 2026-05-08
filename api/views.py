@@ -82,13 +82,25 @@ import uuid
 import os
 import time
 
-def generar_qr_url(texto):
-    import urllib.parse, urllib.request
-    url = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(texto)}"
+def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio='', moneda=''):
+    import urllib.parse, urllib.request, base64
+    # Limpiar teléfono: solo dígitos
+    tel_limpio = ''.join(filter(str.isdigit, str(telefono)))
+    # Si no empieza con código de país, asumir Argentina (+54)
+    if tel_limpio and not tel_limpio.startswith('54'):
+        tel_limpio = '54' + tel_limpio
+    # Armar mensaje profesional
+    detalle = f"{tipo_propiedad} en {ciudad}".strip(' en') if tipo_propiedad or ciudad else "propiedad"
+    precio_str = f" por {moneda} {precio}".strip() if precio else ""
+    op_str = f" en {operacion}".lower() if operacion else ""
+    mensaje = f"Hola! Vi tu publicación en LeadBook y me interesa {detalle}{op_str}{precio_str}. ¿Podés darme más información?"
+    # Armar URL de WhatsApp
+    wa_url = f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(mensaje)}"
+    # Generar QR de la URL de WhatsApp
+    qr_api = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(wa_url)}"
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        with urllib.request.urlopen(qr_api, timeout=5) as resp:
             png_bytes = resp.read()
-        import base64
         b64 = base64.b64encode(png_bytes).decode()
         return f"data:image/png;base64,{b64}"
     except Exception as e:
@@ -1161,8 +1173,14 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
 
 
     # QR Code del agente
-    qr_data    = f"Tel: {agente_telefono} | Email: {agente_email} | {agencia_nombre}"
-    qr_base64_ = generar_qr_url(qr_data)
+    qr_base64_ = generar_qr_url(
+        telefono=agente_telefono,
+        tipo_propiedad=tipo_propiedad,
+        ciudad=ciudad,
+        operacion=operacion,
+        precio=precio,
+        moneda=moneda
+    )
 
     # ─── Construir contexto del template ─────────────────────────────────
     context = {
@@ -1337,7 +1355,14 @@ def generar_imagen_post(request):
             "agente_nombre": data.get('agenteNombre', ''),
             "agente_telefono": data.get('agenteTelefono', ''),
             "agencia_nombre": data.get('agenciaNombre', '') or data.get('agencia_nombre', ''),
-            "qr_url": generar_qr_url(f"Tel: {data.get('agenteTelefono', '')} | {data.get('agenciaNombre', '')}"),
+            "qr_url": generar_qr_url(
+                telefono=data.get('agenteTelefono', ''),
+                tipo_propiedad=data.get('tipoPropiedad', ''),
+                ciudad=data.get('ciudad', ''),
+                operacion=data.get('operacion', ''),
+                precio=data.get('precio', ''),
+                moneda=data.get('moneda', '')
+            ),
         }
         
         fotos_raw = data.get('fotosRecorrido', [])
