@@ -7,9 +7,9 @@ from django.utils import timezone
 def get_api_key(agente, servicio):
     """
     Devuelve la API key string correcta desde el pool asignado al usuario.
-    Si el usuario no tiene un bundle ni keys, intenta asignarle lo que falte.
+    Orden: 1. Bundle suscripción -> 2. Key individual -> 3. Recursos Extra comprados.
     """
-    # 1. Buscar bundle asignado y activo
+    # 1. Buscar bundle asignado y activo (Suscripción principal)
     try:
         asig = APIBundleAssignment.objects.select_related('bundle__key_gemini',
                                                            'bundle__key_elevenlabs',
@@ -18,27 +18,39 @@ def get_api_key(agente, servicio):
         )
         key_val = asig.bundle.get_key_for(servicio)
         if key_val:
-            return key_val
+            from api.models import APIKey
+            k_obj = APIKey.objects.filter(api_key=key_val).first()
+            if k_obj and k_obj.status not in ['exhausted', 'dead', 'disabled']:
+                return key_val
     except APIBundleAssignment.DoesNotExist:
-        # No tiene bundle activo, pasamos a keys directas
         pass
 
-    # 2. Buscar key individual directa — cualquier status mientras esté asignada al usuario
+    # 2. Buscar key individual directa
     cuenta = APIKey.objects.filter(
         assigned_to=agente,
         servicio__iexact=servicio,
-    ).exclude(status__in=['dead', 'disabled']).first()
+    ).exclude(status__in=['exhausted', 'dead', 'disabled']).first()
 
     if cuenta:
         return cuenta.api_key
 
-    # 3. Si no tiene nada, disparar reparación/asignación rápida creando un bundle o agrupando keys
+    # 3. Buscar en APIs extra compradas (Reserva final)
+    from api.models import BundleAPIExtra
+    extra = BundleAPIExtra.objects.filter(
+        usuario=agente,
+        servicio__iexact=servicio,
+        activa=True,
+        api_key__status__in=['available', 'active', 'assigned', 'in_bundle']
+    ).select_related('api_key').first()
+    
+    if extra and extra.api_key:
+        return extra.api_key.api_key
+
+    # 4. Si no tiene nada o todo está agotado, disparar reparación/asignación
     assigned_services = APIPoolService.assign_keys_to_user(agente)
     if servicio in assigned_services:
-        # Intentar de nuevo tras la reparación
         return get_api_key(agente, servicio)
 
-    # Fallback final: No hay key asignada y no se pudo reparar
     return None
 
 
