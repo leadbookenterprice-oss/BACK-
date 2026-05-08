@@ -2193,9 +2193,16 @@ def check_admin(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def admin_stats(request):
+    """
+    Dashboard de administración: Métricas globales y estado detallado de las APIs asignadas.
+    """
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
     
+    from .models import Agent, APIKey, UserAPIQuota, APIBundleAssignment
+    from django.utils import timezone
+    from datetime import timedelta
+
     ahora = timezone.now()
     hoy = ahora - timedelta(hours=24)
     semana = ahora - timedelta(days=7)
