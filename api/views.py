@@ -97,7 +97,7 @@ def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio=
     # Armar URL de WhatsApp
     wa_url = f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(mensaje)}"
     # Generar QR de la URL de WhatsApp
-    qr_api = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={urllib.parse.quote(wa_url)}"
+    qr_api = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(wa_url)}"
     try:
         with urllib.request.urlopen(qr_api, timeout=5) as resp:
             png_bytes = resp.read()
