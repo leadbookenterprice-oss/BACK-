@@ -314,9 +314,30 @@ def admin_apikeys_pool(request):
         user_daily_limit = k.daily_limit or 1500
         user_is_blocked = False
         
-        if k.assigned_to_id:
+        # Buscar usuario via assigned_to directo O via bundle
+        assigned_user_id = k.assigned_to_id
+        if not assigned_user_id:
+            from .models import APIBundleAssignment
+            bundle_asig = APIBundleAssignment.objects.filter(
+                activo=True,
+                bundle__key_gemini=k
+            ).first() if k.servicio == 'gemini' else None
+            if not bundle_asig:
+                bundle_asig = APIBundleAssignment.objects.filter(
+                    activo=True,
+                    bundle__key_elevenlabs=k
+                ).first() if k.servicio == 'elevenlabs' else None
+            if not bundle_asig:
+                bundle_asig = APIBundleAssignment.objects.filter(
+                    activo=True,
+                    bundle__key_uploadpost=k
+                ).first() if k.servicio == 'uploadpost' else None
+            if bundle_asig:
+                assigned_user_id = bundle_asig.usuario_id
+
+        if assigned_user_id:
             from .models import UserAPIQuota
-            q = UserAPIQuota.objects.filter(user_id=k.assigned_to_id, service=k.servicio).first()
+            q = UserAPIQuota.objects.filter(user_id=assigned_user_id, service=k.servicio).first()
             if q:
                 user_daily_used = q.requests_today
                 user_daily_limit = q.daily_limit or 1500
