@@ -311,6 +311,7 @@ def admin_apikeys_pool(request):
 
         # Si tiene usuario asignado, cruzar con UserAPIQuota para datos reales
         user_daily_used = k.requests_today
+        print(f"[POOL DEBUG A] key_id={k.id} servicio={k.servicio} assigned_to_id={k.assigned_to_id} requests_today={k.requests_today}")
         user_daily_limit = k.daily_limit or 1500
         user_is_blocked = False
         
