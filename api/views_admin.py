@@ -336,7 +336,6 @@ def admin_apikeys_pool(request):
             if bundle_asig:
                 assigned_user_id = bundle_asig.usuario_id
 
-        extras_list = []
         if assigned_user_id:
             print(f"[POOL DEBUG] Buscando quota: user_id={assigned_user_id} service={k.servicio}")
             from .models import UserAPIQuota, BundleAPIExtra
@@ -349,15 +348,6 @@ def admin_apikeys_pool(request):
                 if user_is_blocked:
                     user_daily_used = user_daily_limit
                     porcentaje = 100
-                    
-            extras = BundleAPIExtra.objects.filter(usuario_id=assigned_user_id, activa=True).select_related('api_key')
-            for ex in extras:
-                extras_list.append({
-                    'id': ex.id,
-                    'servicio': ex.servicio,
-                    'api_key': ex.api_key.api_key if ex.api_key else None,
-                    'comprada_en': ex.comprada_en.isoformat() if ex.comprada_en else None
-                })
 
         data.append({
             "id": k.id,
@@ -377,7 +367,18 @@ def admin_apikeys_pool(request):
             "assigned_to_id": k.assigned_to.id if k.assigned_to else None,
             "assigned_to_nombre": k.assigned_to.nombre if k.assigned_to else None,
             "is_blocked": user_is_blocked,
-            "extras": extras_list,
+            "extras": [
+                {
+                    "id": e.id,
+                    "servicio": e.servicio,
+                    "api_key": e.api_key.api_key if e.api_key else "",
+                    "comprada_en": e.comprada_en.isoformat() if e.comprada_en else None,
+                    "activa": e.activa,
+                }
+                for e in BundleAPIExtra.objects.filter(
+                    usuario_id=assigned_user_id, activa=True
+                ).select_related('api_key')
+            ] if assigned_user_id else [],
         })
     return Response(data)
 
