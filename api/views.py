@@ -3393,3 +3393,10 @@ def estado_cuota_ia(request):
         'limite': limite,
         'porcentaje': min(100, int((ai_used / limite) * 100)) if limite > 0 else 0
     })
+
+@api_view(['GET'])
+@permission_classes([IsAdminUser])  
+def debug_quota(request):
+    from .models import UserAPIQuota
+    quotas = list(UserAPIQuota.objects.values('user_id', 'service', 'daily_limit', 'monthly_limit', 'requests_today', 'is_blocked'))
+    return Response(quotas)

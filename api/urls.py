@@ -146,4 +146,5 @@ urlpatterns = [
     path('notificaciones/leer-todas/', views.marcar_todas_leidas),
     path('cuota-ia/', views.estado_cuota_ia),
     path('mp/checkout-extra/', views.mp_checkout_api_extra),
+    path('debug/quota/', views.debug_quota),
 ]
