@@ -3395,8 +3395,23 @@ def estado_cuota_ia(request):
     })
 
 @api_view(['GET'])
-@permission_classes([IsAdminUser])  
+@permission_classes([IsAuthenticated])
 def debug_quota(request):
-    from .models import UserAPIQuota
-    quotas = list(UserAPIQuota.objects.values('user_id', 'service', 'daily_limit', 'monthly_limit', 'requests_today', 'is_blocked'))
-    return Response(quotas)
+    from .models import UserAPIQuota, APIKey, APIBundleAssignment
+    quotas = list(UserAPIQuota.objects.values(
+        'user_id', 'service', 'daily_limit', 'monthly_limit', 
+        'requests_today', 'is_blocked'
+    ))
+    assignments = APIBundleAssignment.objects.filter(activo=True).select_related('usuario', 'bundle__key_gemini')
+    keys_info = []
+    for a in assignments:
+        k = a.bundle.key_gemini if a.bundle else None
+        if k:
+            keys_info.append({
+                'user': a.usuario.email,
+                'key_id': k.id,
+                'daily_limit': k.daily_limit,
+                'monthly_limit': k.monthly_limit,
+                'status': k.status
+            })
+    return Response({'quotas': quotas, 'keys': keys_info})
