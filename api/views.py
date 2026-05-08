@@ -1716,6 +1716,7 @@ def mp_checkout(request):
         })
     else:
         print(f"MP Error: {preference_response}")
+        # ANCHOR: CHECKOUT_EXTRA_INSERTION
         return Response({"error": "Error al crear preferencia de pago"}, status=500)
 
 
@@ -1750,7 +1751,7 @@ def mp_webhook(request):
         external_ref = data.get("external_reference", "")
         
         if status in ["approved", "authorized"] and "|" in external_ref:
-            user_id, plan = external_ref.split("|", 1)
+            user_id, tipo = external_ref.split("|", 1)
             from .models import Agent
             try:
                 agent = Agent.objects.get(id=int(user_id))
