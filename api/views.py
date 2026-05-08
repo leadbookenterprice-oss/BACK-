@@ -736,6 +736,12 @@ def generar_carrusel(request):
             "caption": caption
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
+        crear_notificacion(
+            request.user,
+            'quota_agotada',
+            'Alcanzaste el 100% de tu uso de IA',
+            'Tus créditos de generación de contenido se agotaron. Se resetean automáticamente a medianoche.'
+        )
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         import traceback
