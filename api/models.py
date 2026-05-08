@@ -523,3 +523,25 @@ class ConfiguracionSistema(models.Model):
 
     def __str__(self):
         return self.clave
+
+
+class Notificacion(models.Model):
+    TIPOS = [
+        ('quota_agotada', 'Cuota agotada'),
+        ('quota_80', 'Cuota al 80%'),
+        ('contenido_generado', 'Contenido generado'),
+        ('reset_creditos', 'Reset de créditos'),
+        ('info', 'Información'),
+    ]
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notificaciones')
+    tipo = models.CharField(max_length=30, choices=TIPOS, default='info')
+    titulo = models.CharField(max_length=200)
+    mensaje = models.TextField()
+    leida = models.BooleanField(default=False)
+    creada_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-creada_en']
+
+    def __str__(self):
+        return f"{self.usuario} - {self.titulo}"

@@ -139,4 +139,9 @@ urlpatterns = [
     path('admin/audio/sfx/', admin_audio_sfx),
     path('admin/audio/sfx/<int:pk>/', admin_audio_sfx_detail),
     path('admin/branding/watermark/', admin_branding_watermark),
+
+    # Notificaciones
+    path('notificaciones/', views.listar_notificaciones),
+    path('notificaciones/<int:notif_id>/leer/', views.marcar_notificacion_leida),
+    path('notificaciones/leer-todas/', views.marcar_todas_leidas),
 ]

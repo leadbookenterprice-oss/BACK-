@@ -26,6 +26,7 @@ from .serializers import (
 )
 from .tasks import run_asset_generation
 from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError
+from .utils import crear_notificacion
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
 from .plan_utils import puede_generar, incrementar_uso
@@ -1306,6 +1307,12 @@ def generar_pdf(request):
         }, status=status.HTTP_200_OK)
 
     except GeminiQuotaExhaustedError as e:
+        crear_notificacion(
+            request.user,
+            'quota_agotada',
+            'Alcanzaste el 100% de tu uso de IA',
+            'Tus créditos de generación de contenido se agotaron. Se resetean automáticamente a medianoche.'
+        )
         return Response({
             "error": "cuota_ia_agotada",
             "mensaje": str(e),
@@ -3187,3 +3194,36 @@ def upload_fotos_listado(request):
         return Response({"error": str(e)}, status=500)
     except Exception as e:
         return Response({"error": str(e)}, status=500)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def listar_notificaciones(request):
+    from .models import Notificacion
+    notifs = Notificacion.objects.filter(usuario=request.user)[:20]
+    data = [{
+        'id': n.id,
+        'tipo': n.tipo,
+        'titulo': n.titulo,
+        'mensaje': n.mensaje,
+        'leida': n.leida,
+        'creada_en': n.creada_en.isoformat(),
+    } for n in notifs]
+    no_leidas = Notificacion.objects.filter(usuario=request.user, leida=False).count()
+    return Response({'notificaciones': data, 'no_leidas': no_leidas})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def marcar_notificacion_leida(request, notif_id):
+    from .models import Notificacion
+    notif = Notificacion.objects.filter(id=notif_id, usuario=request.user).first()
+    if notif:
+        notif.leida = True
+        notif.save()
+    return Response({'ok': True})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def marcar_todas_leidas(request):
+    from .models import Notificacion
+    Notificacion.objects.filter(usuario=request.user, leida=False).update(leida=True)
+    return Response({'ok': True})
