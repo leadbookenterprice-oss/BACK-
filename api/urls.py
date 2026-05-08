@@ -145,4 +145,5 @@ urlpatterns = [
     path('notificaciones/<int:notif_id>/leer/', views.marcar_notificacion_leida),
     path('notificaciones/leer-todas/', views.marcar_todas_leidas),
     path('cuota-ia/', views.estado_cuota_ia),
+    path('payments/checkout-extra/', views.mp_checkout_api_extra),
 ]
