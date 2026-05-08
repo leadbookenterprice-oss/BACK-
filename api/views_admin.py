@@ -336,9 +336,10 @@ def admin_apikeys_pool(request):
             if bundle_asig:
                 assigned_user_id = bundle_asig.usuario_id
 
+        extras_list = []
         if assigned_user_id:
             print(f"[POOL DEBUG] Buscando quota: user_id={assigned_user_id} service={k.servicio}")
-            from .models import UserAPIQuota
+            from .models import UserAPIQuota, BundleAPIExtra
             q = UserAPIQuota.objects.filter(user_id=assigned_user_id, service=k.servicio).first()
             print(f"[POOL DEBUG] Resultado: q={q} requests_today={q.requests_today if q else 'NO ENCONTRADO'}")
             if q:
@@ -348,6 +349,15 @@ def admin_apikeys_pool(request):
                 if user_is_blocked:
                     user_daily_used = user_daily_limit
                     porcentaje = 100
+                    
+            extras = BundleAPIExtra.objects.filter(usuario_id=assigned_user_id, activa=True).select_related('api_key')
+            for ex in extras:
+                extras_list.append({
+                    'id': ex.id,
+                    'servicio': ex.servicio,
+                    'api_key': ex.api_key.api_key if ex.api_key else None,
+                    'comprada_en': ex.comprada_en.isoformat() if ex.comprada_en else None
+                })
 
         data.append({
             "id": k.id,
@@ -367,6 +377,7 @@ def admin_apikeys_pool(request):
             "assigned_to_id": k.assigned_to.id if k.assigned_to else None,
             "assigned_to_nombre": k.assigned_to.nombre if k.assigned_to else None,
             "is_blocked": user_is_blocked,
+            "extras": extras_list,
         })
     return Response(data)
 
@@ -425,6 +436,35 @@ def admin_apikeys_pool_bulk(request):
         'creadas': creadas, 
         'mensaje': f'{creadas} keys creadas exitosamente'
     })
+
+@api_view(['POST'])
+def admin_add_extra_api(request, user_id):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=403)
+    from .models import Agent, APIKey, BundleAPIExtra, UserAPIQuota
+    servicio = request.data.get('servicio', 'gemini')
+    try:
+        agent = Agent.objects.get(id=user_id)
+        keys_ya_usadas = BundleAPIExtra.objects.filter(
+            usuario=agent, servicio=servicio, activa=True
+        ).values_list('api_key_id', flat=True)
+        key_disponible = APIKey.objects.filter(
+            servicio=servicio, status__in=['available', 'active']
+        ).exclude(id__in=keys_ya_usadas).first()
+        if not key_disponible:
+            return Response({'error': 'No hay keys disponibles'}, status=400)
+        BundleAPIExtra.objects.create(
+            usuario=agent, api_key=key_disponible,
+            servicio=servicio, activa=True, pago_id='manual_admin'
+        )
+        quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=servicio)
+        quota.is_blocked = False
+        quota.daily_limit = (quota.daily_limit or 1500) + 1500
+        quota.monthly_limit = (quota.monthly_limit or 1500) + 1500
+        quota.save()
+        return Response({'ok': True, 'key': key_disponible.api_key[:10] + '...'})
+    except Agent.DoesNotExist:
+        return Response({'error': 'Usuario no encontrado'}, status=404)
 
 @api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([AllowAny])
