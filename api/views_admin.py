@@ -309,12 +309,29 @@ def admin_apikeys_pool(request):
         consumo = k.requests_this_month
         porcentaje = min(100, int((consumo / limite) * 100)) if limite else 0
 
+        # Si tiene usuario asignado, cruzar con UserAPIQuota para datos reales
+        user_daily_used = k.requests_today
+        user_daily_limit = k.daily_limit or 1500
+        user_is_blocked = False
+        
+        if k.assigned_to:
+            from .models import UserAPIQuota
+            q = UserAPIQuota.objects.filter(user=k.assigned_to, service=k.servicio).first()
+            if q:
+                user_daily_used = q.requests_today
+                user_daily_limit = q.daily_limit or 1500
+                user_is_blocked = q.is_blocked
+                if user_is_blocked:
+                    user_daily_used = user_daily_limit
+                    porcentaje = 100
+
         data.append({
             "id": k.id,
             "servicio": k.servicio,
             "status": k.status,
             "key_masked": k.api_key[:10] + "..." if k.api_key else "",
-            "requests_today": k.requests_today,
+            "requests_today": user_daily_used,
+            "daily_limit": user_daily_limit,
             "requests_this_month": consumo,
             "monthly_limit": limite,
             "porcentaje_uso": porcentaje,
@@ -325,6 +342,7 @@ def admin_apikeys_pool(request):
             "assigned_to_email": k.assigned_to.email if k.assigned_to else None,
             "assigned_to_id": k.assigned_to.id if k.assigned_to else None,
             "assigned_to_nombre": k.assigned_to.nombre if k.assigned_to else None,
+            "is_blocked": user_is_blocked,
         })
     return Response(data)
 
