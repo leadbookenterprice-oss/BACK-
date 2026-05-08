@@ -144,4 +144,5 @@ urlpatterns = [
     path('notificaciones/', views.listar_notificaciones),
     path('notificaciones/<int:notif_id>/leer/', views.marcar_notificacion_leida),
     path('notificaciones/leer-todas/', views.marcar_todas_leidas),
+    path('cuota-ia/', views.estado_cuota_ia),
 ]
