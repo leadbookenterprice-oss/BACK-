@@ -3400,18 +3400,18 @@ def debug_quota(request):
     from .models import UserAPIQuota, APIKey, APIBundleAssignment
     
     if request.method == 'POST':
-        # Fix 1: APIKeys físicas (Gemini)
-        APIKey.objects.filter(servicio='gemini', daily_limit__lt=100).update(daily_limit=1500)
-        
-        # Fix 2: Cuotas lógicas por servicio
-        UserAPIQuota.objects.filter(service='uploadpost').update(daily_limit=10)
+        from .models import UserAPIQuota
+        # Desbloquear todos los usuarios cuyo uso actual es menor al límite
+        desbloqueados = 0
+        for q in UserAPIQuota.objects.filter(is_blocked=True):
+            if q.requests_today < q.daily_limit:
+                q.is_blocked = False
+                q.save()
+                desbloqueados += 1
+        # Corregir límites incorrectos por servicio
+        UserAPIQuota.objects.filter(service='uploadpost', daily_limit__gt=100).update(daily_limit=10)
         UserAPIQuota.objects.filter(service='gemini', daily_limit__lt=100).update(daily_limit=1500)
-        
-        # Fix 3: Desbloqueo masivo de usuarios con cuota disponible
-        from django.db.models import F
-        unblocked = UserAPIQuota.objects.filter(is_blocked=True, requests_today__lt=F('daily_limit')).update(is_blocked=False)
-        
-        return Response({'status': 'fixed', 'unblocked_users': unblocked})
+        return Response({'desbloqueados': desbloqueados})
     
     quotas = list(UserAPIQuota.objects.values(
         'user_id', 'service', 'daily_limit', 'monthly_limit', 
