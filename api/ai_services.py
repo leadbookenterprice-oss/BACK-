@@ -359,9 +359,7 @@ def call_nim_model(prompt: str, model_id: str, imagen_url: str = None) -> str:
     return response.choices[0].message.content
 
 def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
-    import os, time
-
-    # Intentar Gemini primero
+    import time
     for attempt in range(retries):
         try:
             result = call_gemini_api(prompt, agente=agente, **kwargs)
@@ -371,32 +369,6 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
             print(f"Gemini attempt {attempt+1}/{retries} failed: {str(e)}")
             if attempt < retries - 1:
                 time.sleep(1)
-
-    # Fallback a Groq
-    print("[smart_call] Gemini agotado, intentando Groq...")
-    try:
-        from groq import Groq
-        groq_key = os.environ.get('GROQ_API_KEY') or getattr(settings, 'GROQ_API_KEY', None)
-        if groq_key:
-            client = Groq(api_key=groq_key)
-            system_prompt = kwargs.get('system_prompt', 'Sos un experto en marketing inmobiliario.')
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1000,
-                temperature=0.7,
-            )
-            result = response.choices[0].message.content
-            if result:
-                print("[smart_call] Groq respondió exitosamente")
-                return result
-    except Exception as e:
-        print(f"[smart_call] Groq fallback failed: {e}")
-
-    print("[smart_call] Todos los proveedores fallaron")
     return None
 
 @track_api_call(service='elevenlabs')
