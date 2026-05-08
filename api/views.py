@@ -1716,8 +1716,56 @@ def mp_checkout(request):
         })
     else:
         print(f"MP Error: {preference_response}")
-        # ANCHOR: CHECKOUT_EXTRA_INSERTION
         return Response({"error": "Error al crear preferencia de pago"}, status=500)
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mp_checkout_api_extra(request):
+    """Genera link de pago para comprar una API adicional de Gemini"""
+    servicio = request.data.get('servicio', 'gemini')
+    
+    PRECIOS_EXTRA = {
+        'gemini': {'nombre': 'Generación de Contenido IA — Adicional', 'precio': 5000},
+    }
+    
+    if servicio not in PRECIOS_EXTRA:
+        return Response({"error": "Servicio inválido"}, status=400)
+    
+    item = PRECIOS_EXTRA[servicio]
+    sdk = mercadopago.SDK(config('MP_ACCESS_TOKEN'))
+    frontend_url = config('FRONTEND_URL', default='https://front-saas-production-1e0c.up.railway.app')
+    
+    preference_data = {
+        "items": [{
+            "id": f"extra_{servicio}",
+            "title": item['nombre'],
+            "description": f"Uso adicional permanente mensual de {item['nombre']}. Se suma a tu límite actual.",
+            "quantity": 1,
+            "currency_id": "ARS",
+            "unit_price": float(item['precio'])
+        }],
+        "payer": {"email": request.user.email},
+        "back_urls": {
+            "success": f"{frontend_url}/dashboard?extra=exitoso&servicio={servicio}",
+            "failure": f"{frontend_url}/precios?extra=fallido",
+            "pending": f"{frontend_url}/dashboard?extra=pendiente"
+        },
+        "auto_return": "approved",
+        "external_reference": f"{request.user.id}|extra_{servicio}",
+    }
+    
+    preference_response = sdk.preference().create(preference_data)
+    
+    if preference_response["status"] == 201:
+        return Response({
+            "init_point": preference_response["response"]["init_point"],
+            "preference_id": preference_response["response"]["id"]
+        })
+    else:
+        return Response({"error": "Error al crear preferencia de pago"}, status=500)
+
 
 
 @api_view(['POST'])
@@ -1793,7 +1841,7 @@ def mp_webhook(request):
                     print(f"[MP] Plan actualizado: user {user_id} → {tipo}")
                 agent.plan_activo = True
                 agent.save()
-                print(f"[MP] Plan actualizado: user {user_id} → {plan}")
+
             except Agent.DoesNotExist:
                 print(f"[MP] Usuario no encontrado: {user_id}")
     except Exception as e:
