@@ -29,6 +29,13 @@ def mi_uso_apis(request):
     if plan != 'free':
         from api.models import UserAPIQuota
         servicios = ['gemini', 'elevenlabs', 'uploadpost']
+        for svc in servicios:
+            quota, _ = UserAPIQuota.objects.get_or_create(user=user, service=svc)
+            limite = quota.monthly_limit or DEFAULT_LIMITS.get(svc, 100)
+            consumido = quota.requests_this_month
+            nombre_display = "Voces Neurales" if svc == 'elevenlabs' else "Generación de Contenido IA" if svc == 'gemini' else "Gestor de Redes"
+            unidad_display = "caracteres" if svc == 'elevenlabs' else "peticiones" if svc == 'gemini' else "publicaciones"
+            
             # Si está bloqueado por cuota diaria, mostrar 100%
             if quota.is_blocked:
                 consumido = limite
@@ -66,22 +73,29 @@ def mi_uso_apis(request):
         else:
             # Fallback a UserAPIQuota para usuarios free si no hay bundles disponibles
             from api.models import UserAPIQuota
-            # Si está bloqueado por cuota diaria, mostrar 100%
-            if quota.is_blocked:
-                consumido = limite
-                status_val = 'exhausted'
-            else:
-                status_val = 'ok'
+            for svc in ['gemini', 'elevenlabs', 'uploadpost']:
+                quota, _ = UserAPIQuota.objects.get_or_create(user=user, service=svc)
+                limite = quota.monthly_limit or DEFAULT_LIMITS.get(svc, 100)
+                consumido = quota.requests_this_month
+                nombre_display = "Voces Neurales" if svc == 'elevenlabs' else "Generación de Contenido IA" if svc == 'gemini' else "Gestor de Redes"
+                unidad_display = "caracteres" if svc == 'elevenlabs' else "peticiones" if svc == 'gemini' else "publicaciones"
                 
-            stats.append({
-                "servicio": svc,
-                "nombre": nombre_display,
-                "consumido": consumido,
-                "limite": limite,
-                "unidad": unidad_display,
-                "porcentaje": min(100, int((consumido / limite) * 100)) if limite else 0,
-                "status": status_val
-            })
+                # Si está bloqueado por cuota diaria, mostrar 100%
+                if quota.is_blocked:
+                    consumido = limite
+                    status_val = 'exhausted'
+                else:
+                    status_val = 'ok'
+                    
+                stats.append({
+                    "servicio": svc,
+                    "nombre": nombre_display,
+                    "consumido": consumido,
+                    "limite": limite,
+                    "unidad": unidad_display,
+                    "porcentaje": min(100, int((consumido / limite) * 100)) if limite else 0,
+                    "status": status_val
+                })
                 
             return Response({
                 "success": True,
