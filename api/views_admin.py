@@ -314,9 +314,9 @@ def admin_apikeys_pool(request):
         user_daily_limit = k.daily_limit or 1500
         user_is_blocked = False
         
-        if k.assigned_to:
+        if k.assigned_to_id:
             from .models import UserAPIQuota
-            q = UserAPIQuota.objects.filter(user=k.assigned_to, service=k.servicio).first()
+            q = UserAPIQuota.objects.filter(user_id=k.assigned_to_id, service=k.servicio).first()
             if q:
                 user_daily_used = q.requests_today
                 user_daily_limit = q.daily_limit or 1500
