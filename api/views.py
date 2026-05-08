@@ -3394,10 +3394,16 @@ def estado_cuota_ia(request):
         'porcentaje': min(100, int((ai_used / limite) * 100)) if limite > 0 else 0
     })
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def debug_quota(request):
     from .models import UserAPIQuota, APIKey, APIBundleAssignment
+    
+    if request.method == 'POST':
+        # Fix: actualizar daily_limit de APIKeys con valor incorrecto
+        updated = APIKey.objects.filter(daily_limit__lt=100).update(daily_limit=1500)
+        return Response({'fixed': updated})
+    
     quotas = list(UserAPIQuota.objects.values(
         'user_id', 'service', 'daily_limit', 'monthly_limit', 
         'requests_today', 'is_blocked'
