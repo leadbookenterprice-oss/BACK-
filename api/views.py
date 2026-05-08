@@ -1755,7 +1755,42 @@ def mp_webhook(request):
             from .models import Agent
             try:
                 agent = Agent.objects.get(id=int(user_id))
-                agent.plan_nombre = plan
+                if tipo.startswith('extra_'):
+                    # Compra de API adicional
+                    servicio = tipo.replace('extra_', '')
+                    from .models import APIKey, BundleAPIExtra
+                    # Buscar una APIKey disponible del servicio que no esté asignada como extra
+                    keys_ya_usadas = BundleAPIExtra.objects.filter(
+                        usuario=agent, servicio=servicio, activa=True
+                    ).values_list('api_key_id', flat=True)
+                    key_disponible = APIKey.objects.filter(
+                        servicio=servicio,
+                        status='available'
+                    ).exclude(id__in=keys_ya_usadas).first()
+                    
+                    if key_disponible:
+                        BundleAPIExtra.objects.create(
+                            usuario=agent,
+                            api_key=key_disponible,
+                            servicio=servicio,
+                            activa=True,
+                            pago_id=str(data_id)
+                        )
+                        # Actualizar el límite en UserAPIQuota
+                        from .models import UserAPIQuota
+                        quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=servicio)
+                        quota.is_blocked = False
+                        quota.monthly_limit = (quota.monthly_limit or 1500) + 1500
+                        quota.save()
+                        print(f"[MP] API extra asignada: user {user_id} → {servicio} extra")
+                    else:
+                        print(f"[MP] No hay APIKey disponible para {servicio}")
+                else:
+                    # Compra de plan normal
+                    agent.plan_nombre = tipo
+                    agent.plan_activo = True
+                    agent.save()
+                    print(f"[MP] Plan actualizado: user {user_id} → {tipo}")
                 agent.plan_activo = True
                 agent.save()
                 print(f"[MP] Plan actualizado: user {user_id} → {plan}")
