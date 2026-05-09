@@ -225,7 +225,7 @@ class GeneratedAssetViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GeneratedAssetSerializer
 
     def get_queryset(self):
-        return GeneratedAsset.objects.filter(listado__agente=self.request.user)
+        return GeneratedAsset.objects.filter(agent=self.request.user)
 import os
 import concurrent.futures
 
@@ -402,59 +402,42 @@ class DashboardView(APIView):
         user = request.user
         now = timezone.now()
         start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-        from .models import Listado, UsageLog
-        from .plan_utils import LIMITES
-
+        
         listados = Listado.objects.filter(agente=user)
         listados_este_mes = listados.filter(creado_en__gte=start_of_month).count()
-        total_generados   = listados.count()
-        videos_creados    = listados.aggregate(total_videos=Sum('videos_creados'))['total_videos'] or 0
+        total_generados = listados.count()
+        
+        videos_creados = listados.aggregate(total_videos=Sum('videos_creados'))['total_videos'] or 0
 
-        listados_recientes = list(listados.order_by('-creado_en')[:5].values(
-            'id', 'titulo', 'tipo_propiedad', 'ciudad', 'precio',
-            'creado_en', 'datos_extra', 'video_url', 'video_status'
-        ))
+        listados_recientes = listados.order_by('-creado_en')[:5].values(
+            'id', 'titulo', 'tipo_propiedad', 'ciudad', 'precio', 'creado_en', 'datos', 'video_url', 'video_status'
+        )
 
-        plan   = user.plan_nombre or 'free'
-        limite = LIMITES.get(plan, LIMITES['free'])
-
-        # Uso actual del mes (via UsageLog — fuente de verdad)
-        ai_used = UsageLog.objects.filter(
-            agent=user, tipo='ai',
-            fecha__year=now.year, fecha__month=now.month
-        ).count()
-        images_used = UsageLog.objects.filter(
-            agent=user, tipo='image',
-            fecha__year=now.year, fecha__month=now.month
-        ).count()
-        videos_used = UsageLog.objects.filter(
-            agent=user, tipo='video',
-            fecha__year=now.year, fecha__month=now.month
-        ).count()
+        susc = get_suscripcion(user)
+        plan = susc.plan
 
         return Response({
-            'nombre_inmobiliaria': getattr(user, 'nombre_inmobiliaria', None),
-            'logo_url':            getattr(user, 'logo_url', None),
-            'listados_este_mes':   listados_este_mes,
-            'total_generados':     total_generados,
-            'videos_creados':      videos_creados,
-            'conexiones_activas':  0,
-            'listados_recientes':  listados_recientes,
-            'plan':                plan,
-            'plan_limites': {
-                'properties_per_month': limite.get('properties', 20),
-                'ai_generations':       limite.get('ai', 50),
-                'image_generations':    limite.get('images', 20),
-                'video_generations':    limite.get('videos', 0),
-                'branding':             plan not in ('free',),
+            "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
+            "logo_url": getattr(user, 'logo_url', None),
+            "listados_este_mes": listados_este_mes,
+            "total_generados": total_generados,
+            "videos_creados": videos_creados,
+            "conexiones_activas": 0,
+            "listados_recientes": list(listados_recientes),
+            "plan": plan.nombre,
+            "plan_limites": {
+                "properties_per_month": plan.properties_per_month,
+                "ai_generations": plan.ai_generations,
+                "image_generations": plan.image_generations,
+                "video_generations": plan.video_generations,
+                "branding": plan.branding
             },
-            'uso_actual': {
-                'properties_used': listados_este_mes,
-                'ai_used':         ai_used,
-                'images_used':     images_used,
-                'videos_used':     videos_used,
-            },
+            "uso_actual": {
+                "properties_used": susc.properties_used,
+                "ai_used": susc.ai_used,
+                "images_used": susc.images_used,
+                "videos_used": susc.videos_used
+            }
         })
 
 class PerfilView(APIView):
@@ -1781,124 +1764,106 @@ def mp_checkout_api_extra(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mp_webhook(request):
-    """
-    Webhook de Mercado Pago.
-    v2.0: usa Pago (idempotencia), WebhookLog, APIPoolService.add_extra_key()
-    """
-    from .models import Pago, WebhookLog
-    from api.services.pool_service import APIPoolService
-
-    topic   = request.data.get('type')
+    topic = request.data.get('type')
     data_id = request.data.get('data', {}).get('id')
-
-    # Guardar el webhook PRIMERO — procesar después
-    wh_log = WebhookLog.objects.create(
-        fuente     = 'mercadopago',
-        event_id   = str(data_id) if data_id else None,
-        event_type = topic,
-        payload    = request.data,
-        status     = 'received',
-    )
-
+    
     if not data_id:
-        wh_log.status = 'ignored'
-        wh_log.save(update_fields=['status'])
-        return Response({'status': 'ok'})
-
+        return Response({"status": "ok"})
+    
     try:
         import requests as req
-        from django.utils import timezone as tz
-        headers = {'Authorization': f"Bearer {config('MP_ACCESS_TOKEN')}"}
-
+        headers = {"Authorization": f"Bearer {config('MP_ACCESS_TOKEN')}"}
+        
         if topic == 'payment':
             response = req.get(
-                f'https://api.mercadopago.com/v1/payments/{data_id}',
-                headers=headers, timeout=10
+                f"https://api.mercadopago.com/v1/payments/{data_id}",
+                headers=headers
             )
         elif topic == 'subscription_preapproval':
             response = req.get(
-                f'https://api.mercadopago.com/preapproval/{data_id}',
-                headers=headers, timeout=10
+                f"https://api.mercadopago.com/preapproval/{data_id}",
+                headers=headers
             )
         else:
-            wh_log.status = 'ignored'
-            wh_log.save(update_fields=['status'])
-            return Response({'status': 'ok'})
-
-        mp_data      = response.json()
-        mp_status    = mp_data.get('status')
-        external_ref = mp_data.get('external_reference', '')
-        monto        = mp_data.get('transaction_amount', 0)
-
-        if mp_status not in ['approved', 'authorized'] or '|' not in external_ref:
-            wh_log.status = 'ignored'
-            wh_log.save(update_fields=['status'])
-            return Response({'status': 'ok'})
-
-        # ── Idempotencia: si ya procesamos este pago, ignorar ────────────────
-        if Pago.objects.filter(mp_payment_id=str(data_id)).exists():
-            wh_log.status = 'duplicate'
-            wh_log.save(update_fields=['status'])
-            return Response({'status': 'ok'})
-
-        user_id, tipo = external_ref.split('|', 1)
-
-        from .models import Agent
-        try:
-            agent = Agent.objects.get(id=int(user_id))
-        except Agent.DoesNotExist:
-            wh_log.status = 'error'
-            wh_log.error  = f'Usuario {user_id} no encontrado'
-            wh_log.save(update_fields=['status', 'error'])
-            return Response({'status': 'ok'})
-
-        # ── Registrar el pago ────────────────────────────────────────────────
-        pago = Pago.objects.create(
-            user           = agent,
-            tipo           = tipo if tipo in [t[0] for t in Pago.TIPOS] else 'extra_gemini',
-            mp_payment_id  = str(data_id),
-            mp_status      = 'approved',
-            monto          = monto,
-            moneda         = 'ARS',
-            external_reference = external_ref,
-            datos_mp       = mp_data,
-            procesado_en   = tz.now(),
-        )
-
-        if tipo.startswith('extra_'):
-            # ── Compra de API adicional ───────────────────────────────────────
-            if tipo == 'extra_pack_completo':
-                for svc in ['gemini', 'elevenlabs', 'uploadpost']:
-                    asig = APIPoolService.add_extra_key(agent, svc, pago=pago)
-                    if asig:
-                        print(f'[MP] Pack extra asignado: user {user_id} → {svc}')
+            return Response({"status": "ok"})
+        
+        data = response.json()
+        status = data.get("status")
+        external_ref = data.get("external_reference", "")
+        
+        if status in ["approved", "authorized"] and "|" in external_ref:
+            user_id, tipo = external_ref.split("|", 1)
+            from .models import Agent
+            try:
+                agent = Agent.objects.get(id=int(user_id))
+                if tipo.startswith('extra_'):
+                    # Compra de API adicional
+                    if tipo == 'extra_pack_completo':
+                        for svc in ['gemini', 'elevenlabs', 'uploadpost']:
+                            keys_ya_usadas = BundleAPIExtra.objects.filter(
+                                usuario=agent, servicio=svc, activa=True
+                            ).values_list('api_key_id', flat=True)
+                            key_disponible = APIKey.objects.filter(
+                                servicio=svc, status__in=['available', 'active']
+                            ).exclude(id__in=keys_ya_usadas).first()
+                            if key_disponible:
+                                BundleAPIExtra.objects.create(
+                                    usuario=agent, api_key=key_disponible,
+                                    servicio=svc, activa=True, pago_id=str(data_id)
+                                )
+                                from .models import UserAPIQuota
+                                quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=svc)
+                                quota.is_blocked = False
+                                # Incrementos específicos por servicio
+                                inc = 1500 if svc == 'gemini' else 10000 if svc == 'elevenlabs' else 10
+                                quota.monthly_limit = (quota.monthly_limit or (1500 if svc=='gemini' else 10000 if svc=='elevenlabs' else 10)) + inc
+                                quota.daily_limit = (quota.daily_limit or (1500 if svc=='gemini' else 10000 if svc=='elevenlabs' else 10)) + inc
+                                quota.save()
+                        print(f"[MP] Pack completo asignado: user {user_id}")
                     else:
-                        print(f'[MP] Sin stock extra para {svc} — user {user_id}')
-            else:
-                servicio_nombre = tipo.replace('extra_', '')
-                asig = APIPoolService.add_extra_key(agent, servicio_nombre, pago=pago)
-                if asig:
-                    print(f'[MP] API extra asignada: user {user_id} → {servicio_nombre}')
+                        servicio = tipo.replace('extra_', '')
+                        from .models import APIKey, BundleAPIExtra
+                        # Buscar una APIKey disponible del servicio que no esté asignada como extra
+                        keys_ya_usadas = BundleAPIExtra.objects.filter(
+                            usuario=agent, servicio=servicio, activa=True
+                        ).values_list('api_key_id', flat=True)
+                        key_disponible = APIKey.objects.filter(
+                            servicio=servicio,
+                            status__in=['available', 'active']
+                        ).exclude(id__in=keys_ya_usadas).first()
+                        
+                        if key_disponible:
+                            BundleAPIExtra.objects.create(
+                                usuario=agent, api_key=key_disponible,
+                                servicio=servicio, activa=True, pago_id=str(data_id)
+                            )
+                            # Actualizar el límite en UserAPIQuota
+                            from .models import UserAPIQuota
+                            quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=servicio)
+                            quota.is_blocked = False
+                            # Aumentar límites (mensual y diario)
+                            inc = 1500 if servicio == 'gemini' else 10000 if servicio == 'elevenlabs' else 10
+                            quota.monthly_limit = (quota.monthly_limit or inc) + inc
+                            quota.daily_limit = (quota.daily_limit or inc) + inc
+                            quota.save()
+                            print(f"[MP] API extra asignada: user {user_id} → {servicio} extra")
+                        else:
+                            print(f"[MP] No hay APIKey disponible para {servicio}")
                 else:
-                    print(f'[MP] Sin stock para {servicio_nombre} — user {user_id}')
-        else:
-            # ── Compra de plan ────────────────────────────────────────────────
-            agent.plan_nombre = tipo
-            agent.plan_activo = True
-            agent.save(update_fields=['plan_nombre', 'plan_activo', 'updated_at'])
-            print(f'[MP] Plan actualizado: user {user_id} → {tipo}')
+                    # Compra de plan normal
+                    agent.plan_nombre = tipo
+                    agent.plan_activo = True
+                    agent.save()
+                    print(f"[MP] Plan actualizado: user {user_id} → {tipo}")
 
-        wh_log.status       = 'processed'
-        wh_log.procesado_en = tz.now()
-        wh_log.save(update_fields=['status', 'procesado_en'])
 
+
+            except Agent.DoesNotExist:
+                print(f"[MP] Usuario no encontrado: {user_id}")
     except Exception as e:
-        wh_log.status = 'error'
-        wh_log.error  = str(e)
-        wh_log.save(update_fields=['status', 'error'])
-        print(f'[MP] Error webhook: {e}')
-
-    return Response({'status': 'ok'})
+        print(f"[MP] Error webhook: {e}")
+    
+    return Response({"status": "ok"})
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -3395,74 +3360,69 @@ def marcar_todas_leidas(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def estado_cuota_ia(request):
-    from .models import UserAPIQuota, UsageLog
+    from .models import UserAPIQuota, Suscripcion
     try:
-        # v2: servicio es FK — filtrar por nombre
-        quota = UserAPIQuota.objects.get(
-            user=request.user,
-            servicio__nombre='gemini'
-        )
-        # Lazy reset si Celery estuvo caído
-        quota.maybe_reset_daily()
-
+        quota = UserAPIQuota.objects.get(user=request.user, service='gemini')
         agotada = quota.is_blocked
-        usado   = quota.requests_today
-        limite  = quota.user_daily_limit  # campo renombrado en v2
+        usado = quota.requests_today
+        limite = quota.daily_limit
     except UserAPIQuota.DoesNotExist:
         agotada = False
-        usado   = 0
-        limite  = 1500
-
-    # Uso del mes desde UsageLog (fuente de verdad)
-    now = timezone.now()
-    ai_used_mes = UsageLog.objects.filter(
-        agent=request.user, tipo='ai',
-        fecha__year=now.year, fecha__month=now.month
-    ).count()
+        usado = 0
+        limite = 1500
+    
+    try:
+        suscripcion = request.user.suscripcion
+        ai_used = suscripcion.ai_used
+    except:
+        ai_used = usado
 
     return Response({
-        'agotada':    agotada,
-        'usado':      usado,
-        'limite':     limite,
-        'porcentaje': min(100, int((usado / limite) * 100)) if limite > 0 else 0,
-        'ai_usado_mes': ai_used_mes,
+        'agotada': agotada,
+        'usado': ai_used,
+        'limite': limite,
+        'porcentaje': min(100, int((ai_used / limite) * 100)) if limite > 0 else 0
     })
 
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def debug_quota(request):
-    """
-    v2.0: securizado con ADMIN_KEY. Referencias a modelos eliminados removidas.
-    """
-    # Proteger con admin key
-    admin_key = config('ADMIN_KEY', default='leadbook_admin_2026')
-    if request.headers.get('X-Admin-Key') != admin_key:
-        return Response({'error': 'Forbidden'}, status=403)
-
-    from .models import UserAPIQuota
-
+    from .models import UserAPIQuota, APIKey, APIBundleAssignment
+    
     if request.method == 'POST':
-        # Desbloquear usuarios cuyo uso es menor al límite
+        from .models import UserAPIQuota
+        # Desbloquear todos los usuarios cuyo uso actual es menor al límite
         desbloqueados = 0
         for q in UserAPIQuota.objects.filter(is_blocked=True):
-            if q.requests_today < q.user_daily_limit:
-                q.is_blocked     = False
-                q.blocked_reason = None
-                q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
+            if q.requests_today < q.daily_limit:
+                q.is_blocked = False
+                q.save()
                 desbloqueados += 1
-        return Response({
-            'desbloqueados': desbloqueados,
-            'mensaje': 'Reset completado'
-        })
-
-    # GET: mostrar estado de quotas
-    quotas = list(UserAPIQuota.objects.select_related('user', 'servicio').values(
-        'user__email',
-        'servicio__nombre',
-        'user_daily_limit',
-        'user_monthly_limit',
-        'requests_today',
-        'is_blocked',
-        'updated_at',
+        # Corregir límites incorrectos por servicio
+        UserAPIQuota.objects.filter(service='uploadpost', daily_limit__gt=100).update(daily_limit=10)
+        UserAPIQuota.objects.filter(service='gemini', daily_limit__lt=100).update(daily_limit=1500)
+        
+        # Reset extras de prueba (pago_id = 'manual_admin')
+        from .models import BundleAPIExtra
+        extras_borradas = BundleAPIExtra.objects.filter(pago_id='manual_admin').delete()
+        print(f"[DEBUG] Extras de prueba borradas: {extras_borradas}")
+        
+        return Response({'desbloqueados': desbloqueados})
+    
+    quotas = list(UserAPIQuota.objects.values(
+        'user_id', 'service', 'daily_limit', 'monthly_limit', 
+        'requests_today', 'is_blocked'
     ))
-    return Response({'quotas': quotas, 'total': len(quotas)})
+    assignments = APIBundleAssignment.objects.filter(activo=True).select_related('usuario', 'bundle__key_gemini')
+    keys_info = []
+    for a in assignments:
+        k = a.bundle.key_gemini if a.bundle else None
+        if k:
+            keys_info.append({
+                'user': a.usuario.email,
+                'key_id': k.id,
+                'daily_limit': k.daily_limit,
+                'monthly_limit': k.monthly_limit,
+                'status': k.status
+            })
+    return Response({'quotas': quotas, 'keys': keys_info})

@@ -115,7 +115,7 @@ def admin_api_keys_list(request):
     service = request.query_params.get('service') or request.query_params.get('servicio')
     status_filter = request.query_params.get('status')
     
-    keys = APIKey.objects.all().order_by('-created_at')
+    keys = APIKey.objects.select_related('servicio').order_by('-creado_en')
     if service:
         keys = keys.filter(servicio=service)
     if status_filter:
