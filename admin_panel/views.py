@@ -689,3 +689,129 @@ def admin_bundles_liberar(request, bundle_id):
 def admin_apikeys_auto_repair(request):
     from api.views_admin import admin_apikeys_auto_repair as _v
     return _v(request._request)
+
+
+# ── Global Keys (guardadas en ConfiguracionSistema) ───────────────────────────
+
+def _get_cfg(clave, default=None):
+    from api.models import ConfiguracionSistema
+    cfg, _ = ConfiguracionSistema.objects.get_or_create(
+        clave=clave,
+        defaults={'datos': default or []}
+    )
+    return cfg
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_global_keys_list(request):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    cfg = _get_cfg('global_keys')
+    return Response(cfg.datos or [])
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_global_keys_upsert(request):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    servicio = request.data.get('servicio', '').lower()
+    api_key  = request.data.get('api_key', '')
+    label    = request.data.get('label', '')
+    if not servicio or not api_key:
+        return Response({'error': 'servicio y api_key requeridos'}, status=400)
+    cfg  = _get_cfg('global_keys')
+    keys = cfg.datos or []
+    found = False
+    for k in keys:
+        if k.get('servicio') == servicio:
+            k.update({'api_key': api_key, 'label': label, 'activo': True})
+            found = True
+            break
+    if not found:
+        import time
+        keys.append({'id': int(time.time()), 'servicio': servicio, 'api_key': api_key, 'label': label, 'activo': True})
+    cfg.datos = keys
+    cfg.save()
+    return Response({'ok': True})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_global_key_toggle(request, key_id):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    cfg = _get_cfg('global_keys')
+    for k in (cfg.datos or []):
+        if k.get('id') == key_id:
+            k['activo'] = not k.get('activo', True)
+            cfg.save()
+            return Response({'ok': True, 'activo': k['activo']})
+    return Response({'error': 'No encontrado'}, status=404)
+
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
+def admin_global_key_eliminar(request, key_id):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    cfg    = _get_cfg('global_keys')
+    keys   = cfg.datos or []
+    nuevas = [k for k in keys if k.get('id') != key_id]
+    if len(nuevas) == len(keys): return Response({'error': 'No encontrado'}, status=404)
+    cfg.datos = nuevas
+    cfg.save()
+    return Response({'ok': True})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_global_key_reset(request, key_id):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    cfg = _get_cfg('global_keys')
+    for k in (cfg.datos or []):
+        if k.get('id') == key_id:
+            k.update({'requests_today': 0, 'requests_this_month': 0})
+            cfg.save()
+            return Response({'ok': True})
+    return Response({'error': 'No encontrado'}, status=404)
+
+
+# ── Pool key actualizar / eliminar ────────────────────────────────────────────
+
+@api_view(['PUT'])
+@permission_classes([AllowAny])
+def admin_pool_key_actualizar(request, pk):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    from api.models import APIKey
+    try: key = APIKey.objects.get(pk=pk)
+    except APIKey.DoesNotExist: return Response(status=404)
+    if 'status'      in request.data: key.status             = request.data['status']
+    if 'daily_limit' in request.data: key.google_daily_limit = request.data['daily_limit']
+    if 'label'       in request.data: key.label              = request.data['label']
+    if 'notes'       in request.data: key.notes              = request.data['notes']
+    key.save()
+    return Response({'ok': True, 'id': key.id})
+
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
+def admin_pool_key_eliminar(request, pk):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    from api.models import APIKey
+    try: key = APIKey.objects.get(pk=pk)
+    except APIKey.DoesNotExist: return Response(status=404)
+    # UserAPIAssignment no parece ser usado aquí directamente si se borra la key, 
+    # pero por si acaso si existe la relación:
+    key.delete()
+    return Response({'ok': True})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_pool_key_toggle(request, pk):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    from api.models import APIKey
+    try: key = APIKey.objects.get(pk=pk)
+    except APIKey.DoesNotExist: return Response(status=404)
+    key.status = 'available' if key.status == 'disabled' else 'disabled'
+    key.save(update_fields=['status', 'updated_at'])
+    return Response({'ok': True, 'status': key.status})
+
