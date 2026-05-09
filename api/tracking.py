@@ -93,7 +93,7 @@ def track_api_call(service, action=''):
                             type='quota_warning',
                             severity='warning',
                             related_api_key=key_obj,
-                            created_at__date=timezone.now().date(),
+                            creado_en__date=timezone.now().date(),
                             defaults={
                                 'title': f'Key al {int((key_obj.requests_today/key_obj.daily_limit)*100)}% de uso diario',
                                 'message': f'La key de {service} asignada a {agente.email if key_obj.assigned_to else "Global"} está por agotarse.'

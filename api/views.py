@@ -162,7 +162,7 @@ class RegisterView(APIView):
         otp_verificado = OTPCode.objects.filter(
             email=email,
             verified=True,
-            created_at__gte=timezone.now() - timedelta(hours=1)
+            creado_en__gte=timezone.now() - timedelta(hours=1)
         ).exists()
         if not otp_verificado:
             return Response({"error": "Debés verificar tu email primero"}, status=400)
@@ -181,8 +181,8 @@ class RegisterView(APIView):
             otp_usado = OTPCode.objects.filter(
                 email=email,
                 verified=True,
-                created_at__gte=timezone.now() - timedelta(hours=1)
-            ).order_by('-created_at').first()
+                creado_en__gte=timezone.now() - timedelta(hours=1)
+            ).order_by('-creado_en').first()
             if otp_usado:
                 otp_usado.verified = False
                 otp_usado.code_hash = 'USED'
@@ -1943,7 +1943,7 @@ def send_otp(request):
 
     recent = OTPCode.objects.filter(
         email=email,
-        created_at__gte=timezone.now() - timedelta(minutes=15)
+        creado_en__gte=timezone.now() - timedelta(minutes=15)
     ).count()
     if recent >= 3:
         return Response({"error": "Demasiados intentos. Esperá 15 minutos."}, status=429)
@@ -2019,7 +2019,7 @@ def verify_otp(request):
     otp = OTPCode.objects.filter(
         email=email,
         verified=False
-    ).order_by('-created_at').first()
+    ).order_by('-creado_en').first()
 
     if not otp:
         return Response({"error": "Código inválido o ya utilizado"}, status=400)
@@ -2107,7 +2107,7 @@ def confirmar_recuperacion(request):
         email=email,
         tipo="recuperacion",
         verified=False
-    ).order_by('-created_at').first()
+    ).order_by('-creado_en').first()
     
     if not otp:
         return Response({"error": "Código inválido"}, status=400)
