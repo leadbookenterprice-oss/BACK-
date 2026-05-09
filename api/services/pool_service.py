@@ -1,257 +1,282 @@
+"""
+pool_service.py — LeadBook v2.0
+Gestión del pool de APIs usando el nuevo schema:
+  - UserAPIAssignment (reemplaza APIBundle + APIBundleAssignment + BundleAPIExtra)
+  - Servicio (reemplaza strings sueltos 'gemini', 'elevenlabs', etc.)
+  - AdminAlert (misma tabla, campos renombrados en v2)
+"""
 from django.utils import timezone
-from api.models import APIKey, APIBundle, APIBundleAssignment, AdminAlert
+from api.models import APIKey, UserAPIAssignment, Servicio, AdminAlert, UserAPIQuota
+
+
+SERVICIOS_CRITICOS = ['gemini', 'elevenlabs', 'uploadpost']
 
 
 class APIPoolService:
 
-    # ── Bundle Operations ────────────────────────────────────────────────────
-
-    @staticmethod
-    def assign_bundle_to_user(user):
-        """
-        Asigna un bundle disponible y completo al usuario.
-        Devuelve (bundle, created) o (None, False) si no hay bundles.
-        """
-        # Si ya tiene uno activo, no asignar otro
-        if APIBundleAssignment.objects.filter(usuario=user, activo=True).exists():
-            asig = APIBundleAssignment.objects.get(usuario=user, activo=True)
-            return asig.bundle, False
-
-        bundle = APIBundle.objects.filter(status='available').select_related(
-            'key_gemini', 'key_elevenlabs', 'key_uploadpost'
-        ).first()
-
-        if not bundle or not bundle.is_complete():
-            AdminAlert.objects.create(
-                type='quota_warning',
-                severity='critical',
-                title='Sin bundles disponibles',
-                message=f'Se intentó asignar un bundle a {user.email} pero no hay bundles completos disponibles.',
-                related_user=user
-            )
-            return None, False
-
-        bundle.status = 'assigned'
-        bundle.save(update_fields=['status'])
-
-        asig = APIBundleAssignment.objects.create(bundle=bundle, usuario=user)
-        return bundle, True
-
-    @staticmethod
-    def release_bundle_from_user(user):
-        """Libera el bundle de un usuario y lo pone disponible de nuevo."""
-        try:
-            asig = APIBundleAssignment.objects.get(usuario=user, activo=True)
-            asig.activo = False
-            asig.liberado_en = timezone.now()
-            asig.save()
-
-            asig.bundle.status = 'available'
-            asig.bundle.save(update_fields=['status'])
-            return True
-        except APIBundleAssignment.DoesNotExist:
-            return False
-
-    @staticmethod
-    def rotate_bundle(user):
-        """
-        Libera el bundle actual y asigna uno nuevo (para cuando el bundle
-        falla o está agotado).
-        """
-        APIPoolService.release_bundle_from_user(user)
-        bundle, created = APIPoolService.assign_bundle_to_user(user)
-        if not bundle:
-            AdminAlert.objects.create(
-                type='quota_warning',
-                severity='critical',
-                title='Fallo al rotar bundle',
-                message=f'No se pudo asignar un nuevo bundle a {user.email} porque el pool está vacío.',
-                related_user=user
-            )
-        return bundle
-
-    @staticmethod
-    def get_bundle_stats():
-        """Resumen del estado del pool de bundles."""
-        total = APIBundle.objects.count()
-        disponibles = APIBundle.objects.filter(status='available').count()
-        asignados = APIBundle.objects.filter(status='assigned').count()
-        retirados = APIBundle.objects.filter(status='retired').count()
-        incompletos = sum(1 for b in APIBundle.objects.filter(status='available')
-                          if not b.is_complete())
-        return {
-            'total': total,
-            'disponibles': disponibles,
-            'asignados': asignados,
-            'retirados': retirados,
-            'incompletos': incompletos,
-        }
-
-    # ── Key Operations (Legacy / Individual) ────────────────────────────────
+    # ── Asignación ────────────────────────────────────────────────────────────
 
     @staticmethod
     def assign_keys_to_user(user):
         """
-        Intenta asignar un bundle pre-armado.
-        Si no hay bundles, intenta armar uno dinámicamente juntando 3 keys sueltas.
-        Garantiza que siempre se asigne un bloque de 3 APIs a usuarios Free.
+        Asigna una APIKey primaria por servicio crítico al usuario recién creado.
+        Crea también el UserAPIQuota correspondiente.
+        Devuelve la lista de servicios asignados correctamente.
         """
-        bundle, created = APIPoolService.assign_bundle_to_user(user)
-        if bundle:
-            return ['gemini', 'elevenlabs', 'uploadpost']
+        asignados = []
+        for nombre_servicio in SERVICIOS_CRITICOS:
+            servicio = Servicio.objects.filter(nombre=nombre_servicio, activo=True).first()
+            if not servicio:
+                continue
 
-        # Fallback: intentar armar un bundle automático con 3 keys sueltas
-        servicios = ['gemini', 'elevenlabs', 'uploadpost']
-        keys_to_assign = {}
-        for s in servicios:
-            key = APIKey.objects.filter(status='available', servicio__iexact=s).first()
+            # Ya tiene asignación primaria activa → skip
+            if UserAPIAssignment.objects.filter(
+                user=user, servicio=servicio, is_primary=True, activo=True
+            ).exists():
+                asignados.append(nombre_servicio)
+                continue
+
+            # IDs de keys ya usadas por este usuario en este servicio
+            keys_en_uso = UserAPIAssignment.objects.filter(
+                user=user, servicio=servicio
+            ).values_list('apikey_id', flat=True)
+
+            key = APIKey.objects.filter(
+                servicio=servicio,
+                status='available'
+            ).exclude(id__in=keys_en_uso).first()
+
             if not key:
-                # Si falta alguna de las 3, no se asigna NADA y se alerta
                 AdminAlert.objects.create(
-                    type='quota_warning',
-                    severity='critical',
-                    title='Faltan keys individuales para armar bundle',
-                    message=f'No se pudo armar el bloque de 3 APIs para {user.email} porque falta key de {s}.',
-                    related_user=user
+                    tipo='assign_failed',
+                    severidad='critical',
+                    titulo=f'Sin keys disponibles: {nombre_servicio}',
+                    mensaje=f'No se pudo asignar key de {nombre_servicio} a {user.email}. Pool vacío.',
+                    related_user=user,
                 )
-                return []
-            keys_to_assign[s] = key
+                continue
 
-        # Si tenemos las 3, armamos el bundle
-        bundle = APIBundle.objects.create(
-            nombre=f"Bundle Auto - {user.email}",
-            status='assigned',
-            key_gemini=keys_to_assign['gemini'],
-            key_elevenlabs=keys_to_assign['elevenlabs'],
-            key_uploadpost=keys_to_assign['uploadpost'],
-            notas="Bundle creado dinámicamente al registrarse"
-        )
+            # Crear asignación primaria
+            UserAPIAssignment.objects.create(
+                user=user,
+                apikey=key,
+                servicio=servicio,
+                is_primary=True,
+                activo=True,
+            )
 
-        for s, k in keys_to_assign.items():
-            k.status = 'in_bundle'
-            k.assigned_to = user
-            k.assigned_at = timezone.now()
-            k.save()
+            # Marcar key como asignada
+            key.status = 'assigned'
+            key.save(update_fields=['status', 'updated_at'])
 
-        APIBundleAssignment.objects.create(bundle=bundle, usuario=user)
-        return servicios
+            # Crear/actualizar quota
+            quota, created = UserAPIQuota.objects.get_or_create(
+                user=user,
+                servicio=servicio,
+                defaults={
+                    'user_daily_limit': servicio.default_daily_limit,
+                    'user_monthly_limit': servicio.default_monthly_limit,
+                }
+            )
+
+            asignados.append(nombre_servicio)
+
+        return asignados
 
     @staticmethod
     def release_keys_from_user(user):
-        """Libera bundle y keys legacy de un usuario."""
-        APIPoolService.release_bundle_from_user(user)
-        keys = APIKey.objects.filter(assigned_to=user)
-        for key in keys:
-            key.status = 'available'
-            key.assigned_to = None
-            key.assigned_at = None
-            key.requests_today = 0
-            key.save()
+        """
+        Libera TODAS las asignaciones activas del usuario y devuelve las keys al pool.
+        Se llama al eliminar/suspender un usuario.
+        """
+        assignments = UserAPIAssignment.objects.filter(user=user, activo=True)
+        for asig in assignments:
+            asig.activo = False
+            asig.save(update_fields=['activo', 'updated_at'])
+
+            key = asig.apikey
+            otras = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
+            if not otras:
+                key.status = 'available'
+                key.save(update_fields=['status', 'updated_at'])
 
     @staticmethod
-    def mark_key_dead(key):
-        """Marca una key como muerta y alerta al admin."""
-        user = key.assigned_to
-        key.status = 'dead'
-        key.assigned_to = None
-        key.save()
+    def release_primary_key(user, nombre_servicio):
+        """Libera la key primaria de un servicio específico."""
+        servicio = Servicio.objects.filter(nombre=nombre_servicio).first()
+        if not servicio:
+            return False
 
-        AdminAlert.objects.create(
-            type='api_dead',
-            severity='critical',
-            title=f'Key muerta: {key.servicio}',
-            message=f'La key ID {key.id} ({key.label or key.api_key[:12]}) ha sido marcada como muerta.',
-            related_api_key=key
+        asig = UserAPIAssignment.objects.filter(
+            user=user, servicio=servicio, is_primary=True, activo=True
+        ).first()
+
+        if not asig:
+            return False
+
+        asig.activo = False
+        asig.save(update_fields=['activo', 'updated_at'])
+
+        key = asig.apikey
+        otras = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
+        if not otras:
+            key.status = 'available'
+            key.save(update_fields=['status', 'updated_at'])
+
+        return True
+
+    @staticmethod
+    def add_extra_key(user, nombre_servicio, pago=None):
+        """
+        Asigna una APIKey extra (no primaria) al usuario.
+        Se usa al completar un pago de 'extra_gemini', 'extra_elevenlabs', etc.
+        Devuelve la asignación creada o None si no hay stock.
+        """
+        servicio = Servicio.objects.filter(nombre=nombre_servicio, activo=True).first()
+        if not servicio:
+            return None
+
+        keys_en_uso = UserAPIAssignment.objects.filter(
+            user=user, servicio=servicio
+        ).values_list('apikey_id', flat=True)
+
+        key = APIKey.objects.filter(
+            servicio=servicio,
+            status__in=['available', 'exhausted']
+        ).exclude(id__in=keys_en_uso).first()
+
+        if not key:
+            AdminAlert.objects.create(
+                tipo='assign_failed',
+                severidad='warning',
+                titulo=f'Sin stock extra: {nombre_servicio}',
+                mensaje=f'No hay keys extra disponibles de {nombre_servicio} para {user.email}.',
+                related_user=user,
+            )
+            return None
+
+        asig = UserAPIAssignment.objects.create(
+            user=user,
+            apikey=key,
+            servicio=servicio,
+            is_primary=False,
+            activo=True,
+            pago=pago,
         )
 
-        if user:
-            APIPoolService.rotate_bundle(user)
+        # Recalcular quota del usuario
+        try:
+            quota = UserAPIQuota.objects.get(user=user, servicio=servicio)
+            quota.recalcular_limite()
+            quota.is_blocked = False
+            quota.save(update_fields=['user_daily_limit', 'is_blocked', 'updated_at'])
+        except UserAPIQuota.DoesNotExist:
+            UserAPIQuota.objects.create(
+                user=user,
+                servicio=servicio,
+                user_daily_limit=servicio.default_daily_limit + servicio.extra_increment,
+            )
+
+        return asig
+
+    # ── Reparación ────────────────────────────────────────────────────────────
 
     @staticmethod
     def repair_user_apis(user):
         """
-        Detecta qué servicios le faltan al usuario (gemini, elevenlabs, uploadpost)
-        o cuáles están agotados/muertos, e intenta asignar nuevos del pool.
-        Devuelve una lista de servicios reparados.
+        Detecta qué servicios le faltan al usuario y los asigna del pool.
+        Devuelve lista de servicios reparados.
         """
         repaired = []
-        servicios_criticos = ['gemini', 'elevenlabs', 'uploadpost']
-        
-        # 1. Obtener qué servicios tiene cubiertos actualmente por llaves directas SALUDABLES
-        direct_keys = APIKey.objects.filter(assigned_to=user, status__in=['available', 'active', 'assigned', 'in_bundle'])
-        covered_services = set(k.servicio.lower() for k in direct_keys)
-        
-        # 2. Obtener qué servicios tiene cubiertos por Bundle activo y COMPLETO
-        active_bundle = None
-        try:
-            asig = APIBundleAssignment.objects.get(usuario=user, activo=True)
-            active_bundle = asig.bundle
-            if active_bundle.is_complete():
-                # Si tiene bundle completo (todas las llaves sanas), asumimos que tiene todo cubierto
-                for s in servicios_criticos:
-                    if s not in covered_services:
-                        covered_services.add(s)
-        except APIBundleAssignment.DoesNotExist:
-            pass
+        for nombre_servicio in SERVICIOS_CRITICOS:
+            servicio = Servicio.objects.filter(nombre=nombre_servicio, activo=True).first()
+            if not servicio:
+                continue
 
-        # 3. Identificar faltantes
-        missing = [s for s in servicios_criticos if s not in covered_services]
-        
-        if not missing:
-            return []
+            tiene_activa = UserAPIAssignment.objects.filter(
+                user=user, servicio=servicio, is_primary=True, activo=True
+            ).exists()
 
-        # 4. Intentar asignar del pool para los faltantes
-        for s in missing:
-            # 4.a. Desvincular cualquier llave actual defectuosa (exhausted/dead) para evitar UniqueViolation
-            old_keys = APIKey.objects.filter(assigned_to=user, servicio__iexact=s)
-            for ok in old_keys:
-                ok.assigned_to = None
-                ok.assigned_at = None
-                if ok.status in ['assigned', 'in_bundle']:
-                    ok.status = 'available'
-                ok.save(update_fields=['assigned_to', 'assigned_at', 'status'])
+            if tiene_activa:
+                continue
 
-            # 4.b. Buscar una key disponible
-            new_key = APIKey.objects.filter(servicio__iexact=s, status='available').first()
-            if new_key:
-                if active_bundle:
-                    new_key.status = 'in_bundle'
-                    new_key.assigned_to = user
-                    new_key.assigned_at = timezone.now()
-                    new_key.save()
-                    
-                    if s == 'gemini':
-                        active_bundle.key_gemini = new_key
-                    elif s == 'elevenlabs':
-                        active_bundle.key_elevenlabs = new_key
-                    elif s == 'uploadpost':
-                        active_bundle.key_uploadpost = new_key
-                    active_bundle.save(update_fields=['key_gemini', 'key_elevenlabs', 'key_uploadpost'])
-                else:
-                    new_key.status = 'assigned'
-                    new_key.assigned_to = user
-                    new_key.assigned_at = timezone.now()
-                    new_key.save()
-                repaired.append(s)
-            else:
-                # Alerta si no hay stock para reparar
-                AdminAlert.objects.create(
-                    type='quota_warning',
-                    severity='warning',
-                    title=f'Sin stock para auto-reparar: {s}',
-                    message=f'El usuario {user.email} necesita una key de {s} pero el pool está vacío.',
-                    related_user=user
+            # Intentar asignar
+            result = APIPoolService.assign_keys_to_user.__wrapped__(user) \
+                if hasattr(APIPoolService.assign_keys_to_user, '__wrapped__') \
+                else None
+
+            # Llamada directa simplificada para reparación
+            keys_en_uso = UserAPIAssignment.objects.filter(
+                user=user, servicio=servicio
+            ).values_list('apikey_id', flat=True)
+
+            key = APIKey.objects.filter(
+                servicio=servicio, status='available'
+            ).exclude(id__in=keys_en_uso).first()
+
+            if key:
+                UserAPIAssignment.objects.create(
+                    user=user, apikey=key, servicio=servicio,
+                    is_primary=True, activo=True,
                 )
-        
+                key.status = 'assigned'
+                key.save(update_fields=['status', 'updated_at'])
+                repaired.append(nombre_servicio)
+            else:
+                AdminAlert.objects.create(
+                    tipo='assign_failed',
+                    severidad='warning',
+                    titulo=f'Sin stock para reparar: {nombre_servicio}',
+                    mensaje=f'No hay keys disponibles de {nombre_servicio} para {user.email}.',
+                    related_user=user,
+                )
+
         return repaired
 
     @staticmethod
+    def mark_key_dead(key):
+        """Marca una key como muerta y alerta al admin."""
+        key.status = 'dead'
+        key.save(update_fields=['status', 'updated_at'])
+
+        AdminAlert.objects.create(
+            tipo='api_dead',
+            severidad='critical',
+            titulo=f'Key muerta: {key.servicio.nombre}',
+            mensaje=f'La key ID {key.id} ({key.label or key.api_key[:12]}) fue marcada como muerta.',
+            related_api_key=key,
+        )
+
+        # Intentar reparar usuarios afectados
+        afectados = UserAPIAssignment.objects.filter(
+            apikey=key, activo=True
+        ).select_related('user')
+        for asig in afectados:
+            asig.activo = False
+            asig.save(update_fields=['activo', 'updated_at'])
+            APIPoolService.repair_user_apis(asig.user)
+
+    # ── Stats ─────────────────────────────────────────────────────────────────
+
+    @staticmethod
     def get_pool_stats():
-        """Stats del pool completo (bundles + keys individuales)."""
+        """Resumen del estado del pool."""
         from django.db.models import Count
-        bundle_stats = APIPoolService.get_bundle_stats()
-        key_stats = list(APIKey.objects.values('servicio', 'status').annotate(total=Count('id')))
-        return {
-            'bundles': bundle_stats,
-            'keys': key_stats,
-        }
+        key_stats = list(
+            APIKey.objects.values('servicio__nombre', 'status').annotate(total=Count('id'))
+        )
+        return {'keys': key_stats}
+
+    @staticmethod
+    def get_bundle_stats():
+        """Alias de compatibilidad — devuelve stats de keys por servicio."""
+        from django.db.models import Count
+        disponibles = {}
+        asignadas = {}
+        for s in SERVICIOS_CRITICOS:
+            servicio = Servicio.objects.filter(nombre=s).first()
+            if not servicio:
+                continue
+            disponibles[s] = APIKey.objects.filter(servicio=servicio, status='available').count()
+            asignadas[s] = UserAPIAssignment.objects.filter(servicio=servicio, activo=True).count()
+        return {'disponibles': disponibles, 'asignadas': asignadas}

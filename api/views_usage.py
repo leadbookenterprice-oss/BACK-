@@ -1,188 +1,97 @@
+"""
+api/views_usage.py — LeadBook v2.0
+Estadísticas de uso de APIs para usuarios y admin.
+Lógica migrada al nuevo schema de Servicio / UserAPIQuota / UserAPIAssignment.
+"""
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
-from api.models import APIBundleAssignment, APIKey
+from api.models import APIKey, UserAPIQuota, Servicio, UserAPIAssignment
 from django.utils import timezone
 import requests
 
-# Default limits si la key no tiene límite configurado
-DEFAULT_LIMITS = {
-    'gemini': 1500,       # Peticiones al mes estimadas
-    'elevenlabs': 10000,  # Caracteres al mes
-    'uploadpost': 10      # Posteos al mes estimados
+
+# Nombres amigables para el frontend
+SERVICIO_MAP = {
+    'gemini': {
+        'nombre': "Generación de Contenido IA",
+        'unidad': "peticiones",
+        'icono': "brain"
+    },
+    'elevenlabs': {
+        'nombre': "Voces Neurales",
+        'unidad': "caracteres",
+        'icono': "mic"
+    },
+    'uploadpost': {
+        'nombre': "Gestor de Redes",
+        'unidad': "publicaciones",
+        'icono': "share"
+    }
 }
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def mi_uso_apis(request):
     """
-    Devuelve el uso en tiempo real de las APIs asignadas al usuario logueado.
-    ElevenLabs: consulta a su API.
-    Gemini / UploadPost: lectura del contador interno.
+    Devuelve el uso de APIs del usuario actual.
+    Cruza datos de UserAPIQuota con las keys asignadas en UserAPIAssignment.
     """
     user = request.user
-    plan = getattr(user, 'plan_nombre', 'free') or 'free'
     
-    stats = []
+    # 1. Obtener todas las cuotas del usuario
+    quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
     
-    # Si es usuario pago, usa llaves globales, por lo que mostramos su cuota personal (UserAPIQuota)
-    if plan != 'free':
-        from api.models import UserAPIQuota
-        servicios = ['gemini', 'elevenlabs', 'uploadpost']
-        for svc in servicios:
-            quota, _ = UserAPIQuota.objects.get_or_create(user=user, service=svc)
-            limite = quota.monthly_limit or DEFAULT_LIMITS.get(svc, 100)
-            consumido = quota.requests_this_month
-            nombre_display = "Voces Neurales" if svc == 'elevenlabs' else "Generación de Contenido IA" if svc == 'gemini' else "Gestor de Redes"
-            unidad_display = "caracteres" if svc == 'elevenlabs' else "peticiones" if svc == 'gemini' else "publicaciones"
-            
-            # Si está bloqueado por cuota diaria, mostrar 100%
-            if quota.is_blocked:
-                consumido = limite
-                status_val = 'exhausted'
-            else:
-                status_val = 'ok'
-            
-            stats.append({
-                "servicio": svc,
-                "nombre": nombre_display,
-                "consumido": consumido,
-                "limite": limite,
-                "unidad": unidad_display,
-                "porcentaje": min(100, int((consumido / limite) * 100)) if limite else 0,
-                "status": status_val
-            })
-            
-        return Response({
-            "success": True,
-            "bundle_nombre": f"Plan {plan.capitalize()} (Global Keys)",
-            "stats": stats
-        })
-    
-    # 1. Buscar el bundle activo del usuario (Free)
-    assignment = APIBundleAssignment.objects.filter(usuario=user, activo=True).select_related('bundle').first()
-    
-    # Si no tiene bundle y es Free, intentar asignarle uno on-the-fly
-    if not assignment or not assignment.bundle:
+    # Si no tiene cuotas, intentar repararlas (asignar keys si es nuevo)
+    if not quotas.exists():
         from api.services.pool_service import APIPoolService
-        bundle_asignado, _ = APIPoolService.assign_bundle_to_user(user)
-        
-        if bundle_asignado:
-            # Recargar assignment
-            assignment = APIBundleAssignment.objects.filter(usuario=user, activo=True).select_related('bundle').first()
-        else:
-            # Fallback a UserAPIQuota para usuarios free si no hay bundles disponibles
-            from api.models import UserAPIQuota
-            for svc in ['gemini', 'elevenlabs', 'uploadpost']:
-                quota, _ = UserAPIQuota.objects.get_or_create(user=user, service=svc)
-                limite = quota.monthly_limit or DEFAULT_LIMITS.get(svc, 100)
-                consumido = quota.requests_this_month
-                nombre_display = "Voces Neurales" if svc == 'elevenlabs' else "Generación de Contenido IA" if svc == 'gemini' else "Gestor de Redes"
-                unidad_display = "caracteres" if svc == 'elevenlabs' else "peticiones" if svc == 'gemini' else "publicaciones"
-                
-                # Si está bloqueado por cuota diaria, mostrar 100%
-                if quota.is_blocked:
-                    consumido = limite
-                    status_val = 'exhausted'
-                else:
-                    status_val = 'ok'
-                    
-                stats.append({
-                    "servicio": svc,
-                    "nombre": nombre_display,
-                    "consumido": consumido,
-                    "limite": limite,
-                    "unidad": unidad_display,
-                    "porcentaje": min(100, int((consumido / limite) * 100)) if limite else 0,
-                    "status": status_val
-                })
-                
-            return Response({
-                "success": True,
-                "bundle_nombre": "Asignación Pendiente (Global Fallback)",
-                "stats": stats
-            })
-        
-    bundle = assignment.bundle
-    
-    # 2. Buscar si hay una key asignada directamente al usuario (ej. desde Admin Dashboard)
-    key_gemini_directa = APIKey.objects.filter(assigned_to=user, servicio='gemini').order_by('-assigned_at', '-id').first()
-    
-    keys = {
-        'gemini': key_gemini_directa if key_gemini_directa else bundle.key_gemini,
-        'elevenlabs': bundle.key_elevenlabs,
-        'uploadpost': bundle.key_uploadpost
-    }
-    
-    for servicio, key in keys.items():
-        if not key:
-            continue
-            
-        limite = key.monthly_limit or (key.daily_limit * 30 if getattr(key, 'daily_limit', None) else DEFAULT_LIMITS.get(servicio, 100))
-        
-        # ELEVENLABS: Tiempo real 100%
-        if servicio == 'elevenlabs':
-            try:
-                headers = {"xi-api-key": key.api_key}
-                resp = requests.get("https://api.elevenlabs.io/v1/user/subscription", headers=headers, timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    consumido = data.get("character_count", 0)
-                    limite = data.get("character_limit", limite)
-                else:
-                    consumido = key.requests_this_month
-            except Exception:
-                consumido = key.requests_this_month
-                
-            porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
-            if key.status in ['exhausted', 'dead']:
-                porcentaje = 100
-                consumido = limite # Para que se vea coherente
+        APIPoolService.assign_keys_to_user(user)
+        quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
 
-            stats.append({
-                "servicio": "elevenlabs",
-                "nombre": "Voces Neurales",
-                "consumido": consumido,
-                "limite": limite,
-                "unidad": "caracteres",
-                "porcentaje": porcentaje,
-                "status": key.status
-            })
+    stats = []
+    for q in quotas:
+        svc_name = q.servicio.nombre
+        info = SERVICIO_MAP.get(svc_name, {
+            'nombre': svc_name.capitalize(),
+            'unidad': "unidades",
+            'icono': "api"
+        })
+        
+        limite = q.user_daily_limit or 1500
+        consumido = q.requests_today
+        
+        # ElevenLabs: si es posible, consultar a la API real para mayor precisión
+        # (Solo si tiene una key asignada y activa)
+        if svc_name == 'elevenlabs':
+            asig = UserAPIAssignment.objects.filter(user=user, servicio=q.servicio, activo=True).first()
+            if asig and asig.apikey:
+                try:
+                    # Opcional: consulta en vivo a ElevenLabs. 
+                    # Por ahora usamos el contador interno para velocidad.
+                    pass
+                except Exception:
+                    pass
+
+        porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
+        if q.is_blocked:
+            porcentaje = 100
             
-        # GEMINI / UPLOADPOST: Conteo Interno
-        else:
-            consumido = key.requests_this_month
-            nombre_display = "Generación de Contenido IA" if servicio == 'gemini' else "Gestor de Redes"
-            unidad_display = "peticiones" if servicio == 'gemini' else "publicaciones"
-            
-            # Verificar si el usuario está bloqueado individualmente para este servicio
-            from api.models import UserAPIQuota
-            user_quota, _ = UserAPIQuota.objects.get_or_create(user=user, service=servicio)
-            
-            porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
-            current_status = key.status
-            
-            if user_quota.is_blocked:
-                porcentaje = 100
-                consumido = limite
-                current_status = 'exhausted'
-            elif key.status in ['exhausted', 'dead']:
-                porcentaje = 100
-                consumido = limite
-                
-            stats.append({
-                "servicio": servicio,
-                "nombre": nombre_display,
-                "consumido": consumido,
-                "limite": limite,
-                "unidad": unidad_display,
-                "porcentaje": porcentaje,
-                "status": current_status
-            })
-            
+        stats.append({
+            "servicio": svc_name,
+            "nombre": info['nombre'],
+            "icono": info['icono'],
+            "consumido": consumido,
+            "limite": limite,
+            "unidad": info['unidad'],
+            "porcentaje": porcentaje,
+            "status": "exhausted" if q.is_blocked else "ok"
+        })
+
     return Response({
         "success": True,
-        "bundle_nombre": bundle.nombre,
+        "plan": user.plan_nombre,
         "stats": stats
     })
 
@@ -191,30 +100,30 @@ def mi_uso_apis(request):
 @permission_classes([IsAdminUser])
 def admin_uso_global(request):
     """
-    Devuelve las estadísticas crudas de uso de todas las keys para el dashboard Admin.
-    Para no hacer spam a la API de ElevenLabs, esto devuelve los contadores internos 
-    para TODAS las keys, excepto que se pida refresh en vivo (opcional futuro).
+    Dashboard administrativo de uso de llaves.
+    Muestra el estado de salud y consumo de cada APIKey en la bodega.
     """
-    keys = APIKey.objects.all().values(
-        'id', 'servicio', 'label', 'status', 'empresa',
-        'requests_today', 'requests_this_month', 'monthly_limit'
-    )
+    keys = APIKey.objects.all().select_related('servicio').order_by('servicio', '-total_requests')
     
-    # Agregar % calculado y formatear
     resultado = []
     for k in keys:
-        limite = k['monthly_limit'] or DEFAULT_LIMITS.get(k['servicio'], 100)
-        consumido = k['requests_this_month']
-        
-        # Para elevenlabs en admin, podríamos consultar en vivo, pero si hay 100 keys
-        # podría ser lento o causar un Rate Limit. Usaremos el trackeo interno para
-        # mostrar algo aproximado, o podemos advertir que ElevenLabs real es por Key.
-        
+        limite = k.google_daily_limit or 1500
+        consumido = k.requests_today
         porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
         
-        k['limite'] = limite
-        k['porcentaje'] = porcentaje
-        resultado.append(k)
+        resultado.append({
+            "id": k.id,
+            "servicio": k.servicio.nombre,
+            "label": k.label or f"{k.api_key[:8]}...",
+            "empresa": k.empresa,
+            "status": k.status,
+            "consumido_hoy": consumido,
+            "limite_hoy": limite,
+            "porcentaje": porcentaje,
+            "total_requests": k.total_requests,
+            "error_count": k.error_count,
+            "ultima_vez": k.last_used_at
+        })
         
     return Response({
         "success": True,

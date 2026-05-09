@@ -1,7 +1,6 @@
 from celery import shared_task
 from django.utils import timezone
-from .models import Property, APIKey, UserAPIQuota
-from .services import generate_pdf_for_property, send_property_notification_email
+from .models import APIKey, UserAPIQuota
 from .services.pool_service import APIPoolService
 import requests
 
@@ -56,23 +55,9 @@ def _send_via_resend(email, subject, text_body, html_body):
         return False, f"error:resend:{type(e).__name__}:{str(e)[:200]}"
 
 @shared_task
-def run_asset_generation(property_id):
-    try:
-        property_instance = Property.objects.get(id=property_id)
-
-        # 1. Generate PDF
-        generate_pdf_for_property(property_instance)
-
-        # 2. Generate Video (Removed)
-
-        # 3. Send Notification Email
-        send_property_notification_email(property_instance)
-
-        return f"Completed generation for Property ID: {property_id}"
-    except Property.DoesNotExist:
-        return f"Property with ID {property_id} does not exist."
-    except Exception as e:
-        return f"Failed generation for {property_id}: {str(e)}"
+def run_asset_generation(listado_id):
+    """Stub — se mantiene por compatibilidad con imports. No hace nada."""
+    return f"run_asset_generation: listado {listado_id} — usar generar_video_task"
 
 
 @shared_task
@@ -183,20 +168,21 @@ def health_check_all_keys():
     keys = APIKey.objects.exclude(status__in=['disabled', 'dead'])
     for key in keys:
         try:
-            if key.servicio == 'gemini':
+            servicio_nombre = key.servicio.nombre if hasattr(key.servicio, 'nombre') else str(key.servicio)
+            if servicio_nombre == 'gemini':
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key.api_key}"
                 res = requests.post(url, json={"contents":[{"parts":[{"text":"hello"}]}]}, timeout=5)
                 is_healthy = res.status_code == 200
-            elif key.servicio == 'elevenlabs':
+            elif servicio_nombre == 'elevenlabs':
                 url = "https://api.elevenlabs.io/v1/voices"
                 res = requests.get(url, headers={"xi-api-key": key.api_key}, timeout=5)
                 is_healthy = res.status_code == 200
-            elif key.servicio == 'uploadpost':
+            elif servicio_nombre == 'uploadpost':
                 url = "https://api.upload-post.com/api/uploadposts/users"
                 res = requests.get(url, headers={"Authorization": f"Apikey {key.api_key}"}, timeout=5)
                 is_healthy = res.status_code == 200
             else:
-                is_healthy = True # Desconocido, asume sano
+                is_healthy = True  # Desconocido, asume sano
                 
             key.last_health_status = is_healthy
             key.last_health_check = timezone.now()

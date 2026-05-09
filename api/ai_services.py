@@ -221,19 +221,10 @@ class GeminiQuotaExhaustedError(Exception):
 
 @track_api_call(service='gemini')
 def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
-    if agente is not None:
-        from api.pool_manager import get_api_key
-        key = get_api_key(agente, 'gemini')
-        if not key:
-            raise Exception("No tienes una API Key de Gemini asignada en el Pool.")
-    else:
-        key = settings.GEMINI_API_KEY
-    print(f"[DEBUG] Gemini Key: {key[:10] if key else 'N/A'}... | Model: gemini-2.5-flash-lite")
-    client = genai.Client(api_key=key)
     system_prompt = kwargs.get('system_prompt', '')
     full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
 
-    def _call():
+    def _call(client):
         return client.models.generate_content(
             model='gemini-2.5-flash-lite',
             contents=full_prompt,
@@ -451,12 +442,10 @@ def _get_leadbook_watermark_b64():
         return None
 
 
-def _mark_gemini_exhausted(agente, is_monthly=False):
-    """Marca la key de Gemini del agente como agotada en la DB."""
+def _mark_gemini_exhausted(agente, key_str, is_monthly=False):
+    """Marca una key específica de Gemini como agotada en la DB."""
     try:
-        from api.pool_manager import get_api_key
         from api.models import APIKey
-        key_str = get_api_key(agente, 'gemini')
         if key_str:
             k = APIKey.objects.filter(api_key=key_str).first()
             if k:
@@ -464,56 +453,78 @@ def _mark_gemini_exhausted(agente, is_monthly=False):
                 if is_monthly:
                     k.is_monthly_exhausted = True
                 k.requests_this_month = k.monthly_limit or 1500
-                k.save()
+                k.save(update_fields=['status', 'is_monthly_exhausted', 'requests_this_month'])
+                print(f"[Pool] Key marcada como AGOTADA: {key_str[:10]}...")
     except Exception as ex:
         logger.error(f"Error marcando Gemini como agotada: {ex}")
 
-def execute_with_gemini_retry(agente, operation, max_retries=3):
+
+def execute_with_gemini_retry(agente, operation_func, max_retries=3):
     """
-    Ejecuta una operación de Gemini con manejo inteligente de errores 429.
-    Distingue entre rate limits por minuto y cuota mensual agotada.
+    Ejecuta una operación de Gemini con manejo inteligente de errores y ROTACIÓN DE LLAVES.
+    operation_func debe recibir un objeto 'client' como argumento.
     """
-    for attempt in range(max_retries + 1):
+    from google import genai
+    from api.pool_manager import get_api_key
+
+    last_key = None
+    
+    for attempt in range(max_retries + 5): # Damos margen para rotar llaves
+        # 1. Obtener llave actual
+        if agente:
+            current_key = get_api_key(agente, 'gemini')
+        else:
+            current_key = settings.GEMINI_API_KEY
+            
+        if not current_key:
+            raise GeminiQuotaExhaustedError("No hay API Keys disponibles.")
+
+        # 2. Crear cliente y ejecutar
         try:
-            return operation()
+            client = genai.Client(api_key=current_key)
+            return operation_func(client)
         except Exception as e:
             error_msg = str(e).lower()
             original_error_msg = str(e)
             
-            if '429' in error_msg or 'quota' in error_msg or 'exhausted' in error_msg:
-                # 1. Error mensual/diario (Agotamiento real)
+            # Detectar errores de cuota (429, exhausted, limit)
+            is_quota = '429' in error_msg or 'quota' in error_msg or 'exhausted' in error_msg
+            
+            if is_quota:
                 is_monthly = any(term in original_error_msg for term in [
                     'GenerateRequestsPerDayPerProjectPerModel',
                     'generate_content_free_tier_requests',
                     'limit: 0'
                 ])
-                
-                # 2. Error por minuto (Rate limit)
                 is_minute = any(term in original_error_msg for term in [
                     'GenerateContentInputTokensPerModelPerMinute',
                     'GenerateRequestsPerMinutePerProjectPerModel'
                 ])
                 
-                if is_monthly or (not is_minute and '429' not in error_msg): 
-                    # Es un agotamiento real de cuota mensual/diaria
+                if is_monthly or (not is_minute and '429' not in error_msg):
+                    # Agotamiento REAL de cuota
                     if agente:
-                        _mark_gemini_exhausted(agente, is_monthly=True)
+                        _mark_gemini_exhausted(agente, current_key, is_monthly=True)
+                        # Intentar rotar: buscar si get_api_key ahora nos da otra llave
+                        new_key = get_api_key(agente, 'gemini')
+                        if new_key and new_key != current_key:
+                            print(f"[Pool] 🔄 Rotando llave de Gemini: {current_key[:8]} -> {new_key[:8]}")
+                            continue # Reintentar con la nueva llave
+                    
+                    # Si no hay agente o no hay más llaves, lanzar error definitivo
                     raise GeminiQuotaExhaustedError(
-                        "Alcanzaste el límite mensual de generación de contenido IA. "
+                        "Alcanzaste el límite de tu cuota de IA (incluyendo adicionales). "
                         "Tu cuota se renueva el próximo mes."
                     )
-                    
+                
                 if is_minute or '429' in error_msg:
-                    # Rate limit temporal por minuto
+                    # Rate limit por minuto (esperar y reintentar con la misma llave)
                     if attempt < max_retries:
-                        logger.warning(f"Rate limit de Gemini alcanzado (intento {attempt + 1}/{max_retries}). Esperando 60s...")
+                        logger.warning(f"Rate limit de Gemini (minuto) alcanzado. Esperando 60s... (Intento {attempt+1})")
                         time.sleep(60)
                         continue
-                    else:
-                        logger.error("Rate limit de Gemini persistente tras 3 reintentos. Abortando sin marcar agotada.")
-                        raise Exception("Servidor de IA ocupado. Por favor, intentá nuevamente en unos minutos.")
             
-            # Si no es un error relacionado a cuotas/rate limit, lanzar de inmediato
+            # Otros errores no relacionados a cuota
             raise e
 
 
@@ -534,18 +545,8 @@ def generar_html_gemini(context, agente):
     print(f"[HTML] ▶ Obteniendo API key...")
 
     try:
-        if agente is not None:
-            from api.pool_manager import get_api_key
-            key = get_api_key(agente, 'gemini')
-            if not key:
-                logger.error("No hay API Key de Gemini asignada para este usuario en el Pool.")
-                return None
-        else:
-            key = settings.GEMINI_API_KEY
-            
-        print(f"[HTML] ✅ API key obtenida: {key[:12]}...")
-
-        client = genai.Client(api_key=key)
+        # La llave y el cliente se gestionan dinámicamente en execute_with_gemini_retry
+        pass
 
         # ─── PASO 1: Generar prompt creativo de diseño ───────────────────────────
         # Variantes de estilo para que cada ficha sea visualmente distinta
@@ -604,8 +605,8 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
                 elif provider == "nim":
                     design_prompt = call_nim_model(prompt_step1, model_id)
                 elif provider == "gemini":
-                    def _call_step1():
-                        return client.models.generate_content(
+                    def _call_step1(c):
+                        return c.models.generate_content(
                             model=model_id,
                             contents=prompt_step1,
                         ).text.strip()
@@ -774,8 +775,8 @@ REGLAS DE DISEÑO PREMIUM:
                     p2_modified = f"Foto de portada (URL): {portada_url}\n\n{prompt_step2_nim}"
                     html_output = call_groq_html(p2_modified)
                 elif provider == "gemini":
-                    def _call_step2():
-                        return client.models.generate_content(
+                    def _call_step2(c):
+                        return c.models.generate_content(
                             model=model_id,
                             contents=contents_step2,
                         ).text.strip()

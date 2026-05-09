@@ -2,57 +2,37 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.utils import timezone
 from .models import (
-    Property, PropertyImage, GeneratedAsset, AmenidadPreset,
-    Listado, APIKey, APIBundle, APIBundleAssignment,
-    Agent, VideoMusic, VideoSFX, APIRequestLog, UserAPIQuota, AdminAlert
+    Agent, AgentAssociation,
+    Plan, Suscripcion,
+    Listado,
+    Servicio, APIKey, UserAPIAssignment, UserAPIQuota,
+    Pago, WebhookLog,
+    OTPCode, UserBanRecord, BannedEmail, BannedIP,
+    Notificacion, AdminAlert, AdminLog,
+    UsageLog, APIRequestLog,
+    ConfiguracionSistema, TerminosCondiciones, PoliticaPrivacidad,
+    AmenidadPreset, VideoMusic, VideoSFX,
 )
 
 
-# ─── Agent ──────────────────────────────────────────────────────────────────
+# ─── Agent ───────────────────────────────────────────────────────────────────
 @admin.register(Agent)
 class AgentAdmin(admin.ModelAdmin):
-    list_display = ('email', 'nombre', 'plan_nombre', 'plan_activo', 'fecha_registro', 'bundle_asignado')
+    list_display = ('email', 'nombre', 'plan_nombre', 'plan_activo', 'is_active', 'fecha_registro', 'eliminado_en')
     list_filter = ('plan_nombre', 'plan_activo', 'is_active')
     search_fields = ('email', 'nombre')
-    readonly_fields = ('fecha_registro',)
-
-    def bundle_asignado(self, obj):
-        try:
-            asig = obj.api_bundle_assignment
-            if asig and asig.activo:
-                return format_html('<span style="color:green;">✔ {}</span>', asig.bundle.nombre)
-            return format_html('<span style="color:gray;">Sin bundle</span>')
-        except Exception:
-            return format_html('<span style="color:gray;">Sin bundle</span>')
-    bundle_asignado.short_description = 'Bundle Activo'
+    readonly_fields = ('fecha_registro', 'updated_at')
 
 
 # ─── APIKey ──────────────────────────────────────────────────────────────────
 @admin.register(APIKey)
 class APIKeyAdmin(admin.ModelAdmin):
-    list_display = ('label_display', 'servicio', 'empresa', 'status_badge', 'requests_today',
-                    'total_requests', 'error_count', 'last_used_at')
+    list_display = ('label_display', 'servicio', 'empresa', 'status_badge',
+                    'requests_today', 'total_requests', 'error_count', 'last_used_at')
     list_filter = ('servicio', 'status')
     search_fields = ('label', 'empresa', 'api_key')
-    readonly_fields = ('created_at', 'updated_at', 'requests_today', 'requests_this_month',
-                       'total_requests', 'last_used_at', 'error_count')
-    fieldsets = (
-        ('Identificación', {
-            'fields': ('servicio', 'label', 'empresa', 'api_key', 'notes')
-        }),
-        ('Estado', {
-            'fields': ('status', 'assigned_to', 'assigned_at')
-        }),
-        ('Métricas', {
-            'fields': ('daily_limit', 'monthly_limit', 'requests_today',
-                       'requests_this_month', 'total_requests', 'error_count',
-                       'last_used_at', 'last_health_check', 'last_health_status')
-        }),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
-            'classes': ('collapse',)
-        }),
-    )
+    readonly_fields = ('creado_en', 'updated_at', 'requests_today',
+                       'requests_this_month', 'total_requests', 'last_used_at', 'error_count')
 
     def label_display(self, obj):
         return obj.label or (obj.api_key[:14] + '...')
@@ -61,11 +41,10 @@ class APIKeyAdmin(admin.ModelAdmin):
     def status_badge(self, obj):
         colors = {
             'available': '#22c55e',
-            'in_bundle': '#3b82f6',
-            'assigned': '#f59e0b',
+            'assigned':  '#3b82f6',
             'exhausted': '#ef4444',
-            'dead': '#6b7280',
-            'disabled': '#9ca3af',
+            'dead':      '#6b7280',
+            'disabled':  '#9ca3af',
         }
         color = colors.get(obj.status, '#999')
         return format_html(
@@ -75,97 +54,76 @@ class APIKeyAdmin(admin.ModelAdmin):
     status_badge.short_description = 'Estado'
 
 
-# ─── APIBundle ───────────────────────────────────────────────────────────────
-@admin.register(APIBundle)
-class APIBundleAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'status_badge', 'completeness', 'usuarios_asignados',
-                    'gemini_label', 'elevenlabs_label', 'uploadpost_label', 'created_at')
-    list_filter = ('status',)
-    search_fields = ('nombre', 'notas')
-    autocomplete_fields = ['key_gemini', 'key_elevenlabs', 'key_uploadpost']
-    readonly_fields = ('created_at', 'updated_at', 'usuarios_asignados')
-    fieldsets = (
-        ('Identificación', {
-            'fields': ('nombre', 'status', 'notas')
-        }),
-        ('Keys del Bundle', {
-            'description': 'Asigná una key de cada servicio. Solo las keys en estado "Disponible" deberían usarse.',
-            'fields': ('key_gemini', 'key_elevenlabs', 'key_uploadpost')
-        }),
-        ('Info', {
-            'fields': ('usuarios_asignados', 'created_at', 'updated_at'),
-            'classes': ('collapse',)
-        }),
-    )
-
-    def status_badge(self, obj):
-        colors = {'available': '#22c55e', 'assigned': '#3b82f6', 'retired': '#6b7280'}
-        color = colors.get(obj.status, '#999')
-        return format_html(
-            '<span style="background:{};color:white;padding:2px 8px;border-radius:4px;font-size:11px;">{}</span>',
-            color, obj.get_status_display()
-        )
-    status_badge.short_description = 'Estado'
-
-    def completeness(self, obj):
-        filled = sum([bool(obj.key_gemini_id), bool(obj.key_elevenlabs_id), bool(obj.key_uploadpost_id)])
-        color = '#22c55e' if filled == 3 else ('#f59e0b' if filled > 0 else '#ef4444')
-        return format_html(
-            '<span style="color:{};font-weight:bold;">{}/3 keys</span>', color, filled
-        )
-    completeness.short_description = 'Completitud'
-
-    def usuarios_asignados(self, obj):
-        count = obj.assignments.filter(activo=True).count()
-        return count
-    usuarios_asignados.short_description = 'Usuarios Activos'
-
-    def gemini_label(self, obj):
-        if obj.key_gemini:
-            return obj.key_gemini.label or '✔'
-        return format_html('<span style="color:#ef4444;">✗ Sin key</span>')
-    gemini_label.short_description = 'Gemini'
-
-    def elevenlabs_label(self, obj):
-        if obj.key_elevenlabs:
-            return obj.key_elevenlabs.label or '✔'
-        return format_html('<span style="color:#ef4444;">✗ Sin key</span>')
-    elevenlabs_label.short_description = 'ElevenLabs'
-
-    def uploadpost_label(self, obj):
-        if obj.key_uploadpost:
-            return obj.key_uploadpost.label or '✔'
-        return format_html('<span style="color:#ef4444;">✗ Sin key</span>')
-    uploadpost_label.short_description = 'UploadPost'
-
-
-# ─── APIBundleAssignment ─────────────────────────────────────────────────────
-@admin.register(APIBundleAssignment)
-class APIBundleAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('usuario', 'bundle', 'activo', 'asignado_en', 'liberado_en')
+# ─── Servicio ─────────────────────────────────────────────────────────────────
+@admin.register(Servicio)
+class ServicioAdmin(admin.ModelAdmin):
+    list_display = ('nombre', 'activo', 'default_daily_limit', 'extra_increment')
     list_filter = ('activo',)
-    search_fields = ('usuario__email', 'bundle__nombre')
-    readonly_fields = ('asignado_en',)
-    raw_id_fields = ('usuario', 'bundle')
-
-    actions = ['liberar_bundles']
-
-    def liberar_bundles(self, request, queryset):
-        for asig in queryset.filter(activo=True):
-            asig.activo = False
-            asig.liberado_en = timezone.now()
-            asig.bundle.status = 'available'
-            asig.bundle.save()
-            asig.save()
-        self.message_user(request, f'{queryset.count()} bundle(s) liberados.')
-    liberar_bundles.short_description = 'Liberar bundles seleccionados'
 
 
-# ─── Modelos de sonido ───────────────────────────────────────────────────────
+# ─── UserAPIAssignment ───────────────────────────────────────────────────────
+@admin.register(UserAPIAssignment)
+class UserAPIAssignmentAdmin(admin.ModelAdmin):
+    list_display = ('user', 'servicio', 'apikey_label', 'is_primary', 'activo', 'assigned_at')
+    list_filter = ('servicio', 'is_primary', 'activo')
+    search_fields = ('user__email', 'apikey__label')
+    raw_id_fields = ('user', 'apikey', 'pago')
+
+    def apikey_label(self, obj):
+        return obj.apikey.label or obj.apikey.api_key[:14] + '...'
+    apikey_label.short_description = 'API Key'
+
+
+# ─── UserAPIQuota ─────────────────────────────────────────────────────────────
+@admin.register(UserAPIQuota)
+class UserAPIQuotaAdmin(admin.ModelAdmin):
+    list_display = ('user', 'servicio', 'requests_today', 'user_daily_limit', 'is_blocked', 'updated_at')
+    list_filter = ('servicio', 'is_blocked')
+    search_fields = ('user__email',)
+    raw_id_fields = ('user', 'servicio')
+
+
+# ─── Pago ─────────────────────────────────────────────────────────────────────
+@admin.register(Pago)
+class PagoAdmin(admin.ModelAdmin):
+    list_display = ('mp_payment_id', 'user', 'tipo', 'mp_status', 'monto', 'moneda', 'creado_en')
+    list_filter = ('mp_status', 'tipo')
+    search_fields = ('mp_payment_id', 'user__email', 'external_reference')
+    readonly_fields = ('creado_en', 'mp_payment_id')
+
+
+# ─── WebhookLog ───────────────────────────────────────────────────────────────
+@admin.register(WebhookLog)
+class WebhookLogAdmin(admin.ModelAdmin):
+    list_display = ('fuente', 'event_type', 'event_id', 'status', 'recibido_en', 'procesado_en')
+    list_filter = ('fuente', 'status')
+    search_fields = ('event_id', 'event_type')
+    readonly_fields = ('recibido_en',)
+
+
+# ─── AdminAlert ───────────────────────────────────────────────────────────────
+@admin.register(AdminAlert)
+class AdminAlertAdmin(admin.ModelAdmin):
+    list_display = ('titulo', 'tipo', 'severidad', 'is_read', 'creado_en')
+    list_filter = ('tipo', 'severidad', 'is_read')
+    search_fields = ('titulo', 'mensaje')
+
+
+# ─── AdminLog ─────────────────────────────────────────────────────────────────
+@admin.register(AdminLog)
+class AdminLogAdmin(admin.ModelAdmin):
+    list_display = ('admin', 'accion', 'objeto_tipo', 'objeto_id', 'creado_en')
+    list_filter = ('accion', 'objeto_tipo')
+    search_fields = ('admin__email', 'accion')
+    readonly_fields = ('creado_en',)
+
+
+# ─── Audio / Media ────────────────────────────────────────────────────────────
 @admin.register(VideoMusic)
 class VideoMusicAdmin(admin.ModelAdmin):
     list_display = ('nombre', 'duracion_segundos', 'activo', 'creado_en')
     list_filter = ('activo',)
+
 
 @admin.register(VideoSFX)
 class VideoSFXAdmin(admin.ModelAdmin):
@@ -173,12 +131,19 @@ class VideoSFXAdmin(admin.ModelAdmin):
     list_filter = ('tipo', 'activo')
 
 
-# ─── Resto de modelos ────────────────────────────────────────────────────────
-admin.site.register(Property)
-admin.site.register(PropertyImage)
-admin.site.register(GeneratedAsset)
-admin.site.register(AmenidadPreset)
+# ─── Resto ────────────────────────────────────────────────────────────────────
+admin.site.register(AgentAssociation)
+admin.site.register(Plan)
+admin.site.register(Suscripcion)
 admin.site.register(Listado)
+admin.site.register(OTPCode)
+admin.site.register(UserBanRecord)
+admin.site.register(BannedEmail)
+admin.site.register(BannedIP)
+admin.site.register(Notificacion)
+admin.site.register(UsageLog)
 admin.site.register(APIRequestLog)
-admin.site.register(UserAPIQuota)
-admin.site.register(AdminAlert)
+admin.site.register(ConfiguracionSistema)
+admin.site.register(TerminosCondiciones)
+admin.site.register(PoliticaPrivacidad)
+admin.site.register(AmenidadPreset)

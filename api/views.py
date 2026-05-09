@@ -17,11 +17,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 from .models import (
-    Property, GeneratedAsset, Listado, OTPCode,
+    GeneratedAsset, Listado, OTPCode,
     TerminosCondiciones, PoliticaPrivacidad
 )
 from .serializers import (
-    PropertySerializer, GeneratedAssetSerializer, RegisterSerializer,
+    RegisterSerializer, GeneratedAssetSerializer,
     TerminosCondicionesSerializer, PoliticaPrivacidadSerializer
 )
 from .tasks import run_asset_generation
@@ -210,24 +210,14 @@ class LogoutView(APIView):
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
 class PropertyViewSet(viewsets.ModelViewSet):
+    """Stub — Property fue eliminado en v2.0. Se mantiene para compatibilidad con el router."""
     permission_classes = [IsAuthenticated]
-    queryset = Property.objects.none()
-    serializer_class = PropertySerializer
+    queryset = Listado.objects.none()
+    serializer_class = RegisterSerializer  # placeholder
 
     def get_queryset(self):
-        return Property.objects.filter(agent=self.request.user)
+        return Listado.objects.none()
 
-    @action(detail=True, methods=['post'])
-    def generate_assets(self, request, pk=None):
-        property_instance = self.get_object()
-        
-        # Trigger Celery Task
-        run_asset_generation.delay(property_instance.id)
-
-        return Response({
-            'message': 'Asset generation triggered successfully.',
-            'status': 'PROCESSING'
-        }, status=status.HTTP_202_ACCEPTED)
 
 class GeneratedAssetViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
@@ -235,7 +225,7 @@ class GeneratedAssetViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = GeneratedAssetSerializer
 
     def get_queryset(self):
-        return GeneratedAsset.objects.filter(agent=self.request.user)
+        return GeneratedAsset.objects.filter(listado__agente=self.request.user)
 import os
 import concurrent.futures
 

@@ -1,8 +1,9 @@
 from rest_framework import serializers
 from .models import (
-    Property, PropertyImage, GeneratedAsset, Agent, 
+    GeneratedAsset, Agent,
     TerminosCondiciones, PoliticaPrivacidad
 )
+
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -21,28 +22,18 @@ class RegisterSerializer(serializers.ModelSerializer):
         )
         return user
 
-class PropertyImageSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PropertyImage
-        fields = '__all__'
 
 class GeneratedAssetSerializer(serializers.ModelSerializer):
     class Meta:
         model = GeneratedAsset
         fields = '__all__'
 
-class PropertySerializer(serializers.ModelSerializer):
-    images = PropertyImageSerializer(many=True, read_only=True)
-    assets = GeneratedAssetSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Property
-        fields = '__all__'
 
 class TerminosCondicionesSerializer(serializers.ModelSerializer):
     class Meta:
         model = TerminosCondiciones
         fields = ['id', 'titulo', 'contenido', 'version', 'fecha_actualizacion']
+
 
 class PoliticaPrivacidadSerializer(serializers.ModelSerializer):
     class Meta:
