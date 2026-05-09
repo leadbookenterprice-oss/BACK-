@@ -189,7 +189,7 @@ def admin_api_keys_create(request):
     if not servicio_nombre or not api_key_str:
         return Response({'error': 'Faltan datos: service y api_key son requeridos'}, status=400)
 
-    servicio = Servicio.objects.filter(nombre=servicio_nombre).first()
+    servicio = Servicio.objects.filter(nombre=servicio_nombre.lower()).first()
     if not servicio:
         return Response({'error': f'Servicio "{servicio_nombre}" no encontrado. Servicios disponibles: {list(Servicio.objects.values_list("nombre", flat=True))}'}, status=400)
 
@@ -226,7 +226,7 @@ def admin_api_keys_bulk_create(request):
             errores.append({'data': data, 'error': 'Faltan service o api_key'})
             continue
 
-        servicio = Servicio.objects.filter(nombre=servicio_nombre).first()
+        servicio = Servicio.objects.filter(nombre=servicio_nombre.lower()).first()
         if not servicio:
             errores.append({'data': data, 'error': f'Servicio "{servicio_nombre}" no existe'})
             continue
