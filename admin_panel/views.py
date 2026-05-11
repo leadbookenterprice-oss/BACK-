@@ -647,3 +647,39 @@ def admin_apikeys_auto_repair(request):
         repaired = APIPoolService.repair_user_apis(user)
         if repaired: fixed += 1; details.append({'email': user.email, 'repaired': repaired})
     return Response({'status': 'success', 'fixed_count': fixed, 'details': details})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_requests_list(request):
+    if not _check_admin(request):
+        return Response({'error': 'Forbidden'}, status=403)
+
+    limit = int(request.GET.get('limit', 200))
+    servicio = request.GET.get('servicio', '')
+    success_filter = request.GET.get('exitoso', '')
+
+    qs = APIRequestLog.objects.select_related('user', 'servicio').order_by('-creado_en')
+
+    if servicio:
+        qs = qs.filter(servicio__nombre__iexact=servicio)
+    if success_filter == 'true':
+        qs = qs.filter(success=True)
+    elif success_filter == 'false':
+        qs = qs.filter(success=False)
+
+    logs = []
+    for log in qs[:limit]:
+        logs.append({
+            'id': log.id,
+            'timestamp': log.creado_en.isoformat(),
+            'user_email': log.user.email if log.user else None,
+            'servicio': log.servicio.nombre if log.servicio else None,
+            'action': log.endpoint or '',
+            'success': log.success,
+            'response_time': log.response_time_ms,
+            'request_body': None,
+            'error_message': log.error_message if not log.success else None,
+        })
+
+    return Response({'logs': logs, 'total': len(logs)})

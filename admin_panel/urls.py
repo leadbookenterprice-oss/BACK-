@@ -60,6 +60,7 @@ urlpatterns = [
     path('listados/', views.admin_listados),
     path('assets/', views.admin_assets),
     path('pagos/', views.admin_pagos),
+    path('requests/', views.admin_requests_list),
 
     # Alertas
     path('alerts/', views.admin_alerts_list),
