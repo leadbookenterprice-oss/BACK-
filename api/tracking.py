@@ -1,5 +1,6 @@
 import time
 import functools
+# pyrefly: ignore [missing-import]
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
