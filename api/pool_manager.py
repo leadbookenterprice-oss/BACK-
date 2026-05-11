@@ -28,7 +28,7 @@ def get_api_key(agente, servicio):
     # 2. Buscar key individual directa
     cuenta = APIKey.objects.filter(
         assigned_to=agente,
-        servicio__iexact=servicio,
+        servicio__nombre__iexact=servicio,
     ).exclude(status__in=['exhausted', 'dead', 'disabled']).first()
 
     if cuenta:
@@ -38,7 +38,7 @@ def get_api_key(agente, servicio):
     from api.models import BundleAPIExtra
     extra = BundleAPIExtra.objects.filter(
         usuario=agente,
-        servicio__iexact=servicio,
+        servicio__nombre__iexact=servicio,
         activa=True,
         api_key__status__in=['available', 'active', 'assigned', 'in_bundle']
     ).select_related('api_key').first()
@@ -63,7 +63,7 @@ def marcar_agotada(agente, servicio, is_monthly=False):
     """Marca la key del servicio como agotada."""
     keys = APIKey.objects.filter(
         assigned_to=agente,
-        servicio__iexact=servicio,
+        servicio__nombre__iexact=servicio,
         status__in=['available', 'active', 'assigned', 'in_bundle']
     )
     for k in keys:

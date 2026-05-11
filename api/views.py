@@ -1305,7 +1305,7 @@ def generar_pdf(request):
     except GeminiQuotaExhaustedError as e:
         from .models import UserAPIQuota
         quota, _ = UserAPIQuota.objects.get_or_create(
-            user=request.user, service='gemini',
+            user=request.user, servicio=Servicio.objects.get(nombre='gemini'),
             defaults={'daily_limit': 1500, 'monthly_limit': 1500}
         )
         quota.is_blocked = True
@@ -1461,7 +1461,7 @@ def generar_imagen_post(request):
     except GeminiQuotaExhaustedError as e:
         from .models import UserAPIQuota
         quota, _ = UserAPIQuota.objects.get_or_create(
-            user=request.user, service='gemini',
+            user=request.user, servicio=Servicio.objects.get(nombre='gemini'),
             defaults={'daily_limit': 1500, 'monthly_limit': 1500}
         )
         quota.is_blocked = True
@@ -1812,7 +1812,7 @@ def mp_webhook(request):
                                     servicio=svc, activa=True, pago_id=str(data_id)
                                 )
                                 from .models import UserAPIQuota
-                                quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=svc)
+                                quota, _ = UserAPIQuota.objects.get_or_create(user=agent, servicio=Servicio.objects.get(nombre=svc))
                                 quota.is_blocked = False
                                 # Incrementos específicos por servicio
                                 inc = 1500 if svc == 'gemini' else 10000 if svc == 'elevenlabs' else 10
@@ -1839,7 +1839,7 @@ def mp_webhook(request):
                             )
                             # Actualizar el límite en UserAPIQuota
                             from .models import UserAPIQuota
-                            quota, _ = UserAPIQuota.objects.get_or_create(user=agent, service=servicio)
+                            quota, _ = UserAPIQuota.objects.get_or_create(user=agent, servicio=Servicio.objects.get(nombre=servicio))
                             quota.is_blocked = False
                             # Aumentar límites (mensual y diario)
                             inc = 1500 if servicio == 'gemini' else 10000 if servicio == 'elevenlabs' else 10
@@ -3362,7 +3362,7 @@ def marcar_todas_leidas(request):
 def estado_cuota_ia(request):
     from .models import UserAPIQuota, Suscripcion
     try:
-        quota = UserAPIQuota.objects.get(user=request.user, service='gemini')
+        quota = UserAPIQuota.objects.get(user=request.user, servicio__nombre='gemini')
         agotada = quota.is_blocked
         usado = quota.requests_today
         limite = quota.daily_limit
@@ -3399,8 +3399,8 @@ def debug_quota(request):
                 q.save()
                 desbloqueados += 1
         # Corregir límites incorrectos por servicio
-        UserAPIQuota.objects.filter(service='uploadpost', daily_limit__gt=100).update(daily_limit=10)
-        UserAPIQuota.objects.filter(service='gemini', daily_limit__lt=100).update(daily_limit=1500)
+        UserAPIQuota.objects.filter(servicio__nombre='uploadpost', user_daily_limit__gt=100).update(user_daily_limit=10)
+        UserAPIQuota.objects.filter(servicio__nombre='gemini', user_daily_limit__lt=100).update(user_daily_limit=1500)
         
         # Reset extras de prueba (pago_id = 'manual_admin')
         from .models import BundleAPIExtra

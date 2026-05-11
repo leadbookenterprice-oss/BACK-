@@ -69,7 +69,7 @@ class AlmacenamientoCloudinary:
     def _get_pool_keys():
         """Devuelve todos los APIKey de tipo 'cloudinary' con status válido."""
         return APIKey.objects.filter(
-            servicio__iexact='cloudinary', 
+            servicio__nombre__iexact='cloudinary', 
             status__in=['available', 'active', 'assigned', 'in_bundle']
         )
 

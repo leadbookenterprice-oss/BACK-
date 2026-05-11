@@ -37,7 +37,7 @@ class CloudinaryPoolService:
     @staticmethod
     def get_all_keys():
         return APIKey.objects.filter(
-            servicio__iexact='cloudinary', 
+            servicio__nombre__iexact='cloudinary', 
             status__in=['available', 'active', 'assigned', 'in_bundle']
         )
 
