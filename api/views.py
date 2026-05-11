@@ -699,7 +699,7 @@ def generar_carrusel(request):
                     image_stream, 
                     user_id=request.user.id, 
                     listado_id=listado_id_val,
-                    slide_index=i + 1
+                    indice=i + 1
                 )
                 if not url:
                     raise Exception('Almacenamiento devolvió None')
