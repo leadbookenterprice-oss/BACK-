@@ -683,3 +683,17 @@ def admin_requests_list(request):
         })
 
     return Response({'logs': logs, 'total': len(logs)})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_add_extra_api(request, pk):
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    from api.models import Agent
+    try: user = Agent.objects.get(pk=pk)
+    except Agent.DoesNotExist: return Response({'error': 'Usuario no encontrado'}, status=404)
+    servicio_nombre = request.data.get('servicio', 'gemini').lower()
+    added = APIPoolService.add_extra_key(user, servicio_nombre)
+    if added:
+        return Response({'ok': True, 'mensaje': f'API extra de {servicio_nombre} asignada'})
+    return Response({'error': 'No hay keys disponibles en el pool'}, status=400)

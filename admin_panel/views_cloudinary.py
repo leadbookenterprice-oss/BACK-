@@ -1,86 +1,62 @@
 import json
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from api.models import APIKey
-from api.services.cloudinary_pool_service import CloudinaryPoolService
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
+from api.models import APIKey, Servicio, UserAPIAssignment
+from api.services.pool_service import APIPoolService
+from decouple import config
 
-@csrf_exempt
+ADMIN_KEY = config('ADMIN_KEY', default='leadbook_admin_2026')
+
+def _check_admin(request):
+    if request.headers.get('X-Admin-Key') == ADMIN_KEY and ADMIN_KEY:
+        return True
+    return request.user and request.user.is_authenticated and request.user.is_staff
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def admin_cloudinary_stats(request):
-    if request.method != 'GET':
-        return JsonResponse({'error': 'Invalid method'}, status=405)
-        
-    keys = APIKey.objects.filter(servicio='cloudinary', status='available')
-    total_limit = 0
-    total_used = 0
-    
-    for k in keys:
-        st = CloudinaryPoolService.get_stats_for_key(k)
-        total_limit += st.get('total_bytes', 0)
-        total_used += st.get('used_bytes', 0)
-        
-    return JsonResponse({
-        'total_bytes': total_limit, 
-        'used_bytes': total_used, 
-        'free_bytes': total_limit - total_used
-    })
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    servicio = Servicio.objects.filter(nombre='cloudinary').first()
+    if not servicio:
+        return Response({'total_bytes': 0, 'used_bytes': 0, 'free_bytes': 0})
+    keys = APIKey.objects.filter(servicio=servicio, status='available')
+    return Response({'total_cuentas': keys.count(), 'total_bytes': 0, 'used_bytes': 0, 'free_bytes': 0})
 
-@csrf_exempt
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def admin_cloudinary_keys(request):
-    if request.method != 'GET':
-        return JsonResponse({'error': 'Invalid method'}, status=405)
-        
-    keys = APIKey.objects.filter(servicio='cloudinary')
-    data = []
-    for k in keys:
-        creds = CloudinaryPoolService.parse_cloudinary_url(k.api_key)
-        st = CloudinaryPoolService.get_stats_for_key(k)
-        if creds:
-            ak = creds['api_key']
-            masked = ak[:4] + '****' if ak else ''
-            cn = creds['cloud_name']
-        else:
-            masked = ''
-            cn = 'Unknown'
-            
-        data.append({
-            'id': k.id,
-            'cloud_name': cn,
-            'api_key_masked': masked,
-            'total_bytes': st.get('total_bytes', 0),
-            'used_bytes': st.get('used_bytes', 0),
-            'activa': k.status == 'available'
-        })
-    return JsonResponse({'keys': data})
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    servicio = Servicio.objects.filter(nombre='cloudinary').first()
+    if not servicio:
+        return Response({'keys': []})
+    keys = APIKey.objects.filter(servicio=servicio)
+    data = [{'id': k.id, 'cloud_name': k.label or 'Sin nombre',
+             'api_key_masked': k.api_key[:6] + '...' if k.api_key else '',
+             'total_bytes': 0, 'used_bytes': 0, 'activa': k.status == 'available'} for k in keys]
+    return Response({'keys': data})
 
-@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
 def admin_cloudinary_keys_add(request):
-    if request.method == 'POST':
-        try:
-            body = json.loads(request.body)
-            cn = body.get('cloud_name')
-            ak = body.get('api_key')
-            asec = body.get('api_secret')
-            if not (cn and ak and asec):
-                return JsonResponse({'error': 'Faltan credenciales'}, status=400)
-                
-            url = f"cloudinary://{ak}:{asec}@{cn}"
-            APIKey.objects.create(
-                servicio='cloudinary', 
-                api_key=url, 
-                label=cn,
-                status='available'
-            )
-            return JsonResponse({'success': True})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
-    return JsonResponse({'error': 'Invalid method'}, status=405)
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    cn = request.data.get('cloud_name')
+    ak = request.data.get('api_key')
+    asec = request.data.get('api_secret')
+    if not (cn and ak and asec):
+        return Response({'error': 'Faltan credenciales'}, status=400)
+    servicio = Servicio.objects.filter(nombre='cloudinary').first()
+    if not servicio:
+        return Response({'error': 'Servicio cloudinary no existe en DB'}, status=400)
+    url = f"cloudinary://{ak}:{asec}@{cn}"
+    APIKey.objects.create(servicio=servicio, api_key=url, label=cn, status='available')
+    return Response({'success': True}, status=201)
 
-@csrf_exempt
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
 def admin_cloudinary_keys_delete(request, pk):
-    if request.method == 'DELETE':
-        try:
-            APIKey.objects.filter(pk=pk, servicio='cloudinary').delete()
-            return JsonResponse({'success': True})
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
-    return JsonResponse({'error': 'Invalid method'}, status=405)
+    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
+    servicio = Servicio.objects.filter(nombre='cloudinary').first()
+    if servicio:
+        APIKey.objects.filter(pk=pk, servicio=servicio).delete()
+    return Response({'success': True})

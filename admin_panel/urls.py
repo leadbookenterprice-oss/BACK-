@@ -55,6 +55,7 @@ urlpatterns = [
     path('usuarios/<int:pk>/suspender/', views.admin_users_ban),
     path('usuarios/<int:pk>/unban/', views.admin_users_unban),
     path('usuarios/<int:pk>/email/', views.admin_enviar_email),
+    path('usuarios/<int:pk>/add-extra/', views.admin_add_extra_api),
 
     # Contenido
     path('listados/', views.admin_listados),
