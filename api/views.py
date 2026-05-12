@@ -37,14 +37,14 @@ def actualizar_resultados_listado(listado, tipo, resultado):
     Esto permite persistencia entre sesiones.
     """
     if not listado: return
-    if not isinstance(listado.datos, dict):
-        listado.datos = {}
+    if not isinstance(listado.datos_extra, dict):
+        listado.datos_extra = {}
     
-    if 'resultados' not in listado.datos:
-        listado.datos['resultados'] = {}
+    if 'resultados' not in listado.datos_extra:
+        listado.datos_extra['resultados'] = {}
     
-    listado.datos['resultados'][tipo] = resultado
-    listado.save(update_fields=['datos'])
+    listado.datos_extra['resultados'][tipo] = resultado
+    listado.save(update_fields=['datos_extra'])
 
 LIMITES_PLAN = {
     'free':     {'listados_mes': 10},
@@ -249,7 +249,13 @@ def generar_guion(request):
     #     }, status=status.HTTP_403_FORBIDDEN)
 
     data = request.data
-    tipo_video = data.get('tipoVideo', 'reel')
+    tipo_video_raw = str(data.get('tipoVideo', 'reel')).strip().lower()
+    tipo_video = {
+        'tour_narrado': 'tour',
+        'tour-narrado': 'tour',
+        'reel_rapido': 'reel',
+        'reel-rapido': 'reel',
+    }.get(tipo_video_raw, tipo_video_raw if tipo_video_raw in ('tour', 'reel') else 'reel')
     tipo = data.get('tipoPropiedad', 'Propiedad')
     ciudad = data.get('ciudad', '')
     operacion = data.get('operacion', 'Venta')
@@ -284,7 +290,8 @@ def generar_guion(request):
         palabras_por_escena = "25-38 palabras" if tipo_video == 'reel' else "50-75 palabras"
         palabras_total = "100-150 palabras" if tipo_video == 'reel' else "200-300 palabras"
         contexto_extra = f"\nENFOQUE ADICIONAL DEL CLIENTE: {contexto_adicional}" if contexto_adicional else ''
-        prompt = f"""Sos un copywriter inmobiliario experto.
+        prompt_override = (data.get('prompt') or '').strip()
+        prompt = prompt_override or f"""Sos un copywriter inmobiliario experto.
 Generá un guión PROFESIONAL para video tipo {tipo_video}.
 
 PROPIEDAD:
@@ -360,7 +367,9 @@ RESPONDE SOLO JSON, SIN PREAMBLE."""
         try:
             import json as _json
             parsed = _json.loads(descripcion_ia)
-            if isinstance(parsed, list) and len(parsed) >= 4:
+            if isinstance(parsed, dict) and isinstance(parsed.get('escenas'), list) and len(parsed['escenas']) >= 3:
+                escenas_finales = parsed['escenas']
+            elif isinstance(parsed, list) and len(parsed) >= 3:
                 escenas_finales = parsed
         except Exception:
             pass
@@ -414,9 +423,13 @@ class DashboardView(APIView):
         
         videos_creados = listados.aggregate(total_videos=Sum('videos_creados'))['total_videos'] or 0
 
-        listados_recientes = listados.order_by('-creado_en')[:5].values(
-            'id', 'titulo', 'tipo_propiedad', 'ciudad', 'precio', 'creado_en', 'datos', 'video_url', 'video_status'
+        listados_recientes_qs = listados.order_by('-creado_en')[:5].values(
+            'id', 'titulo', 'tipo_propiedad', 'ciudad', 'precio', 'creado_en', 'datos_extra', 'video_url', 'video_status'
         )
+        listados_recientes = []
+        for item in listados_recientes_qs:
+            item['datos'] = item.pop('datos_extra', {})
+            listados_recientes.append(item)
 
         susc = get_suscripcion(user)
         plan = susc.plan
@@ -851,7 +864,7 @@ class ListadosView(APIView):
                 'videos_creados': listado.videos_creados,
                 'video_url': listado.video_url,
                 'video_status': listado.video_status,
-                'datos': listado.datos
+                'datos': listado.datos_extra
             })
         return Response(data)
 
@@ -917,7 +930,7 @@ class ListadoDetalleView(APIView):
                 "precio": listado.precio,
                 "video_url": listado.video_url,
                 "video_status": listado.video_status,
-                "datos": listado.datos
+                "datos": listado.datos_extra
             }, status=status.HTTP_200_OK)
         except Listado.DoesNotExist:
             return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
@@ -932,7 +945,7 @@ class ListadoDetalleView(APIView):
             return Response({"error": "No tienes permiso para eliminar este listado"}, status=status.HTTP_403_FORBIDDEN)
 
         # ── Eliminar assets de Cloudinary antes de borrar el registro ─────────
-        datos = listado.datos or {}
+        datos = listado.datos_extra or {}
         public_ids_a_eliminar = []  # [(public_id, resource_type, cloud_name, api_key, api_secret)]
 
         def _extraer_public_id(obj):
@@ -1015,7 +1028,7 @@ class ListadoDetalleView(APIView):
             
         data = request.data
         if 'datos' in data:
-            listado.datos = data['datos']
+            listado.datos_extra = data['datos']
         if 'video_url' in data:
             listado.video_url = data['video_url']
         if 'video_status' in data:
@@ -1284,11 +1297,11 @@ def generar_pdf(request):
                 if listado_id_hint and pdf_url:
                     try:
                         listado = Listado.objects.get(id=listado_id_hint)
-                        if not listado.datos: listado.datos = {}
-                        if 'resultados' not in listado.datos: listado.datos['resultados'] = {}
+                        if not listado.datos_extra: listado.datos_extra = {}
+                        if 'resultados' not in listado.datos_extra: listado.datos_extra['resultados'] = {}
                         
                         # Guardamos ambos para que el frontend tenga fallback
-                        listado.datos['resultados']['pdf'] = {
+                        listado.datos_extra['resultados']['pdf'] = {
                             "html": html_string,
                             "url": pdf_url
                         }
@@ -1419,8 +1432,8 @@ def generar_imagen_post(request):
             try:
                 from .models import Listado
                 listado = Listado.objects.filter(id=listado_id_val).first()
-                if listado and listado.datos:
-                    template_nombre = listado.datos.get('template', '')
+                if listado and listado.datos_extra:
+                    template_nombre = listado.datos_extra.get('template', '')
                     if template_nombre:
                         template_post = f'renders/post_{template_nombre}.html'
                         print(f"[POST] Template leído de DB: {template_post}")
@@ -3109,7 +3122,7 @@ def proxy_pdf_view(request, listado_id):
         listado = Listado.objects.get(id=listado_id)
         
         # Buscar URL en los datos del listado
-        res = listado.datos.get('resultados', {}) if listado.datos else {}
+        res = listado.datos_extra.get('resultados', {}) if listado.datos_extra else {}
         pdf_data = res.get('pdf', {})
         pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else pdf_data
         
@@ -3152,7 +3165,7 @@ def descargar_pdf(request, listado_id):
         from django.http import HttpResponse
         from django.shortcuts import get_object_or_404
         listado = get_object_or_404(Listado, id=listado_id, agente=request.user)
-        datos = listado.datos or {}
+        datos = listado.datos_extra or {}
         pdf_data = datos.get('resultados', {}).get('pdf', {})
         html_content = pdf_data.get('html', '') if isinstance(pdf_data, dict) else ''
         if not html_content:
@@ -3180,7 +3193,7 @@ def proxy_pdf_thumbnail_view(request, listado_id):
     try:
         from .models import Listado
         listado = Listado.objects.get(id=listado_id)
-        res = listado.datos.get('resultados', {}) if listado.datos else {}
+        res = listado.datos_extra.get('resultados', {}) if listado.datos_extra else {}
         pdf_data = res.get('pdf', {})
         pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else pdf_data
 
@@ -3212,7 +3225,7 @@ from django.http import HttpResponse
 def generar_html(request, pk):
     from .models import Listado
     listado = get_object_or_404(Listado, pk=pk)
-    data = listado.datos or {}
+    data = listado.datos_extra or {}
     context, temp_files, _, _, _ = construir_contexto_pdf(data, listado.agente, request)
     
     from django.template.loader import render_to_string

@@ -61,10 +61,10 @@ def generar_html_desde_template(context, agente):
             from .models import Listado
             listado = Listado.objects.filter(id=listado_id).first()
             if listado:
-                datos = listado.datos or {}
+                datos = listado.datos_extra or {}
                 datos['template'] = template_elegido.replace('.html', '').replace('template_', '')
-                listado.datos = datos
-                listado.save(update_fields=['datos'])
+                listado.datos_extra = datos
+                listado.save(update_fields=['datos_extra'])
                 print(f"[Template] Guardado template en DB: {datos['template']}")
         except Exception as e:
             print(f"[Template] Error guardando template: {e}")
@@ -200,14 +200,14 @@ PASO2_CASCADE = [
 
 def _get_nvidia_key():
     from api.models import APIKey
-    pool_key = APIKey.objects.filter(servicio='nvidia', status__in=['available', 'active']).first()
+    pool_key = APIKey.objects.filter(servicio__nombre__iexact='nvidia', status__in=['available', 'assigned']).first()
     if pool_key:
         return pool_key.api_key
     return settings.NVIDIA_API_KEY
 
 def _get_groq_key():
     from api.models import APIKey
-    pool_key = APIKey.objects.filter(servicio='groq', status__in=['available', 'active']).first()
+    pool_key = APIKey.objects.filter(servicio__nombre__iexact='groq', status__in=['available', 'assigned']).first()
     if pool_key:
         return pool_key.api_key
     return settings.GROQ_API_KEY
@@ -237,7 +237,7 @@ def call_groq_api(prompt: str, **kwargs) -> str:
     Llama a Groq. Usa modelos soportados (llama3-8b-8192 fue decomisionado).
     Permite override de modelo por kwargs['model'].
     """
-    key = settings.GROQ_API_KEY or os.environ.get('GROQ_API_KEY', '')
+    key = _get_groq_key() or os.environ.get('GROQ_API_KEY', '')
     if not key:
         raise RuntimeError("GROQ_API_KEY no configurada")
 
@@ -418,7 +418,7 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
                          k = APIKey.objects.filter(api_key=key_str).first()
                          if k:
                              k.status = 'exhausted'
-                             k.requests_this_month = k.monthly_limit or 10000
+                             k.requests_this_month = k.google_monthly_limit or 10000
                              k.save()
                  except Exception as e:
                      logger.error(f"Error marcando ElevenLabs como agotada: {e}")
@@ -450,10 +450,8 @@ def _mark_gemini_exhausted(agente, key_str, is_monthly=False):
             k = APIKey.objects.filter(api_key=key_str).first()
             if k:
                 k.status = 'exhausted'
-                if is_monthly:
-                    k.is_monthly_exhausted = True
-                k.requests_this_month = k.monthly_limit or 1500
-                k.save(update_fields=['status', 'is_monthly_exhausted', 'requests_this_month'])
+                k.requests_this_month = k.google_monthly_limit or k.google_daily_limit or 1500
+                k.save(update_fields=['status', 'requests_this_month', 'updated_at'])
                 print(f"[Pool] Key marcada como AGOTADA: {key_str[:10]}...")
     except Exception as ex:
         logger.error(f"Error marcando Gemini como agotada: {ex}")
