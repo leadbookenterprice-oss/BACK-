@@ -352,6 +352,7 @@ def admin_users_detail(request, pk):
     except Agent.DoesNotExist: return Response(status=404)
     assignments = UserAPIAssignment.objects.filter(user=u, activo=True).select_related('apikey', 'servicio')
     keys = [{'id': a.apikey.id, 'servicio': a.servicio.nombre, 'status': a.apikey.status,
+             'api_key': a.apikey.api_key[:8] + '...' if a.apikey.api_key else '—',
              'requests_today': a.apikey.requests_today, 'daily_limit': a.apikey.google_daily_limit,
              'is_primary': a.is_primary} for a in assignments]
     quotas = [{'servicio': q.servicio.nombre, 'requests_today': q.requests_today,
@@ -494,17 +495,6 @@ def admin_enviar_email(request, pk):
 
 
 # ── LOGS / ALERTAS ────────────────────────────────────────────────────────────
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def admin_requests_list(request):
-    if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
-    logs = APIRequestLog.objects.select_related('user', 'servicio').order_by('-creado_en')[:100]
-    return Response([{'id': l.id, 'user': l.user.email if l.user else None,
-                      'service': l.servicio.nombre if l.servicio else None,
-                      'endpoint': l.endpoint, 'success': l.success,
-                      'time_ms': l.response_time_ms, 'created_at': l.creado_en} for l in logs])
-
 
 @api_view(['GET', 'PATCH'])
 @permission_classes([AllowAny])
