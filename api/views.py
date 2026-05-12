@@ -821,8 +821,16 @@ def video_status(request, listado_id):
     try:
         from .models import Listado
         listado = Listado.objects.get(id=listado_id, agente=request.user)
+
+        status_map = {
+            'ready': 'done',
+            'failed': 'error',
+            'none': 'idle',
+        }
+        normalized_status = status_map.get(listado.video_status, listado.video_status)
+
         return Response({
-            "status": listado.video_status,
+            "status": normalized_status,
             "video_url": listado.video_url
         }, status=status.HTTP_200_OK)
     except Exception as e:
@@ -1047,10 +1055,12 @@ def generar_video(request, pk):
     """Dispara la generación de video asincronamente"""
     try:
         listado = Listado.objects.get(id=pk, agente=request.user)
+        listado.video_status = 'queued'
+        listado.save(update_fields=['video_status'])
         # Dispara tarea Celery
         generar_video_task.delay(pk)
         return Response({
-            "status": "generando",
+            "status": "queued",
             "mensaje": "El video se está generando en segundo plano",
             "id": pk
         })
