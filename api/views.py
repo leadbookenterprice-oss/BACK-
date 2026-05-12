@@ -888,14 +888,14 @@ class ListadosView(APIView):
         ciudad = payload.get('ciudad', '')
         precio = str(payload.get('precio', ''))
         
-        # Guardamos en datos el payload limpio
+        # Guardamos en datos_extra el payload limpio
         listado = Listado.objects.create(
             agente=user,
             titulo=titulo,
             tipo_propiedad=tipo_propiedad,
             ciudad=ciudad,
             precio=precio,
-            datos=payload
+            datos_extra=payload
         )
         
         incrementar_uso(user, 'property')
