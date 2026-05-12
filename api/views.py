@@ -280,10 +280,7 @@ def generar_guion(request):
 
     # Intentar IA solo si hay keys Y con timeout estricto de 5s
     descripcion_ia = None
-    GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '')
-    GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
-
-    if GEMINI_KEY or GROQ_KEY:
+    if True:  # Usa pool de DB via call_gemini_api
         palabras_por_escena = "25-38 palabras" if tipo_video == 'reel' else "50-75 palabras"
         palabras_total = "100-150 palabras" if tipo_video == 'reel' else "200-300 palabras"
         contexto_extra = f"\nENFOQUE ADICIONAL DEL CLIENTE: {contexto_adicional}" if contexto_adicional else ''
