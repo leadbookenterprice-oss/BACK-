@@ -240,14 +240,6 @@ import concurrent.futures
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_guion(request):
-    # TODO: re-habilitar cuando el sistema de planes esté estable
-    # if not puede_generar(request.user, 'ai'):
-    #     return Response({
-    #         "error": "limite_alcanzado", 
-    #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
-    #         "upgrade_url": "/precios"
-    #     }, status=status.HTTP_403_FORBIDDEN)
-
     data = request.data
     tipo_video_raw = str(data.get('tipoVideo', 'reel')).strip().lower()
     tipo_video = {
@@ -263,35 +255,29 @@ def generar_guion(request):
     precio = data.get('precio', '')
     recamaras = str(data.get('recamaras', '') or data.get('habitaciones', ''))
     banos = str(data.get('banos', '') or data.get('bathrooms', ''))
-    superficie = str(data.get('superficieCubierta', '') or data.get('metros', ''))
-    voz = data.get('voz', 'femenina')          # 'masculina' | 'femenina'
-    tono = data.get('tono', 'profesional')     # 'profesional' | 'lujo' | 'energetico'
-    voiceover = data.get('voiceover', False)   # bool
+    voz = data.get('voz', 'femenina')
+    tono = data.get('tono', 'profesional')
     contexto_adicional = data.get('contextoAdicional', '')
 
-    # Mapear tono a instrucciones narrativas
     tono_map = {
         'profesional': 'profesional y formal, directo, transmite confianza y seriedad',
-        'lujo':        'de lujo y exclusividad, sofisticado, evoca aspiración y premium lifestyle, usa vocabulario refinado',
-        'energetico':  'dinámico y energético, entusiasta, usa frases cortas e impactantes, genera urgencia'
+        'lujo': 'de lujo y exclusividad, sofisticado, evoca aspiración y premium lifestyle, usa vocabulario refinado',
+        'energetico': 'dinámico y energético, entusiasta, usa frases cortas e impactantes, genera urgencia',
     }
     tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
 
-    # Narrador según voz
     narrador_instrucciones = (
         'con voz masculina en mente: frases firmes, directas, con autoridad'
-        if voz == 'masculina' else
-        'con voz femenina en mente: frases cálidas, cercanas, invitadoras'
+        if voz == 'masculina'
+        else 'con voz femenina en mente: frases cálidas, cercanas, invitadoras'
     )
 
-    # Intentar IA solo si hay keys Y con timeout estricto de 5s
-    descripcion_ia = None
-    if True:  # Usa pool de DB via call_gemini_api
-        palabras_por_escena = "25-38 palabras" if tipo_video == 'reel' else "50-75 palabras"
-        palabras_total = "100-150 palabras" if tipo_video == 'reel' else "200-300 palabras"
-        contexto_extra = f"\nENFOQUE ADICIONAL DEL CLIENTE: {contexto_adicional}" if contexto_adicional else ''
-        prompt_override = (data.get('prompt') or '').strip()
-        prompt = prompt_override or f"""Sos un copywriter inmobiliario experto.
+    palabras_por_escena = "25-38 palabras" if tipo_video == 'reel' else "50-75 palabras"
+    palabras_total = "100-150 palabras" if tipo_video == 'reel' else "200-300 palabras"
+    contexto_extra = f"\nENFOQUE ADICIONAL DEL CLIENTE: {contexto_adicional}" if contexto_adicional else ''
+
+    prompt_override = (data.get('prompt') or '').strip()
+    prompt = prompt_override or f"""Sos un copywriter inmobiliario experto.
 Generá un guión PROFESIONAL para video tipo {tipo_video}.
 
 PROPIEDAD:
@@ -322,59 +308,52 @@ ESTRUCTURA:
 ]
 
 RESPONDE SOLO JSON, SIN PREAMBLE."""
-        try:
-            with concurrent.futures.ThreadPoolExecutor() as ex:
-                future = ex.submit(call_gemini_api, prompt, agente=request.user)
-                descripcion_ia = future.result(timeout=15)
-        except Exception:
-            descripcion_ia = None
 
-    # Fallback local — siempre 4 escenas con rangos exactos de palabras
-    if tipo_video == 'tour':
-        # Tour narrado: 6 escenas arquitectónicas (porta el estilo de LEADBOOK UP)
-        escenas_default = [
-            {"nombre": "Fachada", "icono": "🏠",
-             "texto": f"Bienvenidos a esta {tipo} en {operacion} en {ciudad}. Una oportunidad única en el mercado inmobiliario actual. Precio: {moneda} {precio}."},
-            {"nombre": "Sala", "icono": "🛋️",
-             "texto": "Amplios espacios interiores diseñados para el confort familiar. Luz natural, alturas generosas y un diseño que invita a disfrutar cada rincón."},
-            {"nombre": "Cocina", "icono": "🍳",
-             "texto": "Cocina funcional con terminaciones de primera calidad, espacios de guardado y distribución inteligente para el uso diario."},
-            {"nombre": "Recámara", "icono": "🛏️",
-             "texto": f"{'Con ' + str(recamaras) + ' recámaras y ' + str(banos) + ' baños.' if recamaras else 'Dormitorios luminosos para el descanso ideal.'} Acabados de primera línea{(', superficie cubierta de ' + superficie + ' m²') if superficie else ''}."},
-            {"nombre": "Exteriores", "icono": "🌿",
-             "texto": f"Espacios exteriores que complementan una vida plena en {ciudad}. Zonas de esparcimiento, acceso a servicios y conectividad inmejorable."},
-            {"nombre": "Cierre", "icono": "📞",
-             "texto": f"Precio: {moneda} {precio}. No dejes que alguien más tome esta decisión. Contactanos hoy mismo y agendá tu visita personalizada. ¡Te esperamos!"}
-        ]
-    else:  # reel rápido: 100-150 palabras totales (25-38 palabras por escena)
-        escenas_default = [
-            {"nombre": "Apertura", "icono": "⚡",
-             "texto": f"✨ {tipo} en {operacion} en {ciudad}. Precio: {moneda} {precio}. Una oportunidad única en el mercado inmobiliario actual. No te la pierdas."},
-            {"nombre": "Características", "icono": "🏠",
-             "texto": f"{recamaras} recámaras · {banos} baños{(' · ' + superficie + ' m²') if superficie else ''}. Espacios amplios, luminosos y diseñados para el máximo confort. Acabados de primera categoría."},
-            {"nombre": "Ubicación", "icono": "📍",
-             "texto": f"Estratégicamente ubicado en {ciudad}. Acceso a los mejores servicios, comercios, transporte y zonas de esparcimiento. Todo lo que necesitás, cerca de vos."},
-            {"nombre": "Contacto", "icono": "📞",
-             "texto": f"¡El hogar que soñabas está en {ciudad}! Contactanos ahora mismo, agendá tu visita y hacelo tuyo antes de que sea tarde."}
-        ]
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            future = ex.submit(call_gemini_api, prompt, agente=request.user)
+            descripcion_ia = future.result(timeout=20)
+    except GeminiQuotaExhaustedError as e:
+        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+    except Exception as e:
+        logger.exception("Error llamando Gemini en generar_guion")
+        return Response({"error": "gemini_no_disponible", "detalle": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
+    if not descripcion_ia:
+        return Response({"error": "gemini_sin_respuesta"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-    # Parsear respuesta de IA si vino bien
-    escenas_finales = escenas_default
-    if descripcion_ia:
-        from .plan_utils import registrar_uso
-        registrar_uso(request.user, 'ai')
-        try:
-            import json as _json
-            parsed = _json.loads(descripcion_ia)
-            if isinstance(parsed, dict) and isinstance(parsed.get('escenas'), list) and len(parsed['escenas']) >= 3:
-                escenas_finales = parsed['escenas']
-            elif isinstance(parsed, list) and len(parsed) >= 3:
-                escenas_finales = parsed
-        except Exception:
-            pass
+    import json as _json
 
-    return Response({'escenas': escenas_finales, 'tipo_video': tipo_video})
+    try:
+        parsed = _json.loads(descripcion_ia)
+    except Exception:
+        return Response(
+            {
+                "error": "formato_ia_invalido",
+                "detalle": "Gemini no devolvió JSON válido",
+                "raw": str(descripcion_ia)[:500],
+            },
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    escenas = None
+    if isinstance(parsed, dict) and isinstance(parsed.get('escenas'), list):
+        escenas = parsed.get('escenas')
+    elif isinstance(parsed, list):
+        escenas = parsed
+
+    if not isinstance(escenas, list) or len(escenas) < 3:
+        return Response(
+            {
+                "error": "respuesta_ia_incompleta",
+                "detalle": "Gemini no devolvió suficientes escenas",
+            },
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    from .plan_utils import registrar_uso
+    registrar_uso(request.user, 'ai')
+    return Response({'escenas': escenas, 'tipo_video': tipo_video})
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
