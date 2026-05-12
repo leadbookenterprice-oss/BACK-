@@ -90,13 +90,16 @@ def admin_api_keys_list(request):
     data = []
     for k in keys:
         asig = UserAPIAssignment.objects.filter(
-            apikey=k, activo=True, is_primary=True
+            apikey=k, activo=True
         ).select_related('user').first()
         data.append({
             'id': k.id, 'servicio': k.servicio.nombre, 'service': k.servicio.nombre,
             'status': k.status, 'api_key': k.api_key,
             'key_masked': k.api_key[:10] + '...' if k.api_key else '',
             'label': k.label,
+            'is_primary': asig.is_primary if asig else True,
+            'usuario_id': asig.user.id if asig else None,
+            'usuario_actual': asig.user.nombre if asig else None,
             'assigned_to': asig.user.email if asig else None,
             'assigned_to_email': asig.user.email if asig else None,
             'assigned_to_id': asig.user.id if asig else None,
