@@ -240,6 +240,9 @@ import concurrent.futures
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_guion(request):
+    import json as _json
+    import re
+
     data = request.data
     tipo_video_raw = str(data.get('tipoVideo', 'reel')).strip().lower()
     tipo_video = {
@@ -248,8 +251,10 @@ def generar_guion(request):
         'reel_rapido': 'reel',
         'reel-rapido': 'reel',
     }.get(tipo_video_raw, tipo_video_raw if tipo_video_raw in ('tour', 'reel') else 'reel')
+
     tipo = data.get('tipoPropiedad', 'Propiedad')
     ciudad = data.get('ciudad', '')
+    pais = data.get('pais', '')
     operacion = data.get('operacion', 'Venta')
     moneda = data.get('moneda', 'USD')
     precio = data.get('precio', '')
@@ -259,55 +264,50 @@ def generar_guion(request):
     tono = data.get('tono', 'profesional')
     contexto_adicional = data.get('contextoAdicional', '')
 
+    max_chars_total = 150 if tipo_video == 'reel' else 300
+    min_escenas = 3 if tipo_video == 'reel' else 4
+
     tono_map = {
         'profesional': 'profesional y formal, directo, transmite confianza y seriedad',
-        'lujo': 'de lujo y exclusividad, sofisticado, evoca aspiración y premium lifestyle, usa vocabulario refinado',
-        'energetico': 'dinámico y energético, entusiasta, usa frases cortas e impactantes, genera urgencia',
+        'lujo': 'de lujo y exclusividad, sofisticado y aspiracional',
+        'energetico': 'dinámico y energético, frases cortas de alto impacto',
     }
     tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
 
     narrador_instrucciones = (
-        'con voz masculina en mente: frases firmes, directas, con autoridad'
+        'voz masculina: firme y segura'
         if voz == 'masculina'
-        else 'con voz femenina en mente: frases cálidas, cercanas, invitadoras'
+        else 'voz femenina: cálida y cercana'
     )
 
-    palabras_por_escena = "25-38 palabras" if tipo_video == 'reel' else "50-75 palabras"
-    palabras_total = "100-150 palabras" if tipo_video == 'reel' else "200-300 palabras"
-    contexto_extra = f"\nENFOQUE ADICIONAL DEL CLIENTE: {contexto_adicional}" if contexto_adicional else ''
+    contexto_extra = f"\nENFOQUE ADICIONAL: {contexto_adicional}" if contexto_adicional else ''
 
-    prompt_override = (data.get('prompt') or '').strip()
-    prompt = prompt_override or f"""Sos un copywriter inmobiliario experto.
-Generá un guión PROFESIONAL para video tipo {tipo_video}.
+    prompt = f"""Sos copywriter inmobiliario experto.
+Generá guión para {tipo_video.upper()}.
 
-PROPIEDAD:
+DATOS:
 - Tipo: {tipo}
 - Operación: {operacion}
-- Ubicación: {ciudad}
+- Ciudad: {ciudad}
+- País: {pais}
 - Precio: {moneda} {precio}
 - Recámaras: {recamaras}
 - Baños: {banos}
-
-ESTILO DE NARRACIÓN:
 - Tono: {tono_instrucciones}
-- Narrador: {narrador_instrucciones}
-- Tipo de video: {tipo_video.upper()} — {'Tour inmersivo y narrado, guía al espectador por la propiedad' if tipo_video == 'tour' else 'Reel dinámico, impacto visual rápido'}{contexto_extra}
+- Narrador: {narrador_instrucciones}{contexto_extra}
 
-REQUISITOS:
-- Genera EXACTAMENTE 4 escenas
-- Cada escena: {palabras_por_escena} (texto persuasivo y descriptivo)
-- Total del guión: {palabras_total}
-- Formato: JSON puro
+REGLAS ESTRICTAS:
+- Mínimo {min_escenas} escenas
+- Suma total de caracteres de TODOS los campos "texto" <= {max_chars_total}
+- Salida JSON pura
 
-ESTRUCTURA:
-[
+FORMATO:
+{{"escenas": [
   {{"nombre":"Apertura","texto":"...","icono":"🏠"}},
-  {{"nombre":"Detalles","texto":"...","icono":"✨"}},
-  {{"nombre":"Ubicación","texto":"...","icono":"📍"}},
-  {{"nombre":"CTA","texto":"...","icono":"📞"}}
-]
-
-RESPONDE SOLO JSON, SIN PREAMBLE."""
+  {{"nombre":"Detalle","texto":"...","icono":"✨"}},
+  {{"nombre":"Cierre","texto":"...","icono":"📞"}}
+]}}
+"""
 
     try:
         with concurrent.futures.ThreadPoolExecutor() as ex:
@@ -322,38 +322,99 @@ RESPONDE SOLO JSON, SIN PREAMBLE."""
     if not descripcion_ia:
         return Response({"error": "gemini_sin_respuesta"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-    import json as _json
+    raw = str(descripcion_ia).strip()
 
-    try:
-        parsed = _json.loads(descripcion_ia)
-    except Exception:
+    def _parse_json_flexible(text):
+        candidates = [text]
+        clean_fence = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+        if clean_fence and clean_fence != text:
+            candidates.append(clean_fence)
+        obj_match = re.search(r"\{[\s\S]*\}", text)
+        if obj_match:
+            candidates.append(obj_match.group(0).strip())
+        arr_match = re.search(r"\[[\s\S]*\]", text)
+        if arr_match:
+            candidates.append(arr_match.group(0).strip())
+
+        used = set()
+        for candidate in candidates:
+            if not candidate or candidate in used:
+                continue
+            used.add(candidate)
+            try:
+                return _json.loads(candidate)
+            except Exception:
+                continue
+        return None
+
+    parsed = _parse_json_flexible(raw)
+    if parsed is None:
         return Response(
             {
                 "error": "formato_ia_invalido",
                 "detalle": "Gemini no devolvió JSON válido",
-                "raw": str(descripcion_ia)[:500],
+                "raw": raw[:500],
             },
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    escenas = None
+    escenas_raw = None
     if isinstance(parsed, dict) and isinstance(parsed.get('escenas'), list):
-        escenas = parsed.get('escenas')
+        escenas_raw = parsed.get('escenas')
     elif isinstance(parsed, list):
-        escenas = parsed
+        escenas_raw = parsed
 
-    if not isinstance(escenas, list) or len(escenas) < 3:
+    escenas = []
+    for i, escena in enumerate(escenas_raw or [], start=1):
+        if isinstance(escena, dict):
+            texto = str(escena.get('texto', '')).strip()
+            nombre = str(escena.get('nombre') or f'Escena {i}').strip()
+            icono = str(escena.get('icono') or '🎬').strip()
+        elif isinstance(escena, str):
+            texto = escena.strip()
+            nombre = f'Escena {i}'
+            icono = '🎬'
+        else:
+            continue
+
+        if texto:
+            escenas.append({'nombre': nombre, 'texto': texto, 'icono': icono[:2] if icono else '🎬'})
+
+    if len(escenas) < min_escenas:
         return Response(
             {
                 "error": "respuesta_ia_incompleta",
-                "detalle": "Gemini no devolvió suficientes escenas",
+                "detalle": f"Gemini no devolvió suficientes escenas (mínimo {min_escenas})",
             },
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
+    total_chars = sum(len(e['texto']) for e in escenas)
+    if total_chars > max_chars_total:
+        min_chars_escena = 12 if tipo_video == 'reel' else 20
+        guard = 0
+        while total_chars > max_chars_total and guard < 5000:
+            guard += 1
+            idx = max(range(len(escenas)), key=lambda n: len(escenas[n]['texto']))
+            txt = escenas[idx]['texto']
+            if len(txt) <= min_chars_escena:
+                break
+            escenas[idx]['texto'] = txt[:-1].rstrip()
+            total_chars = sum(len(e['texto']) for e in escenas)
+
     from .plan_utils import registrar_uso
     registrar_uso(request.user, 'ai')
-    return Response({'escenas': escenas, 'tipo_video': tipo_video})
+    return Response(
+        {
+            'escenas': escenas,
+            'tipo_video': tipo_video,
+            'source': 'gemini',
+            'meta': {
+                'actual_chars_total': total_chars,
+                'max_chars_total': max_chars_total,
+            },
+        }
+    )
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
