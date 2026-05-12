@@ -85,6 +85,7 @@ class Agent(AbstractBaseUser, PermissionsMixin):
     # Seguridad
     last_login_ip          = models.GenericIPAddressField(null=True, blank=True)
     last_login_user_agent  = models.TextField(null=True, blank=True)
+    last_seen              = models.DateTimeField(null=True, blank=True)
 
     # Auditoría
     fecha_registro         = models.DateTimeField(auto_now_add=True)

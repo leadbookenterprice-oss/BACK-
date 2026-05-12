@@ -132,9 +132,17 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             user_agent = request.META.get('HTTP_USER_AGENT', '')
             try:
                 agent = Agent.objects.get(email=email)
+                from django.utils import timezone
                 agent.last_login_ip = ip
                 agent.last_login_user_agent = user_agent
-                agent.save(update_fields=['last_login_ip', 'last_login_user_agent'])
+                agent.last_login = timezone.now()
+                agent.save(update_fields=['last_login_ip', 'last_login_user_agent', 'last_login'])
+                response.data['user'] = {
+                    'id': agent.id,
+                    'email': agent.email,
+                    'nombre': agent.nombre,
+                    'is_staff': agent.is_staff,
+                }
             except Agent.DoesNotExist:
                 pass
         return response
