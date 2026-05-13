@@ -745,6 +745,8 @@ def generar_html_gemini(context, agente):
         amenidades = ', '.join(context.get('amenidades', [])[:10])
         agente_nombre = context.get('agente_nombre', '')
         agencia_nombre = context.get('agencia_nombre', '')
+        template_instructions = str(context.get('template_instructions') or '').strip()
+        template_block = f"\nTEMPLATE PERSONALIZADO DEL USUARIO:\n{template_instructions}\n" if template_instructions else ''
 
         prompt_step1 = f"""Sos un director de arte de una agencia de branding de lujo y real estate premium.
         
@@ -757,6 +759,7 @@ DATOS DE LA PROPIEDAD:
 - Ubicación: {ciudad}
 - Amenidades: {amenidades}
 - Agencia: {agencia_nombre} | Agente: {agente_nombre}
+{template_block}
 
 El prompt que generes debe especificar obligatoriamente:
 1. TIPOGRAFÍA (Google Fonts): Elegí una fuente para Títulos (Display/Serif/Sans-Bold) y otra para el Cuerpo de texto. Especificá los 'font-weight' exactos (ej: 300, 700, 900).
@@ -846,6 +849,7 @@ Sos un desarrollador frontend senior especializado en landing pages inmobiliaria
 
 DISEÑO A IMPLEMENTAR (seguilo ESTRICTAMENTE):
 {design_prompt}
+{template_block}
 
 DATOS DE LA PROPIEDAD:
 - Tipo: {context.get('tipo_propiedad')}
@@ -922,6 +926,7 @@ CRÍTICO — LEÉ ESTO ANTES DE GENERAR:
 
 DISEÑO A IMPLEMENTAR:
 {design_prompt}
+{template_block}
 
 DATOS DE LA PROPIEDAD:
 {datos_propiedad}

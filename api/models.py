@@ -289,6 +289,10 @@ def default_template_tokens():
             'logo_position': 'top_right',
             'agent_block_position': 'bottom_left',
             'qr_position': 'bottom_right',
+            'style': 'tech_modern',
+            'density': 'comfortable',
+            'border_radius': 'medium',
+            'image_treatment': 'normal',
         },
     }
 
@@ -353,6 +357,8 @@ class BrandTemplateRevision(models.Model):
     template = models.ForeignKey(BrandTemplate, on_delete=models.CASCADE, related_name='revisions')
     revision = models.IntegerField()
     tokens_json = models.JSONField(default=default_template_tokens)
+    gemini_instructions = models.TextField(blank=True, null=True)
+    preview_html = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     created_by = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='template_revisions_created')
     created_at = models.DateTimeField(auto_now_add=True)

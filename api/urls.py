@@ -19,9 +19,9 @@ from .views import (
     commercial_agent_detail, commercial_agent_set_default,
     commercial_agent_photo, content_preferences_detail,
     brand_templates_collection, brand_template_detail,
-    brand_template_clone,
+    brand_template_clone, brand_templates_options,
     brand_template_set_default, brand_template_revisions_collection,
-    brand_template_publish_revision,
+    brand_template_publish_revision, brand_template_preview,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -53,9 +53,11 @@ urlpatterns = [
     path('auth/agentes-comerciales/<int:agent_id>/foto/', commercial_agent_photo, name='commercial_agent_photo'),
     path('auth/content-preferences/', content_preferences_detail, name='content_preferences_detail'),
     path('auth/templates/', brand_templates_collection, name='brand_templates_collection'),
+    path('auth/templates/options/', brand_templates_options, name='brand_templates_options'),
     path('auth/templates/clone/', brand_template_clone, name='brand_template_clone'),
     path('auth/templates/<int:template_id>/', brand_template_detail, name='brand_template_detail'),
     path('auth/templates/<int:template_id>/set-default/', brand_template_set_default, name='brand_template_set_default'),
+    path('auth/templates/<int:template_id>/preview/', brand_template_preview, name='brand_template_preview'),
     path('auth/templates/<int:template_id>/revisions/', brand_template_revisions_collection, name='brand_template_revisions_collection'),
     path('auth/templates/<int:template_id>/publish/<int:revision_id>/', brand_template_publish_revision, name='brand_template_publish_revision'),
     path('auth/send-otp/', send_otp, name='auth_send_otp'),

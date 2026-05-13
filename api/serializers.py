@@ -151,7 +151,10 @@ def _validate_hex_color(value, field_name):
 class BrandTemplateRevisionSerializer(serializers.ModelSerializer):
     class Meta:
         model = BrandTemplateRevision
-        fields = ['id', 'template', 'revision', 'tokens_json', 'status', 'created_by', 'created_at', 'notes']
+        fields = [
+            'id', 'template', 'revision', 'tokens_json', 'gemini_instructions',
+            'preview_html', 'status', 'created_by', 'created_at', 'notes',
+        ]
         read_only_fields = ['id', 'template', 'revision', 'created_by', 'created_at']
 
     def validate_tokens_json(self, value):
@@ -211,6 +214,11 @@ class BrandTemplateRevisionSerializer(serializers.ModelSerializer):
         if layout.get('qr_position') not in {'bottom_left', 'bottom_right'}:
             raise serializers.ValidationError('layout.qr_position invalido.')
 
+        layout.setdefault('style', 'tech_modern')
+        layout.setdefault('density', 'comfortable')
+        layout.setdefault('border_radius', 'medium')
+        layout.setdefault('image_treatment', 'normal')
+
         value['schema_version'] = 1
         value['palette'] = palette
         value['typography'] = typography
@@ -248,5 +256,7 @@ class BrandTemplateSerializer(serializers.ModelSerializer):
             'id': published.id,
             'revision': published.revision,
             'tokens_json': published.tokens_json,
+            'gemini_instructions': published.gemini_instructions or '',
+            'preview_html': published.preview_html or '',
             'created_at': published.created_at,
         }

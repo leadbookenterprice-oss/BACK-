@@ -187,6 +187,90 @@ SYSTEM_FONT_IMPORT_MAP = {
 }
 
 
+TEMPLATE_TOKEN_OPTIONS = {
+    'fonts': list(SYSTEM_FONT_IMPORT_MAP.keys()),
+    'palette_fields': [
+        {'key': 'primary', 'label': 'Primario'},
+        {'key': 'secondary', 'label': 'Secundario'},
+        {'key': 'accent', 'label': 'Acento'},
+        {'key': 'background', 'label': 'Fondo'},
+        {'key': 'text', 'label': 'Texto'},
+    ],
+    'layout_styles': [
+        {'id': 'editorial', 'label': 'Editorial elegante'},
+        {'id': 'dark_luxury', 'label': 'Lujo oscuro'},
+        {'id': 'minimal_light', 'label': 'Minimalista claro'},
+        {'id': 'urban_strong', 'label': 'Urbano fuerte'},
+        {'id': 'mediterranean_warm', 'label': 'Mediterraneo calido'},
+        {'id': 'tech_modern', 'label': 'Tech moderno'},
+        {'id': 'commercial_direct', 'label': 'Comercial directo'},
+    ],
+    'density': [
+        {'id': 'compact', 'label': 'Compacto'},
+        {'id': 'comfortable', 'label': 'Comodo'},
+        {'id': 'spacious', 'label': 'Espaciado'},
+    ],
+    'border_radius': [
+        {'id': 'none', 'label': 'Sin bordes'},
+        {'id': 'soft', 'label': 'Suave'},
+        {'id': 'medium', 'label': 'Medio'},
+        {'id': 'strong', 'label': 'Fuerte'},
+    ],
+    'image_treatment': [
+        {'id': 'normal', 'label': 'Normal'},
+        {'id': 'dark', 'label': 'Oscuro'},
+        {'id': 'warm', 'label': 'Calido'},
+        {'id': 'black_white', 'label': 'Blanco y negro'},
+        {'id': 'high_contrast', 'label': 'Alto contraste'},
+    ],
+    'copy_tones': [
+        {'id': 'premium', 'label': 'Premium'},
+        {'id': 'profesional', 'label': 'Profesional'},
+        {'id': 'lujo', 'label': 'Lujo'},
+        {'id': 'minimal', 'label': 'Minimal'},
+    ],
+}
+
+
+def _build_template_gemini_instructions(template_name, base_template_id, tokens):
+    tokens = _resolve_brand_template_tokens(tokens)
+    palette = tokens.get('palette') or {}
+    typography = tokens.get('typography') or {}
+    copy = tokens.get('copy') or {}
+    layout = tokens.get('layout') or {}
+    hashtags = ' '.join(copy.get('hashtags') or [])
+    return (
+        f"Template personalizado: {template_name or 'Template de marca'}\n"
+        f"Base visual: {base_template_id or 'tech_modern'}\n"
+        "Respetar estos tokens de marca al generar copy, HTML o narrativa visual.\n"
+        f"Colores: primario {palette.get('primary')}, secundario {palette.get('secondary')}, "
+        f"acento {palette.get('accent')}, fondo {palette.get('background')}, texto {palette.get('text')}.\n"
+        f"Tipografias: titulares {typography.get('display')}, cuerpo {typography.get('body')}, mono/acento {typography.get('mono')}.\n"
+        f"Layout: estilo {layout.get('style', 'tech_modern')}, densidad {layout.get('density', 'comfortable')}, "
+        f"bordes {layout.get('border_radius', 'medium')}, tratamiento de imagen {layout.get('image_treatment', 'normal')}, "
+        f"logo {layout.get('logo_position')}, agente {layout.get('agent_block_position')}, QR {layout.get('qr_position')}.\n"
+        f"Copy: tono {copy.get('tone')}, emojis {copy.get('emoji_density')}, CTA {copy.get('cta_style')}, hashtags {hashtags}.\n"
+        "No inventar una identidad distinta. Mantener el HTML estructural y adaptar textos al estilo anterior."
+    )
+
+
+def _template_options_payload():
+    return {
+        'base_templates': [
+            {
+                'id': template_id,
+                'label': meta.get('name', template_id.replace('_', ' ').title()),
+                'description': meta.get('description', ''),
+                'colors': meta.get('colors', {}),
+                'fonts': meta.get('fonts', {}),
+            }
+            for template_id, meta in TEMPLATE_CATALOG.items()
+        ],
+        'token_options': TEMPLATE_TOKEN_OPTIONS,
+        'default_tokens': default_template_tokens(),
+    }
+
+
 def _template_catalog_payload(user=None):
     system_items = []
     for template_id in TEMPLATE_IDS:
@@ -232,6 +316,12 @@ def _template_catalog_payload(user=None):
 @permission_classes([IsAuthenticated])
 def templates_catalog(request):
     return Response(_template_catalog_payload(request.user), status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def brand_templates_options(request):
+    return Response(_template_options_payload(), status=status.HTTP_200_OK)
 
 
 def _normalize_template_id(value):
@@ -359,6 +449,10 @@ def _resolve_brand_template_tokens(tokens):
             'logo_position': layout.get('logo_position') or fallback['layout']['logo_position'],
             'agent_block_position': layout.get('agent_block_position') or fallback['layout']['agent_block_position'],
             'qr_position': layout.get('qr_position') or fallback['layout']['qr_position'],
+            'style': layout.get('style') or fallback['layout'].get('style', 'tech_modern'),
+            'density': layout.get('density') or fallback['layout'].get('density', 'comfortable'),
+            'border_radius': layout.get('border_radius') or fallback['layout'].get('border_radius', 'medium'),
+            'image_treatment': layout.get('image_treatment') or fallback['layout'].get('image_treatment', 'normal'),
         },
     }
     merged['typography']['font_import_url'] = _build_font_import_url(merged['typography'])
@@ -433,10 +527,15 @@ def _resolve_template_selection(data, user, listado_obj=None, listado_id_hint=No
 
     published_revision = None
     tokens = None
+    template_instructions = ''
     if brand_template:
         published_revision = brand_template.revisions.filter(status='published').order_by('-revision').first()
         if published_revision:
             tokens = _resolve_brand_template_tokens(published_revision.tokens_json)
+            template_instructions = (
+                published_revision.gemini_instructions
+                or _build_template_gemini_instructions(brand_template.name, brand_template.base_template_id, tokens)
+            )
 
     if brand_template:
         template_id = brand_template.base_template_id
@@ -458,6 +557,7 @@ def _resolve_template_selection(data, user, listado_obj=None, listado_id_hint=No
         'brand_template': brand_template,
         'brand_template_revision': published_revision,
         'template_tokens': tokens,
+        'template_instructions': template_instructions,
     }
 
 
@@ -527,6 +627,20 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         if layout.get('agent_block_position') == 'bottom_right' or layout.get('qr_position') == 'bottom_left'
         else ".agent-row,.footer,.contact-strip{flex-direction:row!important;}"
     )
+    radius_map = {'none': '0', 'soft': '8px', 'medium': '16px', 'strong': '28px'}
+    density_map = {'compact': '0.85', 'comfortable': '1', 'spacious': '1.15'}
+    image_filter_map = {
+        'normal': 'none',
+        'dark': 'brightness(.72) saturate(.95)',
+        'warm': 'sepia(.18) saturate(1.15) brightness(.98)',
+        'black_white': 'grayscale(1) contrast(1.08)',
+        'high_contrast': 'contrast(1.18) saturate(1.18)',
+    }
+    layout_css += (
+        f".hero img,.bg,.bg-image,.galeria-foto,.gallery-item{{filter:{image_filter_map.get(layout.get('image_treatment'), 'none')} !important;}}"
+        f".stat,.stat-item,.price-box,.precio-box,.qr-block img,.amenidad-chip{{border-radius:{radius_map.get(layout.get('border_radius'), '16px')} !important;}}"
+        f".content,.bottom,.bottom-section,.descripcion,.amenidades,.galeria{{gap:calc(20px * {density_map.get(layout.get('density'), '1')}) !important;}}"
+    )
 
     style_block = (
         '<style id="brand-template-overrides">'
@@ -534,7 +648,11 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         f"--brand-secondary:{palette.get('secondary', '#1565c0')};"
         f"--brand-accent:{palette.get('accent', '#00e5ff')};"
         f"--brand-bg:{palette.get('background', '#081421')};"
-        f"--brand-text:{palette.get('text', '#e8f3ff')};}}"
+        f"--brand-text:{palette.get('text', '#e8f3ff')};"
+        f"--primario:{palette.get('primary', '#0d47a1')};"
+        f"--secundario:{palette.get('secondary', '#1565c0')};"
+        f"--acento:{palette.get('accent', '#00e5ff')};"
+        f"--accent:{palette.get('accent', '#00e5ff')};}}"
         f"body{{font-family:'{body_font}',sans-serif !important;}}"
         f"h1,h2,h3,.title,.headline,.hero-titulo{{font-family:'{display_font}',sans-serif !important;}}"
         f".badge,.stat-label,.agent-role,.qr-label,.mono{{font-family:'{mono_font}',sans-serif !important;}}"
@@ -781,7 +899,16 @@ def _resolve_content_preferences(user, template_tokens=None, payload=None):
 def _caption_preference_prompt(prefs):
     emoji_text = 'sin emojis' if not prefs.get('use_emojis') or prefs.get('emoji_density') == 'none' else f"emojis densidad {prefs.get('emoji_density')}"
     hashtags = ' '.join(prefs.get('hashtags') or [])
-    return f"Tono {prefs.get('tone', 'premium')}; {emoji_text}; usar estos hashtags si aplican: {hashtags}."
+    template_instructions = str(prefs.get('template_instructions') or '').strip()
+    extra = f" Instrucciones del template personalizado: {template_instructions}" if template_instructions else ''
+    return f"Tono {prefs.get('tone', 'premium')}; {emoji_text}; usar estos hashtags si aplican: {hashtags}.{extra}"
+
+
+def _attach_template_instructions_to_prefs(prefs, selection):
+    prefs = dict(prefs or {})
+    if isinstance(selection, dict) and selection.get('template_instructions'):
+        prefs['template_instructions'] = selection.get('template_instructions')
+    return prefs
 
 
 def _apply_caption_preferences(caption, prefs, max_chars=2200):
@@ -1894,10 +2021,14 @@ def brand_templates_collection(request):
     initial_tokens = request.data.get('tokens_json') if isinstance(request.data, dict) else None
     if not isinstance(initial_tokens, dict):
         initial_tokens = default_template_tokens()
+    initial_instructions = str(request.data.get('gemini_instructions') or '').strip()
+    if not initial_instructions:
+        initial_instructions = _build_template_gemini_instructions(created.name, created.base_template_id, initial_tokens)
 
     revision_serializer = BrandTemplateRevisionSerializer(data={
         'template': created.id,
         'tokens_json': initial_tokens,
+        'gemini_instructions': initial_instructions,
         'status': 'published',
         'notes': 'Revision inicial',
     })
@@ -1930,6 +2061,7 @@ def brand_template_clone(request):
             base_template_id = source_template.base_template_id
     if not isinstance(tokens, dict):
         tokens = default_template_tokens()
+    instructions = str(request.data.get('gemini_instructions') or '').strip()
 
     created = BrandTemplate.objects.create(
         owner=request.user,
@@ -1941,6 +2073,7 @@ def brand_template_clone(request):
     BrandTemplateRevision.objects.create(
         template=created,
         tokens_json=tokens,
+        gemini_instructions=instructions or _build_template_gemini_instructions(name, base_template_id, tokens),
         status='published',
         created_by=request.user,
         notes='Clonado desde panel',
@@ -2001,7 +2134,14 @@ def brand_template_revisions_collection(request, template_id):
     serializer = BrandTemplateRevisionSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     status_value = serializer.validated_data.get('status', 'draft')
-    created = serializer.save(template=template, created_by=request.user, status='draft')
+    instructions = serializer.validated_data.get('gemini_instructions') or ''
+    if not instructions:
+        instructions = _build_template_gemini_instructions(
+            template.name,
+            template.base_template_id,
+            serializer.validated_data.get('tokens_json') or default_template_tokens(),
+        )
+    created = serializer.save(template=template, created_by=request.user, status='draft', gemini_instructions=instructions)
 
     if status_value == 'published':
         template.revisions.filter(status='published').exclude(id=created.id).update(status='archived')
@@ -2020,6 +2160,55 @@ def brand_template_publish_revision(request, template_id, revision_id):
     revision.status = 'published'
     revision.save(update_fields=['status'])
     return Response({'ok': True, 'revision': BrandTemplateRevisionSerializer(revision).data}, status=status.HTTP_200_OK)
+
+
+def _brand_template_demo_context():
+    return {
+        'portada_url': 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1400&q=80',
+        'logo_url': '',
+        'operacion': 'Venta',
+        'ciudad': 'Miami Beach',
+        'titulo': 'Residencia premium',
+        'tipoPropiedad': 'Casa',
+        'moneda': 'USD',
+        'precio': '850.000',
+        'caracteristicas': [
+            {'label': 'Dorm.', 'valor': '4'},
+            {'label': 'Banos', 'valor': '3'},
+            {'label': 'm2', 'valor': '320'},
+            {'label': 'Coch.', 'valor': '2'},
+        ],
+        'agente_nombre': 'Agente LeadBook',
+        'agente_telefono': '+54 11 2345 6789',
+        'agencia_nombre': 'LeadBook Realty',
+        'qr_url': '',
+        'leadbook_logo_url': '',
+    }
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def brand_template_preview(request, template_id):
+    template = get_object_or_404(BrandTemplate, id=template_id, owner=request.user, is_active=True)
+    tokens = request.data.get('tokens_json') if isinstance(request.data, dict) else None
+    if not isinstance(tokens, dict):
+        published = template.revisions.filter(status='published').order_by('-revision').first()
+        tokens = published.tokens_json if published and isinstance(published.tokens_json, dict) else default_template_tokens()
+
+    resolved_tokens = _resolve_brand_template_tokens(tokens)
+    template_file = TEMPLATE_POST_MAP.get(template.base_template_id, TEMPLATE_POST_MAP['tech_modern'])
+    html = render_to_string(template_file, _brand_template_demo_context())
+    html = _apply_template_tokens_to_html(html, template.base_template_id, resolved_tokens)
+    instructions = str(request.data.get('gemini_instructions') or '').strip() or _build_template_gemini_instructions(
+        template.name,
+        template.base_template_id,
+        resolved_tokens,
+    )
+    return Response({
+        'html': html,
+        'tokens_json': resolved_tokens,
+        'gemini_instructions': instructions,
+    }, status=status.HTTP_200_OK)
 
 from .services.instagram_service import publicar_post, publicar_story, publicar_carrusel, publicar_media_upload_api
 from django.conf import settings
@@ -2147,7 +2336,10 @@ def generar_carrusel(request):
         template_id = selection.get('template_id')
         template_carousel = TEMPLATE_CAROUSEL_MAP.get(template_id, TEMPLATE_CAROUSEL_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
-        content_prefs = _resolve_content_preferences(request.user, selection.get('template_tokens'), data)
+        content_prefs = _attach_template_instructions_to_prefs(
+            _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
+            selection,
+        )
 
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='carrusel')
@@ -2798,6 +2990,7 @@ def generar_pdf(request):
         context['listado_id'] = listado_id_hint
         context['template_id'] = template_id
         context['template_tokens'] = selection.get('template_tokens')
+        context['template_instructions'] = selection.get('template_instructions')
 
         logger.info(
             "[PDF] generar_pdf listado_id=%s template_id=%s user_id=%s",
@@ -2979,7 +3172,10 @@ def generar_imagen_post(request):
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
         template_post = TEMPLATE_POST_MAP.get(template_id, TEMPLATE_POST_MAP['dubai_night'])
-        content_prefs = _resolve_content_preferences(request.user, selection.get('template_tokens'), data)
+        content_prefs = _attach_template_instructions_to_prefs(
+            _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
+            selection,
+        )
 
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='post')
@@ -3084,7 +3280,10 @@ def generar_imagen_story(request):
         template_id = selection.get('template_id')
         template_story = TEMPLATE_STORY_MAP.get(template_id, TEMPLATE_STORY_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
-        content_prefs = _resolve_content_preferences(request.user, selection.get('template_tokens'), data)
+        content_prefs = _attach_template_instructions_to_prefs(
+            _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
+            selection,
+        )
 
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='story')
@@ -3211,7 +3410,10 @@ def generar_email(request):
         template_id = selection.get('template_id')
         template_email = TEMPLATE_EMAIL_MAP.get(template_id, TEMPLATE_EMAIL_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
-        content_prefs = _resolve_content_preferences(request.user, selection.get('template_tokens'), data)
+        content_prefs = _attach_template_instructions_to_prefs(
+            _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
+            selection,
+        )
 
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='email')
