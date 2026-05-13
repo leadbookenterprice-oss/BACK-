@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import (
     GeneratedAsset, Agent, ComercialAgentProfile,
+    AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision,
     TerminosCondiciones, PoliticaPrivacidad
 )
@@ -43,7 +44,19 @@ class PoliticaPrivacidadSerializer(serializers.ModelSerializer):
         fields = ['id', 'titulo', 'contenido', 'version', 'fecha_actualizacion']
 
 
+class AgentMediaAssetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AgentMediaAsset
+        fields = [
+            'id', 'kind', 'cloud_name', 'public_id', 'resource_type', 'secure_url',
+            'bytes', 'format', 'folder', 'original_filename', 'version', 'is_active', 'uploaded_at',
+        ]
+        read_only_fields = fields
+
+
 class ComercialAgentProfileSerializer(serializers.ModelSerializer):
+    foto_asset = serializers.SerializerMethodField()
+
     class Meta:
         model = ComercialAgentProfile
         fields = [
@@ -53,12 +66,17 @@ class ComercialAgentProfileSerializer(serializers.ModelSerializer):
             'email',
             'telefono_e164',
             'foto_url',
+            'foto_asset',
             'is_default',
             'activo',
             'creado_en',
             'updated_at',
         ]
         read_only_fields = ['id', 'creado_en', 'updated_at']
+
+    def get_foto_asset(self, obj):
+        asset = obj.media_assets.filter(kind='agent_photo', is_active=True).order_by('-uploaded_at').first()
+        return AgentMediaAssetSerializer(asset).data if asset else None
 
     def validate_telefono_e164(self, value):
         if value in (None, ''):
@@ -73,6 +91,39 @@ class ComercialAgentProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('telefono_e164 debe estar en formato E.164 (ej: +5491123456789).')
 
         return phone
+
+
+class UserContentPreferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserContentPreference
+        fields = ['hashtags', 'emoji_density', 'use_emojis', 'tone', 'updated_at']
+        read_only_fields = ['updated_at']
+
+    def validate_hashtags(self, value):
+        if value in (None, ''):
+            return []
+        if isinstance(value, str):
+            raw_items = re.split(r'[\s,]+', value)
+        elif isinstance(value, list):
+            raw_items = value
+        else:
+            raise serializers.ValidationError('hashtags debe ser lista o texto.')
+
+        cleaned = []
+        for item in raw_items:
+            tag = str(item or '').strip()
+            if not tag:
+                continue
+            tag = tag if tag.startswith('#') else f'#{tag}'
+            tag = re.sub(r'[^#\wÁÉÍÓÚÜÑáéíóúüñ]', '', tag)
+            if len(tag) > 1 and tag not in cleaned:
+                cleaned.append(tag[:50])
+        return cleaned[:20]
+
+    def validate_emoji_density(self, value):
+        if value not in {'none', 'low', 'medium', 'high'}:
+            raise serializers.ValidationError('emoji_density invalido.')
+        return value
 
 
 ALLOWED_FONTS = {
@@ -137,10 +188,20 @@ class BrandTemplateRevisionSerializer(serializers.ModelSerializer):
         copy = value.get('copy') or {}
         if copy.get('tone') not in {'premium', 'profesional', 'lujo', 'minimal'}:
             raise serializers.ValidationError('copy.tone invalido.')
-        if copy.get('emoji_density') not in {'none', 'low', 'medium'}:
+        if copy.get('emoji_density') not in {'none', 'low', 'medium', 'high'}:
             raise serializers.ValidationError('copy.emoji_density invalido.')
         if copy.get('cta_style') not in {'whatsapp_direct', 'soft', 'strong'}:
             raise serializers.ValidationError('copy.cta_style invalido.')
+        hashtags = copy.get('hashtags') or []
+        if isinstance(hashtags, str):
+            hashtags = re.split(r'[\s,]+', hashtags)
+        if not isinstance(hashtags, list):
+            raise serializers.ValidationError('copy.hashtags debe ser lista o texto.')
+        copy['hashtags'] = [
+            (str(tag).strip() if str(tag).strip().startswith('#') else f"#{str(tag).strip()}")[:50]
+            for tag in hashtags
+            if str(tag or '').strip()
+        ][:20]
 
         layout = value.get('layout') or {}
         if layout.get('logo_position') not in {'top_left', 'top_right'}:

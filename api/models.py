@@ -186,6 +186,77 @@ class ComercialAgentProfile(models.Model):
         return f"{self.nombre} ({self.owner_id})"
 
 
+class AgentMediaAsset(models.Model):
+    """Cloudinary asset vinculado a un perfil comercial."""
+
+    ASSET_KINDS = [
+        ('agent_photo', 'Agent Photo'),
+    ]
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='agent_media_assets')
+    profile = models.ForeignKey(ComercialAgentProfile, on_delete=models.CASCADE, related_name='media_assets')
+    kind = models.CharField(max_length=40, choices=ASSET_KINDS, default='agent_photo')
+    cloud_name = models.CharField(max_length=120)
+    public_id = models.CharField(max_length=255)
+    resource_type = models.CharField(max_length=40, default='image')
+    secure_url = models.TextField(blank=True, null=True)
+    bytes = models.PositiveIntegerField(default=0)
+    format = models.CharField(max_length=30, blank=True, null=True)
+    folder = models.CharField(max_length=255, blank=True, null=True)
+    original_filename = models.CharField(max_length=255, blank=True, null=True)
+    version = models.CharField(max_length=60, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+        indexes = [
+            models.Index(fields=['owner', 'kind', 'is_active']),
+            models.Index(fields=['profile', 'kind', 'is_active']),
+            models.Index(fields=['cloud_name', 'public_id']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['profile'],
+                condition=models.Q(kind='agent_photo', is_active=True),
+                name='unique_active_agent_photo_per_profile',
+            )
+        ]
+
+    def as_cloudinary_ref(self):
+        return {
+            'cloudinary_account': self.cloud_name,
+            'cloud_name': self.cloud_name,
+            'public_id': self.public_id,
+            'resource_type': self.resource_type,
+            'url': self.secure_url or '',
+        }
+
+    def __str__(self):
+        return f"{self.kind}:{self.public_id}"
+
+
+class UserContentPreference(models.Model):
+    """Preferencias globales para captions generados por IA."""
+
+    EMOJI_DENSITY_CHOICES = [
+        ('none', 'None'),
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    ]
+
+    owner = models.OneToOneField(Agent, on_delete=models.CASCADE, related_name='content_preferences')
+    hashtags = models.JSONField(default=list, blank=True)
+    emoji_density = models.CharField(max_length=20, choices=EMOJI_DENSITY_CHOICES, default='medium')
+    use_emojis = models.BooleanField(default=True)
+    tone = models.CharField(max_length=40, default='premium')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"content-preferences:{self.owner_id}"
+
+
 def default_template_tokens():
     return {
         'schema_version': 1,
@@ -212,6 +283,7 @@ def default_template_tokens():
             'tone': 'premium',
             'emoji_density': 'low',
             'cta_style': 'whatsapp_direct',
+            'hashtags': ['#RealEstate', '#Inmobiliaria', '#Propiedades', '#Inversion'],
         },
         'layout': {
             'logo_position': 'top_right',

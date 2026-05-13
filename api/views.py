@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 from .models import (
     GeneratedAsset, Listado, OTPCode, ComercialAgentProfile,
+    AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision, default_template_tokens,
     AgentAssociation,
     TerminosCondiciones, PoliticaPrivacidad
@@ -32,7 +33,8 @@ from .serializers import (
     RegisterSerializer, GeneratedAssetSerializer,
     TerminosCondicionesSerializer, PoliticaPrivacidadSerializer,
     ComercialAgentProfileSerializer, BrandTemplateSerializer,
-    BrandTemplateRevisionSerializer,
+    BrandTemplateRevisionSerializer, AgentMediaAssetSerializer,
+    UserContentPreferenceSerializer,
 )
 from .tasks import run_asset_generation
 from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError
@@ -351,6 +353,7 @@ def _resolve_brand_template_tokens(tokens):
             'tone': copy.get('tone') or fallback['copy']['tone'],
             'emoji_density': copy.get('emoji_density') or fallback['copy']['emoji_density'],
             'cta_style': copy.get('cta_style') or fallback['copy']['cta_style'],
+            'hashtags': copy.get('hashtags') or fallback['copy'].get('hashtags', []),
         },
         'layout': {
             'logo_position': layout.get('logo_position') or fallback['layout']['logo_position'],
@@ -499,6 +502,7 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
     themed = str(html)
     palette = template_tokens.get('palette') or {}
     typography = template_tokens.get('typography') or {}
+    layout = template_tokens.get('layout') or {}
 
     base_meta = TEMPLATE_CATALOG.get(template_id, {})
     base_colors = base_meta.get('colors') if isinstance(base_meta.get('colors'), dict) else {}
@@ -512,6 +516,17 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
     display_font = typography.get('display') or 'DM Sans'
     body_font = typography.get('body') or display_font
     mono_font = typography.get('mono') or body_font
+    logo_order = (-1, 1) if layout.get('logo_position') == 'top_left' else (2, 1)
+    layout_css = (
+        ".top{display:flex!important;}"
+        f".top .logo{{order:{logo_order[0]}!important;}}"
+        f".top .badge{{order:{logo_order[1]}!important;}}"
+    )
+    layout_css += (
+        ".agent-row,.footer,.contact-strip{flex-direction:row-reverse!important;}"
+        if layout.get('agent_block_position') == 'bottom_right' or layout.get('qr_position') == 'bottom_left'
+        else ".agent-row,.footer,.contact-strip{flex-direction:row!important;}"
+    )
 
     style_block = (
         '<style id="brand-template-overrides">'
@@ -523,6 +538,7 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         f"body{{font-family:'{body_font}',sans-serif !important;}}"
         f"h1,h2,h3,.title,.headline,.hero-titulo{{font-family:'{display_font}',sans-serif !important;}}"
         f".badge,.stat-label,.agent-role,.qr-label,.mono{{font-family:'{mono_font}',sans-serif !important;}}"
+        f"{layout_css}"
         '</style>'
     )
 
@@ -535,6 +551,28 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         themed = f'{injection}{themed}'
 
     return themed
+
+
+def _inject_agent_photo_html(html, photo_url):
+    if not html or not photo_url:
+        return html
+    photo = str(photo_url).strip()
+    if not photo.startswith('http'):
+        return html
+    css = (
+        '<style id="agent-photo-overrides">'
+        '.lb-agent-photo{width:72px;height:72px;border-radius:50%;object-fit:cover;display:block;'
+        'border:3px solid var(--accent,var(--acento,#00d4ff));margin-bottom:10px;background:#111;}'
+        '.agent-info,.agent-box{align-items:flex-start;}'
+        '.agent-box .lb-agent-photo{width:58px;height:58px;margin-bottom:6px;}'
+        '</style>'
+    )
+    img = f'<img src="{photo}" alt="Foto agente" class="lb-agent-photo">'
+    out = html.replace('</head>', f'{css}</head>', 1) if '</head>' in html else f'{css}{html}'
+    for marker in ('<div class="agent-info">', '<div class="agent-box">'):
+        if marker in out:
+            return out.replace(marker, f'{marker}{img}', 1)
+    return out
 
 
 def _select_template_id(data, listado_obj=None, listado_id_hint=None, user=None):
@@ -627,8 +665,13 @@ def _resolve_branding_payload(data, user):
     default_profile = _get_default_commercial_agent(user)
 
     payload_logo = payload.get('logoAgenciaUrl') or payload.get('logo_url')
+    active_asset = None
+    if default_profile:
+        active_asset = default_profile.media_assets.filter(kind='agent_photo', is_active=True).order_by('-uploaded_at').first()
+
     profile_photo = (
-        payload.get('agenteFotoUrl')
+        (active_asset.secure_url if active_asset else '')
+        or payload.get('agenteFotoUrl')
         or payload.get('agente_foto_url')
         or (default_profile.foto_url if default_profile else '')
         or getattr(user, 'logo_url', '')
@@ -680,8 +723,77 @@ def _resolve_branding_payload(data, user):
         'agencia_nombre': str(agency_name).strip(),
         'logo_url': str(logo_url).strip(),
         'agente_foto_url': str(profile_photo).strip(),
+        'agente_foto_asset': active_asset.as_cloudinary_ref() if active_asset else None,
         'default_agent_profile': default_profile,
     }
+
+
+def _normalize_hashtags(value):
+    if not value:
+        return []
+    raw_items = re.split(r'[\s,]+', value) if isinstance(value, str) else value
+    if not isinstance(raw_items, list):
+        return []
+    tags = []
+    for item in raw_items:
+        tag = str(item or '').strip()
+        if not tag:
+            continue
+        tag = tag if tag.startswith('#') else f'#{tag}'
+        tag = re.sub(r'[^#\wÁÉÍÓÚÜÑáéíóúüñ]', '', tag)
+        if len(tag) > 1 and tag not in tags:
+            tags.append(tag[:50])
+    return tags[:20]
+
+
+def _resolve_content_preferences(user, template_tokens=None, payload=None):
+    payload = payload if isinstance(payload, dict) else {}
+    tokens_copy = (template_tokens or {}).get('copy') if isinstance(template_tokens, dict) else {}
+    try:
+        prefs = getattr(user, 'content_preferences', None)
+    except Exception:
+        prefs = None
+
+    hashtags = (
+        payload.get('hashtags')
+        or (tokens_copy or {}).get('hashtags')
+        or (prefs.hashtags if prefs else None)
+        or ['#RealEstate', '#Inmobiliaria', '#Propiedades', '#Inversion']
+    )
+    emoji_density = (
+        payload.get('emoji_density')
+        or (tokens_copy or {}).get('emoji_density')
+        or (prefs.emoji_density if prefs else 'medium')
+    )
+    use_emojis = payload.get('use_emojis')
+    if use_emojis is None:
+        use_emojis = (prefs.use_emojis if prefs else True)
+
+    tone = payload.get('tone') or (tokens_copy or {}).get('tone') or (prefs.tone if prefs else 'premium')
+    return {
+        'hashtags': _normalize_hashtags(hashtags),
+        'emoji_density': emoji_density if emoji_density in {'none', 'low', 'medium', 'high'} else 'medium',
+        'use_emojis': bool(use_emojis),
+        'tone': tone,
+    }
+
+
+def _caption_preference_prompt(prefs):
+    emoji_text = 'sin emojis' if not prefs.get('use_emojis') or prefs.get('emoji_density') == 'none' else f"emojis densidad {prefs.get('emoji_density')}"
+    hashtags = ' '.join(prefs.get('hashtags') or [])
+    return f"Tono {prefs.get('tone', 'premium')}; {emoji_text}; usar estos hashtags si aplican: {hashtags}."
+
+
+def _apply_caption_preferences(caption, prefs, max_chars=2200):
+    text = str(caption or '').strip()
+    tags = [tag for tag in (prefs.get('hashtags') or []) if tag not in text]
+    if tags:
+        suffix = ' '.join(tags[:10])
+        if len(text) + len(suffix) + 2 <= max_chars:
+            text = f"{text}\n\n{suffix}".strip()
+    if not prefs.get('use_emojis') or prefs.get('emoji_density') == 'none':
+        text = re.sub(r'[\U0001F300-\U0001FAFF\U00002700-\U000027BF]+', '', text).strip()
+    return text[:max_chars].rstrip()
 
 
 def _extract_urls_for_export(value):
@@ -1697,6 +1809,76 @@ def commercial_agent_set_default(request, agent_id):
     return Response({'ok': True, 'default_agent': ComercialAgentProfileSerializer(profile).data}, status=status.HTTP_200_OK)
 
 
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def commercial_agent_photo(request, agent_id):
+    profile = get_object_or_404(ComercialAgentProfile, id=agent_id, owner=request.user, activo=True)
+
+    if request.method == 'DELETE':
+        assets = profile.media_assets.filter(kind='agent_photo', is_active=True)
+        for asset in assets:
+            try:
+                destroy_kwargs = {'resource_type': asset.resource_type or 'image'}
+                for key_obj in AlmacenamientoCloudinary._get_pool_keys():
+                    creds = AlmacenamientoCloudinary._parse_cloudinary_url(key_obj.api_key)
+                    if creds and creds.get('cloud_name') == asset.cloud_name:
+                        destroy_kwargs.update(creds)
+                        break
+                cloudinary.uploader.destroy(asset.public_id, **destroy_kwargs)
+            except Exception as e:
+                logger.warning(f"[AgentPhoto] No se pudo eliminar Cloudinary {asset.public_id}: {e}")
+        assets.update(is_active=False)
+        profile.foto_url = ''
+        profile.save(update_fields=['foto_url', 'updated_at'])
+        return Response({'ok': True, 'agent': ComercialAgentProfileSerializer(profile).data}, status=status.HTTP_200_OK)
+
+    file_obj = request.FILES.get('file') or request.FILES.get('foto') or request.FILES.get('avatar')
+    if not file_obj:
+        return Response({'error': 'Archivo requerido en campo file.'}, status=status.HTTP_400_BAD_REQUEST)
+    content_type = str(getattr(file_obj, 'content_type', '') or '').lower()
+    if content_type and not content_type.startswith('image/'):
+        return Response({'error': 'El archivo debe ser una imagen.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    metadata = AlmacenamientoCloudinary.guardar_avatar_metadata(file_obj, user_id=request.user.id)
+    if not metadata or not metadata.get('public_id'):
+        return Response({'error': 'No se pudo subir la foto del agente.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    profile.media_assets.filter(kind='agent_photo', is_active=True).update(is_active=False)
+    asset = AgentMediaAsset.objects.create(
+        owner=request.user,
+        profile=profile,
+        kind='agent_photo',
+        cloud_name=metadata.get('cloud_name') or metadata.get('cloudinary_account') or '',
+        public_id=metadata.get('public_id') or '',
+        resource_type=metadata.get('resource_type') or 'image',
+        secure_url=metadata.get('secure_url') or metadata.get('url') or '',
+        bytes=metadata.get('bytes') or 0,
+        format=metadata.get('format') or '',
+        folder=metadata.get('folder') or '',
+        original_filename=getattr(file_obj, 'name', '') or metadata.get('original_filename') or '',
+        version=metadata.get('version') or '',
+    )
+    profile.foto_url = asset.secure_url or metadata.get('url') or ''
+    profile.save(update_fields=['foto_url', 'updated_at'])
+    return Response({
+        'ok': True,
+        'asset': AgentMediaAssetSerializer(asset).data,
+        'agent': ComercialAgentProfileSerializer(profile).data,
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def content_preferences_detail(request):
+    prefs, _ = UserContentPreference.objects.get_or_create(owner=request.user)
+    if request.method == 'GET':
+        return Response(UserContentPreferenceSerializer(prefs).data, status=status.HTTP_200_OK)
+    serializer = UserContentPreferenceSerializer(prefs, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save(owner=request.user)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def brand_templates_collection(request):
@@ -1728,6 +1910,43 @@ def brand_templates_collection(request):
         created.is_default = True
         created.save(update_fields=['is_default'])
 
+    return Response(BrandTemplateSerializer(created).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def brand_template_clone(request):
+    source_id = request.data.get('source_template_id') or request.data.get('sourceTemplateId')
+    base_template_id = _normalize_template_id(request.data.get('base_template_id') or request.data.get('baseTemplateId')) or 'tech_modern'
+    name = str(request.data.get('name') or 'Template duplicado').strip()[:120]
+    description = request.data.get('description') or ''
+
+    tokens = None
+    if source_id:
+        source_template = BrandTemplate.objects.filter(id=_parse_brand_template_id(source_id), owner=request.user, is_active=True).first()
+        if source_template:
+            published = source_template.revisions.filter(status='published').order_by('-revision').first()
+            tokens = published.tokens_json if published else None
+            base_template_id = source_template.base_template_id
+    if not isinstance(tokens, dict):
+        tokens = default_template_tokens()
+
+    created = BrandTemplate.objects.create(
+        owner=request.user,
+        name=name,
+        description=description,
+        base_template_id=base_template_id,
+        is_default=bool(request.data.get('is_default', False)),
+    )
+    BrandTemplateRevision.objects.create(
+        template=created,
+        tokens_json=tokens,
+        status='published',
+        created_by=request.user,
+        notes='Clonado desde panel',
+    )
+    if created.is_default:
+        BrandTemplate.objects.filter(owner=request.user, is_active=True).exclude(id=created.id).update(is_default=False)
     return Response(BrandTemplateSerializer(created).data, status=status.HTTP_201_CREATED)
 
 
@@ -1906,7 +2125,7 @@ def publicar_redes_sociales(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_carrusel(request):
-    """Genera 5 imagenes de carrusel y un caption con Gemini."""
+    """Genera un carrusel narrativo de 12 slides y un caption con Gemini."""
     try:
         user = request.user
         # TODO: re-habilitar cuando el sistema de planes esté estable
@@ -1928,51 +2147,47 @@ def generar_carrusel(request):
         template_id = selection.get('template_id')
         template_carousel = TEMPLATE_CAROUSEL_MAP.get(template_id, TEMPLATE_CAROUSEL_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
+        content_prefs = _resolve_content_preferences(request.user, selection.get('template_tokens'), data)
 
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='carrusel')
 
         images_pool = _collect_property_images(data)
         if not images_pool:
-            images_to_use = [None] * 5
+            images_to_use = [None] * 12
         else:
-            images_to_use = [images_pool[i % len(images_pool)] for i in range(5)]
+            images_to_use = [images_pool[i % len(images_pool)] for i in range(12)]
 
         recamaras = data.get('recamaras') or 'N/D'
         banos = data.get('banos') or 'N/D'
         superficie = data.get('superficieCubierta') or data.get('superficieTotal') or 'N/D'
+        amenidades = data.get('amenidades') if isinstance(data.get('amenidades'), list) else []
+        amenities_text = ', '.join(amenidades[:5]) if amenidades else 'amenidades seleccionadas para vivir mejor'
+        precio_text = f"{data.get('moneda', 'USD')} {data.get('precio', '')}".strip()
 
         slides_urls = []
         slides_content = [
-            {
-                "headline": data.get('tipoPropiedad', 'Propiedad'),
-                "subheadline": f"Una oportunidad unica en {data.get('ciudad', '')}",
-            },
-            {
-                "headline": "Espacios",
-                "subheadline": f"{recamaras} hab | {banos} banos para vivir con comodidad.",
-            },
-            {
-                "headline": "Detalles",
-                "subheadline": f"{superficie} m2 pensados para tu estilo de vida.",
-            },
-            {
-                "headline": "Inversion",
-                "subheadline": f"{data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.",
-            },
-            {
-                "headline": "Contacto",
-                "subheadline": "Agenda tu visita y asegura esta propiedad hoy.",
-            },
+            {"headline": data.get('tipoPropiedad', 'Propiedad'), "subheadline": f"Una historia inmobiliaria en {data.get('ciudad', '')}."},
+            {"headline": "Ubicacion", "subheadline": f"{data.get('ciudad', '')}: conectividad, entorno y valor de reventa."},
+            {"headline": "Primera impresion", "subheadline": "La portada visual marca el tono: luz, amplitud y presencia."},
+            {"headline": "Distribucion", "subheadline": f"{recamaras} hab | {banos} banos | espacios para vivir con comodidad."},
+            {"headline": "Superficie", "subheadline": f"{superficie} m2 pensados para uso real, renta o crecimiento patrimonial."},
+            {"headline": "Galeria", "subheadline": "Recorre ambientes clave y detalles que diferencian esta propiedad."},
+            {"headline": "Estilo de vida", "subheadline": "Una propuesta para vivir mejor, recibir, trabajar y descansar."},
+            {"headline": "Amenities", "subheadline": amenities_text},
+            {"headline": "Valor", "subheadline": f"{data.get('operacion', 'Venta')} por {precio_text}."},
+            {"headline": "Plan", "subheadline": "Consultanos por disponibilidad, condiciones y opciones de pago."},
+            {"headline": "Decision", "subheadline": "Comparala con el mercado y vas a entender su oportunidad."},
+            {"headline": "Contacto", "subheadline": "Escanea el QR o escribinos para recibir ficha completa y coordinar visita."},
         ]
 
-        for i in range(5):
+        for i in range(len(slides_content)):
             context = {
                 "portada_url": images_to_use[i],
                 "headline": slides_content[i]["headline"],
                 "subheadline": slides_content[i]["subheadline"],
                 "slide_number": i + 1,
-                "total_slides": 5,
+                "total_slides": len(slides_content),
                 "logo_url": branding.get('logo_url', ''),
                 "operacion": data.get('operacion', 'Venta'),
                 "agente_nombre": branding.get('agente_nombre', ''),
@@ -1980,6 +2195,7 @@ def generar_carrusel(request):
                 "agente_email": branding.get('agente_email', ''),
                 "agente_rol": branding.get('agente_rol', 'Asesor Comercial'),
                 "agencia_nombre": branding.get('agencia_nombre', ''),
+                "agente_foto_url": branding.get('agente_foto_url', ''),
                 "qr_url": generar_qr_url(
                     telefono=branding.get('agente_telefono', ''),
                     tipo_propiedad=data.get('tipoPropiedad', ''),
@@ -1993,6 +2209,7 @@ def generar_carrusel(request):
 
             html_content = render_to_string(template_carousel, context)
             html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
+            html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
             image_stream = render_html_to_image(html_content, 1080, 1350)
 
             try:
@@ -2010,10 +2227,11 @@ def generar_carrusel(request):
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
-        prompt_text = f"Escribí un caption para un carrusel de Instagram de una propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Enfocado en vender el estilo de vida y llamar a la acción. Usá emojis y hashtags."
+        prompt_text = f"Escribí un caption para un carrusel de 12 slides de una propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Enfocado en vender estilo de vida, galería, amenities, precio, plan de pago y llamada a la acción. {_caption_preference_prompt(content_prefs)}"
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario digital.", agente=user)
         caption = _sanitize_caption_text(caption)
         caption = _ensure_caption_length(caption, data, formato='carrusel')
+        caption = _apply_caption_preferences(caption, content_prefs, max_chars=2200)
 
         if listado_obj:
             actualizar_resultados_listado(
@@ -2729,6 +2947,7 @@ def generar_imagen_post(request):
             "agente_telefono": branding.get('agente_telefono', ''),
             "agente_rol": branding.get('agente_rol', 'Asesor Comercial'),
             "agencia_nombre": branding.get('agencia_nombre', ''),
+            "agente_foto_url": branding.get('agente_foto_url', ''),
             "leadbook_logo_url": _get_leadbook_logo_data_url(),
             "qr_url": generar_qr_url(
                 telefono=branding.get('agente_telefono', ''),
@@ -2760,19 +2979,22 @@ def generar_imagen_post(request):
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
         template_post = TEMPLATE_POST_MAP.get(template_id, TEMPLATE_POST_MAP['dubai_night'])
+        content_prefs = _resolve_content_preferences(request.user, selection.get('template_tokens'), data)
 
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='post')
 
         html_content = render_to_string(template_post, context)
         html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
+        html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
-        prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres, usá hashtags y emojis."
+        prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
         caption = _sanitize_caption_text(caption)
         caption = _ensure_caption_length(caption, data, formato='post')
+        caption = _apply_caption_preferences(caption, content_prefs, max_chars=2200)
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
@@ -2862,6 +3084,7 @@ def generar_imagen_story(request):
         template_id = selection.get('template_id')
         template_story = TEMPLATE_STORY_MAP.get(template_id, TEMPLATE_STORY_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
+        content_prefs = _resolve_content_preferences(request.user, selection.get('template_tokens'), data)
 
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='story')
@@ -2884,6 +3107,7 @@ def generar_imagen_story(request):
             "agente_rol": branding.get('agente_rol', 'Asesor Comercial'),
             "agente_email": branding.get('agente_email', ''),
             "agencia_nombre": branding.get('agencia_nombre', ''),
+            "agente_foto_url": branding.get('agente_foto_url', ''),
             "qr_url": generar_qr_url(
                 telefono=branding.get('agente_telefono', ''),
                 tipo_propiedad=data.get('tipoPropiedad', ''),
@@ -2903,12 +3127,14 @@ def generar_imagen_story(request):
         # Renderizar HTML y luego convertir a imagen PNG con Playwright (Formato vertical 9:16)
         html_content = render_to_string(template_story, context)
         html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
+        html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
         image_stream = render_html_to_image(html_content, 1080, 1920)
 
-        prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido."
+        prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido. {_caption_preference_prompt(content_prefs)}"
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
         caption = _sanitize_caption_text(caption, max_chars=500)
         caption = _ensure_caption_length(caption, data, formato='story')
+        caption = _apply_caption_preferences(caption, content_prefs, max_chars=500)
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
@@ -2985,12 +3211,14 @@ def generar_email(request):
         template_id = selection.get('template_id')
         template_email = TEMPLATE_EMAIL_MAP.get(template_id, TEMPLATE_EMAIL_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
+        content_prefs = _resolve_content_preferences(request.user, selection.get('template_tokens'), data)
 
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='email')
 
         images_pool = _collect_property_images(data)
         email_cover = images_pool[0] if images_pool else _resolve_cloudinary_asset_url(data.get('portadaUrl'))
+        email_gallery = images_pool[1:7]
         template_meta = TEMPLATE_CATALOG.get(template_id, {})
         
         prompt_text = f"""
@@ -2999,8 +3227,15 @@ Tipo: {data.get('tipoPropiedad', 'Propiedad')}
 Ciudad: {data.get('ciudad', '')}
 Precio: {data.get('precio', '')}
 Operación: {data.get('operacion', 'venta')}
+Recámaras: {data.get('recamaras', '')}
+Baños: {data.get('banos', '')}
+Superficie: {data.get('superficieCubierta') or data.get('superficieTotal') or ''}
+Amenidades: {', '.join(data.get('amenidades', [])) if isinstance(data.get('amenidades'), list) else ''}
 Agente: {branding.get('agente_nombre', '')}
 Agencia: {branding.get('agencia_nombre', '')}
+Preferencias de copy: {_caption_preference_prompt(content_prefs)}
+
+Debe incluir: introducción, galería/recorrido, amenities, precio, posibles planes de pago/condiciones a consultar, datos de contacto y CTA.
 
 Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, sin ````json) con la siguiente estructura y nada más:
 {{
@@ -3044,7 +3279,9 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             "agenteTelefono": branding.get('agente_telefono', ''),
             "agenteRol": branding.get('agente_rol', 'Asesor Comercial'),
             "agenciaNombre": branding.get('agencia_nombre', ''),
+            "agenteFotoUrl": branding.get('agente_foto_url', ''),
             "portada_url": email_cover,
+            "galeria_urls": email_gallery,
             "logo_url": branding.get('logo_url', ''),
             "qr_url": generar_qr_url(
                 telefono=branding.get('agente_telefono', ''),
@@ -3062,7 +3299,41 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             "color_accent": (template_meta.get('colors') or {}).get('accent', '#c9a84c'),
         }
         premium_html = render_to_string(template_email, context)
+        if email_gallery:
+            gallery_cells = ''.join(
+                f'<td width="50%" style="padding:6px;"><img src="{url}" alt="Galeria" width="260" style="display:block;width:100%;height:150px;object-fit:cover;border:1px solid #2a2a2a;"></td>'
+                for url in email_gallery[:6]
+            )
+            rows = []
+            for idx in range(0, len(email_gallery[:6]), 2):
+                pair = email_gallery[idx:idx + 2]
+                cells = ''.join(
+                    f'<td width="50%" style="padding:6px;"><img src="{url}" alt="Galeria" width="260" style="display:block;width:100%;height:150px;object-fit:cover;border:1px solid #2a2a2a;"></td>'
+                    for url in pair
+                )
+                if len(pair) == 1:
+                    cells += '<td width="50%" style="padding:6px;"></td>'
+                rows.append(f'<tr>{cells}</tr>')
+            gallery_block = (
+                '<tr><td style="padding:10px 34px 0 34px;">'
+                '<div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#8fb1d1;margin-bottom:8px;font-weight:700;">Galeria</div>'
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+                + ''.join(rows) +
+                '</table></td></tr>'
+            )
+            premium_html = premium_html.replace('<tr>\n            <td style="padding:30px 34px 22px 34px;">', f'{gallery_block}\n<tr>\n            <td style="padding:30px 34px 22px 34px;">', 1)
         premium_html = _apply_template_tokens_to_html(premium_html, template_id, selection.get('template_tokens'))
+        if branding.get('agente_foto_url'):
+            agent_img = (
+                f'<img src="{branding.get("agente_foto_url")}" alt="Foto agente" '
+                'width="58" height="58" style="display:block;width:58px;height:58px;border-radius:50%;object-fit:cover;margin-bottom:10px;border:2px solid #00e5ff;">'
+            )
+            premium_html = re.sub(
+                r'(<div style="padding-top:20px;border-top:[^"]*;color:[^"]*;font-size:13px;line-height:1\.6;">)',
+                r'\1' + agent_img,
+                premium_html,
+                count=1,
+            )
         parsed["html"] = premium_html
         parsed["template_id"] = template_id
         parsed["brand_template_id"] = (selection.get('brand_template').id if selection.get('brand_template') else None)
