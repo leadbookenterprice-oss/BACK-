@@ -272,6 +272,56 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
 
     return text
 
+
+def _fallback_caption_text(data, formato='post'):
+    tipo = str(data.get('tipoPropiedad') or 'Propiedad').strip()
+    ciudad = str(data.get('ciudad') or '').strip()
+    operacion = str(data.get('operacion') or 'venta').strip().lower()
+    moneda = str(data.get('moneda') or 'USD').strip()
+    precio = str(data.get('precio') or '').strip()
+
+    if formato == 'story':
+        return f"{tipo} en {ciudad}. {operacion.title()} {moneda} {precio}. Escribinos para visitar hoy."
+    if formato == 'carrusel':
+        return (
+            f"{tipo} en {ciudad}: una oportunidad real para {operacion}. "
+            f"Precio {moneda} {precio}. Contactanos para coordinar visita. "
+            "#RealEstate #Inmobiliaria"
+        )
+    return (
+        f"{tipo} en {ciudad} en {operacion}. "
+        f"Valor {moneda} {precio}. Contactanos para mas informacion y visita. "
+        "#RealEstate #Inmobiliaria"
+    )
+
+
+def _fallback_descripcion_pdf(data):
+    tipo = str(data.get('tipoPropiedad') or data.get('tipo_propiedad') or 'Propiedad').strip()
+    ciudad = str(data.get('ciudad') or '').strip()
+    operacion = str(data.get('operacion') or 'Venta').strip()
+    moneda = str(data.get('moneda') or 'USD').strip()
+    precio = str(data.get('precio') or '').strip()
+    recamaras = str(data.get('recamaras') or '').strip()
+    banos = str(data.get('banos') or '').strip()
+    superficie = str(data.get('superficieCubierta') or data.get('superficieConstruida') or data.get('superficieTotal') or '').strip()
+
+    linea_specs = []
+    if recamaras:
+        linea_specs.append(f"{recamaras} recamaras")
+    if banos:
+        linea_specs.append(f"{banos} banos")
+    if superficie:
+        linea_specs.append(f"{superficie} m2")
+    specs = ', '.join(linea_specs) if linea_specs else 'excelente distribucion'
+
+    return (
+        f"{tipo} en {operacion} ubicado en {ciudad}, con propuesta ideal para vivienda o inversion. "
+        f"Precio de publicacion: {moneda} {precio}. "
+        f"La propiedad ofrece {specs}, ambientes funcionales y buena iluminacion natural.\n\n"
+        f"Una opcion destacada para quienes buscan una decision segura en {ciudad}. "
+        "Coordina una visita para conocer cada detalle de forma presencial."
+    )
+
 LIMITES_PLAN = {
     'free':     {'listados_mes': 10},
     'starter':  {'listados_mes': 40},
@@ -1151,6 +1201,8 @@ def generar_carrusel(request):
         prompt_text = f"Escribí un caption para un carrusel de Instagram de una propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Enfocado en vender el estilo de vida y llamar a la acción. Usá emojis y hashtags."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario digital.", agente=user)
         caption = _sanitize_caption_text(caption)
+        if not caption:
+            caption = _fallback_caption_text(data, formato='carrusel')
 
         if listado_obj:
             actualizar_resultados_listado(
@@ -1617,12 +1669,14 @@ Amenidades: {amenidades_str}.
 Párrafo 1: Descripción general de la propiedad y ubicación (3-4 oraciones).
 Párrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
 Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
-        descripcion = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribís en español, con tono sofisticado y persuasivo.", agente=user)
-        if descripcion:
+        descripcion_ia = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribís en español, con tono sofisticado y persuasivo.", agente=user)
+        if descripcion_ia:
+            descripcion = descripcion_ia
             from .plan_utils import registrar_uso
             registrar_uso(user, 'ai')
-        if not descripcion:
-            raise GeminiQuotaExhaustedError("Límite diario de IA alcanzado. Intentá de nuevo mañana.")
+        else:
+            logger.warning("[PDF] Gemini sin key/respuesta para descripcion. Usando fallback estatico.")
+            descripcion = _fallback_descripcion_pdf(data)
 
 
     # QR Code del agente
@@ -1775,14 +1829,20 @@ def generar_pdf(request):
         }, status=status.HTTP_200_OK)
 
     except GeminiQuotaExhaustedError as e:
-        from .models import UserAPIQuota
-        quota, _ = UserAPIQuota.objects.get_or_create(
-            user=request.user, servicio=Servicio.objects.get(nombre='gemini'),
-            defaults={'daily_limit': 1500, 'monthly_limit': 1500}
-        )
-        quota.is_blocked = True
-        quota.requests_today = quota.daily_limit
-        quota.save()
+        try:
+            from .models import UserAPIQuota, Servicio
+            servicio_obj = Servicio.objects.filter(nombre='gemini').first()
+            if servicio_obj:
+                quota, _ = UserAPIQuota.objects.get_or_create(
+                    user=request.user,
+                    servicio=servicio_obj,
+                    defaults={'daily_limit': 1500, 'monthly_limit': 1500}
+                )
+                quota.is_blocked = True
+                quota.requests_today = quota.daily_limit
+                quota.save()
+        except Exception as quota_err:
+            logger.warning(f"[PDF] No se pudo actualizar UserAPIQuota: {quota_err}")
         crear_notificacion(
             request.user,
             'quota_agotada',
@@ -1880,6 +1940,8 @@ def generar_imagen_post(request):
         prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres, usá hashtags y emojis."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
         caption = _sanitize_caption_text(caption)
+        if not caption:
+            caption = _fallback_caption_text(data, formato='post')
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
@@ -1921,14 +1983,20 @@ def generar_imagen_post(request):
             "template_id": template_id,
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
-        from .models import UserAPIQuota
-        quota, _ = UserAPIQuota.objects.get_or_create(
-            user=request.user, servicio=Servicio.objects.get(nombre='gemini'),
-            defaults={'daily_limit': 1500, 'monthly_limit': 1500}
-        )
-        quota.is_blocked = True
-        quota.requests_today = quota.daily_limit
-        quota.save()
+        try:
+            from .models import UserAPIQuota, Servicio
+            servicio_obj = Servicio.objects.filter(nombre='gemini').first()
+            if servicio_obj:
+                quota, _ = UserAPIQuota.objects.get_or_create(
+                    user=request.user,
+                    servicio=servicio_obj,
+                    defaults={'daily_limit': 1500, 'monthly_limit': 1500}
+                )
+                quota.is_blocked = True
+                quota.requests_today = quota.daily_limit
+                quota.save()
+        except Exception as quota_err:
+            logger.warning(f"[POST] No se pudo actualizar UserAPIQuota: {quota_err}")
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         import traceback
@@ -1986,6 +2054,8 @@ def generar_imagen_story(request):
         prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
         caption = _sanitize_caption_text(caption, max_chars=500)
+        if not caption:
+            caption = _fallback_caption_text(data, formato='story')[:500]
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
