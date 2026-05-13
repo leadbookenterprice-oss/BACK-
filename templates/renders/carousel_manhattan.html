@@ -16,8 +16,14 @@
   .middle { display: flex; flex-direction: column; gap: 22px; margin-bottom: 26px; }
   .headline { font-family: 'Oswald', sans-serif; font-size: 152px; font-weight: 700; line-height: 0.86; letter-spacing: 2px; text-transform: uppercase; color: var(--fg); }
   .subheadline { font-size: 45px; line-height: 1.25; color: rgba(255,255,255,0.92); max-width: 900px; }
-  .footer { display: flex; justify-content: flex-end; }
-  .footer-text { font-family: 'Oswald', sans-serif; font-size: 21px; color: rgba(255,255,255,0.58); letter-spacing: 3px; text-transform: uppercase; }
+  .footer { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; border: 1px solid rgba(230,57,70,0.36); border-radius: 12px; padding: 12px 14px; background: rgba(0,0,0,0.62); }
+  .agent-box { display: flex; flex-direction: column; gap: 2px; max-width: 68%; }
+  .agent-name { font-family: 'Oswald', sans-serif; font-size: 33px; color: var(--accent); line-height: 1; letter-spacing: 1px; text-transform: uppercase; }
+  .agent-meta { font-size: 18px; color: #fff; }
+  .footer-text { font-family: 'Oswald', sans-serif; font-size: 14px; color: rgba(255,255,255,0.62); letter-spacing: 2px; text-transform: uppercase; }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .qr-box img { width: 88px; height: 88px; padding: 5px; background: white; border-radius: 7px; }
+  .qr-box span { font-family: 'Oswald', sans-serif; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.64); }
 </style>
 </head>
 <body>
@@ -33,10 +39,20 @@
       <div class="subheadline">{{ subheadline }}</div>
     </div>
     <div class="footer">
-      {% if slide_number < total_slides %}
-        <div class="footer-text">Siguiente slide</div>
-      {% else %}
-        <div class="footer-text" style="color: var(--accent)">Escribinos ahora</div>
+      <div class="agent-box">
+        <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+        <div class="agent-meta">{{ agente_telefono }}</div>
+        {% if slide_number < total_slides %}
+          <div class="footer-text">Siguiente slide</div>
+        {% else %}
+          <div class="footer-text" style="color: var(--accent)">Escribinos ahora</div>
+        {% endif %}
+      </div>
+      {% if qr_url %}
+      <div class="qr-box">
+        <img src="{{ qr_url }}" alt="QR" />
+        <span>Escaneá</span>
+      </div>
       {% endif %}
     </div>
   </div>

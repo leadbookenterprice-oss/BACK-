@@ -8,23 +8,29 @@ from django.utils import timezone
 from django.db.models import Sum
 import requests
 from django.http import HttpResponse, StreamingHttpResponse
+from django.shortcuts import get_object_or_404
 from decouple import config
 import cloudinary
 import cloudinary.uploader
 import random
 import re
+import json
+import io
+import zipfile
 from api.services.almacenamiento import AlmacenamientoCloudinary
 import logging
 
 logger = logging.getLogger(__name__)
 
 from .models import (
-    GeneratedAsset, Listado, OTPCode,
+    GeneratedAsset, Listado, OTPCode, ComercialAgentProfile,
+    AgentAssociation,
     TerminosCondiciones, PoliticaPrivacidad
 )
 from .serializers import (
     RegisterSerializer, GeneratedAssetSerializer,
-    TerminosCondicionesSerializer, PoliticaPrivacidadSerializer
+    TerminosCondicionesSerializer, PoliticaPrivacidadSerializer,
+    ComercialAgentProfileSerializer,
 )
 from .tasks import run_asset_generation
 from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError
@@ -318,6 +324,146 @@ def _collect_property_images(data):
     return urls
 
 
+def _normalize_phone_e164(value, default_country_code='54'):
+    if value in (None, ''):
+        return ''
+
+    digits = ''.join(ch for ch in str(value) if ch.isdigit())
+    if not digits:
+        return ''
+
+    if str(value).strip().startswith('+'):
+        normalized = f'+{digits}'
+    else:
+        normalized = f'+{default_country_code}{digits}' if not digits.startswith(default_country_code) else f'+{digits}'
+
+    if re.match(r'^\+[1-9]\d{6,14}$', normalized):
+        return normalized
+    return ''
+
+
+def _get_default_commercial_agent(user):
+    if not user or not getattr(user, 'id', None):
+        return None
+
+    default_profile = ComercialAgentProfile.objects.filter(
+        owner=user,
+        activo=True,
+        is_default=True,
+    ).first()
+    if default_profile:
+        return default_profile
+
+    return ComercialAgentProfile.objects.filter(owner=user, activo=True).order_by('-updated_at').first()
+
+
+def _serialize_commercial_agent(profile):
+    if not profile:
+        return None
+    return ComercialAgentProfileSerializer(profile).data
+
+
+def _resolve_branding_payload(data, user):
+    payload = data if isinstance(data, dict) else {}
+    default_profile = _get_default_commercial_agent(user)
+
+    payload_logo = payload.get('logoAgenciaUrl') or payload.get('logo_url')
+    profile_photo = (default_profile.foto_url if default_profile else '') or ''
+
+    agent_name = (
+        payload.get('agenteNombre')
+        or payload.get('agente_nombre')
+        or (default_profile.nombre if default_profile else '')
+        or getattr(user, 'nombre', '')
+        or ''
+    )
+
+    agent_role = (
+        payload.get('agenteRol')
+        or payload.get('agente_rol')
+        or (default_profile.rol if default_profile else '')
+        or 'Asesor Comercial'
+    )
+
+    agent_email = (
+        payload.get('agenteEmail')
+        or payload.get('agente_email')
+        or (default_profile.email if default_profile else '')
+        or getattr(user, 'email', '')
+        or ''
+    )
+
+    default_phone = (default_profile.telefono_e164 if default_profile else '') or getattr(user, 'telefono', '')
+    raw_phone = payload.get('agenteTelefono') or payload.get('agente_telefono') or default_phone or ''
+    agent_phone = _normalize_phone_e164(raw_phone)
+
+    agency_name = (
+        payload.get('agenciaNombre')
+        or payload.get('agencia_nombre')
+        or getattr(user, 'nombre_inmobiliaria', '')
+        or getattr(user, 'agencia', '')
+        or 'Agencia'
+    )
+
+    logo_url = payload_logo or getattr(user, 'logo_url', '') or ''
+
+    return {
+        'agente_nombre': str(agent_name).strip(),
+        'agente_rol': str(agent_role).strip(),
+        'agente_email': str(agent_email).strip(),
+        'agente_telefono': str(agent_phone).strip(),
+        'agencia_nombre': str(agency_name).strip(),
+        'logo_url': str(logo_url).strip(),
+        'agente_foto_url': str(profile_photo).strip(),
+        'default_agent_profile': default_profile,
+    }
+
+
+def _extract_urls_for_export(value):
+    urls = []
+
+    def _walk(item):
+        if isinstance(item, str):
+            cleaned = item.strip()
+            if cleaned.startswith('http'):
+                urls.append(cleaned)
+            return
+
+        if isinstance(item, dict):
+            if isinstance(item.get('url'), str) and item.get('url', '').startswith('http'):
+                urls.append(item.get('url').strip())
+            if isinstance(item.get('slides'), list):
+                for slide in item['slides']:
+                    _walk(slide)
+            return
+
+        if isinstance(item, list):
+            for child in item:
+                _walk(child)
+
+    _walk(value)
+
+    unique = []
+    seen = set()
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
+
+
+def _download_remote_asset(url, timeout=25):
+    try:
+        response = requests.get(url, timeout=timeout)
+        if response.status_code != 200:
+            return None, None
+
+        content_type = response.headers.get('content-type', '').lower()
+        return response.content, content_type
+    except Exception:
+        return None, None
+
+
 def _sanitize_caption_text(raw_text, max_chars=2200):
     if not raw_text:
         return ''
@@ -469,7 +615,7 @@ def _get_leadbook_logo_data_url():
 
 def _ensure_caption_length(text, data, formato='post'):
     caption = str(text or '').strip()
-    min_chars_map = {'post': 380, 'story': 190, 'carrusel': 320}
+    min_chars_map = {'post': 650, 'story': 280, 'carrusel': 620}
     max_chars_map = {'post': 2200, 'story': 500, 'carrusel': 2200}
 
     min_chars = min_chars_map.get(formato, 120)
@@ -481,17 +627,44 @@ def _ensure_caption_length(text, data, formato='post'):
     if len(caption) < min_chars:
         tipo = str(data.get('tipoPropiedad') or 'propiedad').strip()
         ciudad = str(data.get('ciudad') or '').strip()
+        operacion = str(data.get('operacion') or 'venta').strip().title()
         moneda = str(data.get('moneda') or 'USD').strip()
         precio = str(data.get('precio') or '').strip()
-        extension_blocks = [
-            (
-                f"Si buscas una opcion premium en {ciudad}, esta {tipo.lower()} combina ubicacion, valor y potencial. "
-                f"Valor de referencia: {moneda} {precio}."
-            ),
-            "Te compartimos fotos, distribucion, detalles clave y comparativa de zona para ayudarte a decidir con claridad.",
-            "Escribinos hoy para recibir la ficha completa y coordinar una visita personalizada.",
-            "#RealEstate #Inmobiliaria #Propiedades #Inversion",
-        ]
+
+        if formato == 'story':
+            extension_blocks = [
+                f"{operacion} · {tipo} en {ciudad}",
+                f"Precio de referencia: {moneda} {precio}.",
+                "Ideal para quienes priorizan ubicación, distribución funcional y potencial de valorización.",
+                "Escribinos por WhatsApp y te enviamos ficha completa, recorrido y disponibilidad actualizada.",
+                "#Propiedades #Inmobiliaria #Oportunidad",
+            ]
+        elif formato == 'carrusel':
+            extension_blocks = [
+                "\nDESTACADOS",
+                f"• {operacion} de {tipo} en {ciudad}.",
+                f"• Precio publicado: {moneda} {precio}.",
+                "• Propuesta ideal para vivir bien o invertir con estrategia.",
+                "\nPOR QUE VALE LA PENA",
+                "• Ubicación competitiva frente a opciones similares de la zona.",
+                "• Distribución pensada para comodidad, funcionalidad y estilo.",
+                "• Potencial de renta y valorización a mediano plazo.",
+                "\nCTA",
+                "Escribinos para recibir la ficha completa, comparativa de mercado y coordinar visita.",
+                "#RealEstate #InversionInmobiliaria #Propiedades #TuNuevoHogar",
+            ]
+        else:
+            extension_blocks = [
+                "\nDETALLES CLAVE",
+                f"• {operacion} de {tipo} en {ciudad}.",
+                f"• Valor de referencia: {moneda} {precio}.",
+                "• Balance entre calidad constructiva, ubicación y proyección de valor.",
+                "\nENFOQUE COMERCIAL",
+                "Esta propiedad se posiciona como una alternativa sólida para quien busca decidir con información clara y respaldo profesional.",
+                "\nSIGUIENTE PASO",
+                "Escribinos para enviarte la ficha técnica completa, videos, disponibilidad y agendar visita personalizada.",
+                "#RealEstate #Propiedades #Inmobiliaria #Inversion",
+            ]
 
         for block in extension_blocks:
             if len(caption) >= min_chars:
@@ -1099,6 +1272,8 @@ class PerfilView(APIView):
 
     def get(self, request):
         user = request.user
+        default_agent = _get_default_commercial_agent(user)
+        asociados = AgentAssociation.objects.filter(agente=user).select_related('asociado')
         return Response({
             "email": user.email,
             "nombre": user.nombre,
@@ -1113,7 +1288,15 @@ class PerfilView(APIView):
             "bio": getattr(user, 'bio', None),
             "meta_access_token": getattr(user, 'meta_access_token', None),
             "meta_instagram_account_id": getattr(user, 'meta_instagram_account_id', None),
-            "agentes_asociados": getattr(user, 'agentes_asociados', []),
+            "agentes_asociados": [
+                {
+                    "id": rel.asociado.id,
+                    "nombre": rel.asociado.nombre,
+                    "email": rel.asociado.email,
+                }
+                for rel in asociados
+            ],
+            "default_agent": _serialize_commercial_agent(default_agent),
             "plan_nombre": getattr(user, 'plan_nombre', 'starter'),
             "is_staff": user.is_staff,
             "plan_seleccionado": user.plan_seleccionado,
@@ -1135,26 +1318,12 @@ class PerfilView(APIView):
         elif 'logoUrl' in data:
             user.logo_url = data['logoUrl']
             
-        agentes_input = data.get('agentes_asociados')
-        if agentes_input is None:
-            agentes_input = data.get('agentesAsociados')
-            
-        if agentes_input is not None:
-            # Si el frontend envía un string en vez de un array JSON, lo parseamos
-            import json
-            if isinstance(agentes_input, str):
-                try:
-                    agentes_input = json.loads(agentes_input)
-                except json.JSONDecodeError:
-                    pass
-            user.agentes_asociados = agentes_input
-            
         if 'meta_access_token' in data:
             user.meta_access_token = data['meta_access_token']
         if 'meta_instagram_account_id' in data:
             user.meta_instagram_account_id = data['meta_instagram_account_id']
         if 'telefono' in data:
-            user.telefono = data['telefono']
+            user.telefono = _normalize_phone_e164(data['telefono']) or data['telefono']
         if 'agencia' in data:
             user.agencia = data['agencia']
         if 'nicho' in data:
@@ -1169,6 +1338,9 @@ class PerfilView(APIView):
             user.bio = data['bio']
             
         user.save()
+
+        default_agent = _get_default_commercial_agent(user)
+        asociados = AgentAssociation.objects.filter(agente=user).select_related('asociado')
         return Response({
             "message": "Perfil actualizado exitosamente",
             "email": user.email,
@@ -1184,9 +1356,80 @@ class PerfilView(APIView):
             "bio": getattr(user, 'bio', None),
             "meta_access_token": getattr(user, 'meta_access_token', None),
             "meta_instagram_account_id": getattr(user, 'meta_instagram_account_id', None),
-            "agentes_asociados": getattr(user, 'agentes_asociados', []),
+            "agentes_asociados": [
+                {
+                    "id": rel.asociado.id,
+                    "nombre": rel.asociado.nombre,
+                    "email": rel.asociado.email,
+                }
+                for rel in asociados
+            ],
+            "default_agent": _serialize_commercial_agent(default_agent),
             "plan_nombre": getattr(user, 'plan_nombre', 'starter')
         }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def commercial_agents_collection(request):
+    if request.method == 'GET':
+        profiles = ComercialAgentProfile.objects.filter(owner=request.user, activo=True).order_by('-is_default', '-updated_at')
+        serializer = ComercialAgentProfileSerializer(profiles, many=True)
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+    serializer = ComercialAgentProfileSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    created = serializer.save(owner=request.user)
+
+    if created.is_default:
+        ComercialAgentProfile.objects.filter(owner=request.user, activo=True).exclude(id=created.id).update(is_default=False)
+    elif not ComercialAgentProfile.objects.filter(owner=request.user, activo=True, is_default=True).exclude(id=created.id).exists():
+        created.is_default = True
+        created.save(update_fields=['is_default'])
+
+    return Response(ComercialAgentProfileSerializer(created).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def commercial_agent_detail(request, agent_id):
+    profile = get_object_or_404(ComercialAgentProfile, id=agent_id, owner=request.user)
+
+    if request.method == 'GET':
+        return Response(ComercialAgentProfileSerializer(profile).data, status=status.HTTP_200_OK)
+
+    if request.method == 'DELETE':
+        was_default = profile.is_default
+        profile.activo = False
+        profile.is_default = False
+        profile.save(update_fields=['activo', 'is_default'])
+
+        if was_default:
+            fallback = ComercialAgentProfile.objects.filter(owner=request.user, activo=True).order_by('-updated_at').first()
+            if fallback:
+                fallback.is_default = True
+                fallback.save(update_fields=['is_default'])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = ComercialAgentProfileSerializer(profile, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    updated = serializer.save()
+
+    if updated.is_default:
+        ComercialAgentProfile.objects.filter(owner=request.user, activo=True).exclude(id=updated.id).update(is_default=False)
+
+    return Response(ComercialAgentProfileSerializer(updated).data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def commercial_agent_set_default(request, agent_id):
+    profile = get_object_or_404(ComercialAgentProfile, id=agent_id, owner=request.user, activo=True)
+    ComercialAgentProfile.objects.filter(owner=request.user, activo=True, is_default=True).exclude(id=profile.id).update(is_default=False)
+    profile.is_default = True
+    profile.save(update_fields=['is_default'])
+    return Response({'ok': True, 'default_agent': ComercialAgentProfileSerializer(profile).data}, status=status.HTTP_200_OK)
 
 from .services.instagram_service import publicar_post, publicar_story, publicar_carrusel, publicar_media_upload_api
 from django.conf import settings
@@ -1312,6 +1555,7 @@ def generar_carrusel(request):
 
         template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_carousel = TEMPLATE_CAROUSEL_MAP.get(template_id, TEMPLATE_CAROUSEL_MAP['dubai_night'])
+        branding = _resolve_branding_payload(data, request.user)
 
         if listado_obj:
             _persist_template_id(listado_obj, template_id, source='carrusel')
@@ -1357,8 +1601,21 @@ def generar_carrusel(request):
                 "subheadline": slides_content[i]["subheadline"],
                 "slide_number": i + 1,
                 "total_slides": 5,
-                "logo_url": data.get('logoAgenciaUrl'),
+                "logo_url": branding.get('logo_url', ''),
                 "operacion": data.get('operacion', 'Venta'),
+                "agente_nombre": branding.get('agente_nombre', ''),
+                "agente_telefono": branding.get('agente_telefono', ''),
+                "agente_email": branding.get('agente_email', ''),
+                "agente_rol": branding.get('agente_rol', 'Asesor Comercial'),
+                "agencia_nombre": branding.get('agencia_nombre', ''),
+                "qr_url": generar_qr_url(
+                    telefono=branding.get('agente_telefono', ''),
+                    tipo_propiedad=data.get('tipoPropiedad', ''),
+                    ciudad=data.get('ciudad', ''),
+                    operacion=data.get('operacion', ''),
+                    precio=data.get('precio', ''),
+                    moneda=data.get('moneda', ''),
+                ),
                 "template_id": template_id,
             }
 
@@ -1458,7 +1715,7 @@ class OnboardingView(APIView):
             user.pais = data['pais']
             
         if 'telefono' in data:
-            user.telefono = data['telefono']
+            user.telefono = _normalize_phone_e164(data['telefono']) or data['telefono']
         if 'agencia' in data:
             user.agencia = data['agencia']
         if 'nacionalidad' in data:
@@ -1471,6 +1728,7 @@ class OnboardingView(APIView):
             user.bio = data['bio']
             
         user.save()
+        default_agent = _get_default_commercial_agent(user)
         return Response({
             "email": user.email,
             "nombre": user.nombre,
@@ -1482,7 +1740,7 @@ class OnboardingView(APIView):
             "nacionalidad": getattr(user, 'nacionalidad', None),
             "sitio_web": getattr(user, 'sitio_web', None),
             "bio": getattr(user, 'bio', None),
-            "agentes_asociados": getattr(user, 'agentes_asociados', []),
+            "default_agent": _serialize_commercial_agent(default_agent),
             "plan_nombre": getattr(user, 'plan_nombre', 'starter')
         }, status=status.HTTP_200_OK)
 
@@ -1790,14 +2048,16 @@ def construir_contexto_pdf(data, user, request=None):
     if not isinstance(amenidades, list):
         amenidades = []
 
-    # Datos de agente / agencia
-    agente_nombre = data.get('agenteNombre', '') or user.nombre or ''
-    agente_email = data.get('agenteEmail', '') or user.email or ''
-    agencia_nombre = data.get('agenciaNombre', '') or user.nombre_inmobiliaria or 'LeadBook'
-    agente_telefono = data.get('agenteTelefono', '') or user.telefono or ''
+    branding = _resolve_branding_payload(data, user)
+    agente_nombre = branding.get('agente_nombre', '')
+    agente_email = branding.get('agente_email', '')
+    agencia_nombre = branding.get('agencia_nombre', '')
+    agente_telefono = branding.get('agente_telefono', '')
+    agente_rol = branding.get('agente_rol', 'Asesor Comercial')
+    agente_foto_url = branding.get('agente_foto_url', '')
 
     # ─── Procesar imágenes (base64 Y URLs) ───────────────────────────────
-    logo_val_raw = data.get('logoAgenciaUrl', data.get('logo_url', ''))
+    logo_val_raw = branding.get('logo_url', '')
     logo_url = resolver_imagen(logo_val_raw)
 
     portada_val_raw = data.get('portadaUrl', '')
@@ -1893,6 +2153,8 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         'agente_nombre':      agente_nombre,
         'agente_telefono':    agente_telefono,
         'agente_email':       agente_email,
+        'agente_rol':         agente_rol,
+        'agente_foto_url':    agente_foto_url,
         'agencia_nombre':     agencia_nombre,
         'qr_code':            qr_base64_,
     }
@@ -2062,6 +2324,8 @@ def generar_imagen_post(request):
         print(f"[POST DEBUG] agenciaNombre: {data.get('agenciaNombre')}")
         print(f"[POST DEBUG] keys recibidas: {list(data.keys())}")
 
+        branding = _resolve_branding_payload(data, request.user)
+
         # Preparar contexto para la plantilla premium
         context = {
             "portada_url": data.get('portadaUrl'),
@@ -2071,19 +2335,20 @@ def generar_imagen_post(request):
             "precio": data.get('precio', ''),
             "moneda": data.get('moneda', 'USD'),
             "titulo": f"{data.get('tipoPropiedad', '')} en {data.get('ciudad', '')}",
-            "agente_email": data.get('agenteEmail', '') or data.get('agente_email', ''),
-            "logo_url": data.get('logoAgenciaUrl'),
+            "agente_email": branding.get('agente_email', ''),
+            "logo_url": branding.get('logo_url', ''),
             "caracteristicas": [
                 {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
                 {"label": "Hab", "valor": data.get('recamaras')},
                 {"label": "Baños", "valor": data.get('banos')},
             ],
-            "agente_nombre": data.get('agenteNombre', ''),
-            "agente_telefono": data.get('agenteTelefono', ''),
-            "agencia_nombre": data.get('agenciaNombre', '') or data.get('agencia_nombre', ''),
+            "agente_nombre": branding.get('agente_nombre', ''),
+            "agente_telefono": branding.get('agente_telefono', ''),
+            "agente_rol": branding.get('agente_rol', 'Asesor Comercial'),
+            "agencia_nombre": branding.get('agencia_nombre', ''),
             "leadbook_logo_url": _get_leadbook_logo_data_url(),
             "qr_url": generar_qr_url(
-                telefono=data.get('agenteTelefono', ''),
+                telefono=branding.get('agente_telefono', ''),
                 tipo_propiedad=data.get('tipoPropiedad', ''),
                 ciudad=data.get('ciudad', ''),
                 operacion=data.get('operacion', ''),
@@ -2206,6 +2471,7 @@ def generar_imagen_story(request):
 
         template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_story = TEMPLATE_STORY_MAP.get(template_id, TEMPLATE_STORY_MAP['dubai_night'])
+        branding = _resolve_branding_payload(data, request.user)
 
         if listado_obj:
             _persist_template_id(listado_obj, template_id, source='story')
@@ -2221,8 +2487,21 @@ def generar_imagen_story(request):
             "ciudad": data.get('ciudad', ''),
             "precio": data.get('precio', ''),
             "moneda": data.get('moneda', 'USD'),
-            "logo_url": data.get('logoAgenciaUrl'),
+            "logo_url": branding.get('logo_url', ''),
             "titulo": f"{data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}",
+            "agente_nombre": branding.get('agente_nombre', ''),
+            "agente_telefono": branding.get('agente_telefono', ''),
+            "agente_rol": branding.get('agente_rol', 'Asesor Comercial'),
+            "agente_email": branding.get('agente_email', ''),
+            "agencia_nombre": branding.get('agencia_nombre', ''),
+            "qr_url": generar_qr_url(
+                telefono=branding.get('agente_telefono', ''),
+                tipo_propiedad=data.get('tipoPropiedad', ''),
+                ciudad=data.get('ciudad', ''),
+                operacion=data.get('operacion', ''),
+                precio=data.get('precio', ''),
+                moneda=data.get('moneda', ''),
+            ),
             "caracteristicas": [
                 {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
                 {"label": "Hab", "valor": data.get('recamaras')},
@@ -2309,6 +2588,7 @@ def generar_email(request):
 
         template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_email = TEMPLATE_EMAIL_MAP.get(template_id, TEMPLATE_EMAIL_MAP['dubai_night'])
+        branding = _resolve_branding_payload(data, request.user)
 
         if listado_obj:
             _persist_template_id(listado_obj, template_id, source='email')
@@ -2323,8 +2603,8 @@ Tipo: {data.get('tipoPropiedad', 'Propiedad')}
 Ciudad: {data.get('ciudad', '')}
 Precio: {data.get('precio', '')}
 Operación: {data.get('operacion', 'venta')}
-Agente: {data.get('agenteNombre', '')}
-Agencia: {data.get('agenciaNombre', '')}
+Agente: {branding.get('agente_nombre', '')}
+Agencia: {branding.get('agencia_nombre', '')}
 
 Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, sin ````json) con la siguiente estructura y nada más:
 {{
@@ -2363,10 +2643,21 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             "precio": data.get('precio', ''),
             "moneda": data.get('moneda', 'USD'),
             "operacion": data.get('operacion', 'Venta'),
-            "agenteNombre": data.get('agenteNombre') or getattr(request.user, 'first_name', '') or getattr(request.user, 'nombre', '') or request.user.email,
-            "agenciaNombre": data.get('agenciaNombre', ''),
+            "agenteNombre": branding.get('agente_nombre') or getattr(request.user, 'first_name', '') or getattr(request.user, 'nombre', '') or request.user.email,
+            "agenteEmail": branding.get('agente_email', ''),
+            "agenteTelefono": branding.get('agente_telefono', ''),
+            "agenteRol": branding.get('agente_rol', 'Asesor Comercial'),
+            "agenciaNombre": branding.get('agencia_nombre', ''),
             "portada_url": email_cover,
-            "logo_url": data.get('logoAgenciaUrl'),
+            "logo_url": branding.get('logo_url', ''),
+            "qr_url": generar_qr_url(
+                telefono=branding.get('agente_telefono', ''),
+                tipo_propiedad=data.get('tipoPropiedad', ''),
+                ciudad=data.get('ciudad', ''),
+                operacion=data.get('operacion', ''),
+                precio=data.get('precio', ''),
+                moneda=data.get('moneda', ''),
+            ),
             "html_content": parsed.get("html", ""),
             "template_id": template_id,
             "template_name": template_meta.get('name', ''),
@@ -3908,6 +4199,153 @@ def descargar_pdf(request, listado_id):
     except Exception as e:
         logger.error(f"Error en descargar_pdf: {e}")
         return Response({"error": str(e)}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def export_listado_zip(request, pk):
+    listado = get_object_or_404(Listado, id=pk, agente=request.user)
+    datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    resultados = datos.get('resultados') if isinstance(datos.get('resultados'), dict) else {}
+
+    def _guess_extension(url, content_type=''):
+        ct = (content_type or '').lower()
+        if 'pdf' in ct:
+            return '.pdf'
+        if 'png' in ct:
+            return '.png'
+        if 'jpeg' in ct or 'jpg' in ct:
+            return '.jpg'
+        if 'webp' in ct:
+            return '.webp'
+        if 'mp4' in ct:
+            return '.mp4'
+
+        raw = str(url or '').split('?')[0].strip().lower()
+        for ext in ('.pdf', '.png', '.jpg', '.jpeg', '.webp', '.mp4', '.mov', '.webm'):
+            if raw.endswith(ext):
+                return ext
+        return '.bin'
+
+    def _add_remote_file(zf, folder, filename_base, source_url):
+        if not source_url or not str(source_url).startswith('http'):
+            return None
+
+        raw_bytes, content_type = _download_remote_asset(source_url)
+        if not raw_bytes:
+            return None
+
+        ext = _guess_extension(source_url, content_type)
+        clean_base = re.sub(r'[^a-zA-Z0-9_\-]', '_', filename_base)
+        zip_path = f"{folder}/{clean_base}{ext}"
+        zf.writestr(zip_path, raw_bytes)
+        return zip_path
+
+    zip_buffer = io.BytesIO()
+    now_iso = timezone.now().isoformat()
+
+    with zipfile.ZipFile(zip_buffer, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+        # --- PDF ---
+        pdf_data = resultados.get('pdf', {})
+        pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else (pdf_data if isinstance(pdf_data, str) else '')
+        pdf_html = pdf_data.get('html', '') if isinstance(pdf_data, dict) else ''
+
+        pdf_saved_path = _add_remote_file(zf, 'PDF', 'ficha', pdf_url)
+        if not pdf_saved_path and pdf_html:
+            try:
+                from api.services.render_engine import render_html_to_pdf
+                pdf_bytes = render_html_to_pdf(pdf_html)
+                if pdf_bytes:
+                    zf.writestr('PDF/ficha.pdf', pdf_bytes)
+                    pdf_saved_path = 'PDF/ficha.pdf'
+            except Exception:
+                pdf_saved_path = None
+
+        if pdf_html:
+            zf.writestr('PDF/ficha.html', pdf_html)
+
+        # --- POST ---
+        post_data = resultados.get('post', {})
+        post_url = post_data.get('url') if isinstance(post_data, dict) else (post_data if isinstance(post_data, str) else '')
+        post_caption = post_data.get('caption') if isinstance(post_data, dict) else ''
+        _add_remote_file(zf, 'POST', 'post', post_url)
+        if post_caption:
+            zf.writestr('POST/caption.txt', str(post_caption).strip())
+
+        # --- STORY ---
+        story_data = resultados.get('story', {})
+        story_url = story_data.get('url') if isinstance(story_data, dict) else (story_data if isinstance(story_data, str) else '')
+        story_caption = story_data.get('caption') if isinstance(story_data, dict) else ''
+        _add_remote_file(zf, 'STORY', 'story', story_url)
+        if story_caption:
+            zf.writestr('STORY/caption.txt', str(story_caption).strip())
+
+        # --- CARRUSEL ---
+        carrusel_data = resultados.get('carrusel', {})
+        carrusel_slides = carrusel_data.get('slides') if isinstance(carrusel_data, dict) else []
+        carrusel_caption = carrusel_data.get('caption') if isinstance(carrusel_data, dict) else ''
+        if isinstance(carrusel_slides, list):
+            for idx, slide in enumerate(carrusel_slides, start=1):
+                slide_url = slide.get('url') if isinstance(slide, dict) else slide
+                _add_remote_file(zf, 'CARRUSEL', f'slide_{idx:02d}', slide_url)
+        if carrusel_caption:
+            zf.writestr('CARRUSEL/caption.txt', str(carrusel_caption).strip())
+
+        # --- EMAIL (solo HTML por requerimiento) ---
+        email_data = resultados.get('email', {})
+        if isinstance(email_data, dict) and email_data.get('html'):
+            zf.writestr('EMAIL/email.html', str(email_data.get('html')))
+
+        # --- VIDEO ---
+        if listado.video_url:
+            _add_remote_file(zf, 'VIDEO', 'video', listado.video_url)
+
+        template_id = (
+            (resultados.get('pdf') or {}).get('template_id') if isinstance(resultados.get('pdf'), dict) else None
+        ) or (
+            (resultados.get('post') or {}).get('template_id') if isinstance(resultados.get('post'), dict) else None
+        ) or (
+            (resultados.get('story') or {}).get('template_id') if isinstance(resultados.get('story'), dict) else None
+        ) or (
+            (resultados.get('carrusel') or {}).get('template_id') if isinstance(resultados.get('carrusel'), dict) else None
+        ) or (
+            (resultados.get('email') or {}).get('template_id') if isinstance(resultados.get('email'), dict) else None
+        ) or datos.get('template_id')
+
+        resumen = {
+            'listado': {
+                'id': listado.id,
+                'titulo': listado.titulo,
+                'tipo_propiedad': listado.tipo_propiedad,
+                'operacion': listado.operacion,
+                'ciudad': listado.ciudad,
+                'precio': listado.precio,
+                'moneda': listado.moneda,
+                'video_url': listado.video_url,
+                'video_status': listado.video_status,
+            },
+            'template_id': _normalize_template_id(template_id),
+            'generated_at': now_iso,
+            'included_formats': {
+                'pdf': bool(pdf_url or pdf_html),
+                'post': bool(post_url),
+                'story': bool(story_url),
+                'carrusel': bool(carrusel_slides),
+                'email': bool(isinstance(email_data, dict) and email_data.get('html')),
+                'video': bool(listado.video_url),
+            },
+            'captions': {
+                'post_chars': len(str(post_caption or '')),
+                'story_chars': len(str(story_caption or '')),
+                'carrusel_chars': len(str(carrusel_caption or '')),
+            },
+        }
+        zf.writestr('METADATA/resumen.json', json.dumps(resumen, ensure_ascii=False, indent=2))
+
+    zip_buffer.seek(0)
+    response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
+    response['Content-Disposition'] = f'attachment; filename="leadbook_listado_{listado.id}.zip"'
+    return response
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

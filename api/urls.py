@@ -14,7 +14,9 @@ from .views import (
     amenidades_presets, recuperar_password, confirmar_recuperacion,
     publicar_redes_sociales, proxy_pdf_view, proxy_pdf_thumbnail_view,
     generar_html, generar_escena, CustomTokenObtainPairView,
-    upload_fotos_listado, templates_catalog
+    upload_fotos_listado, templates_catalog,
+    export_listado_zip, commercial_agents_collection,
+    commercial_agent_detail, commercial_agent_set_default,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -40,6 +42,9 @@ urlpatterns = [
     path('auth/logout/', LogoutView.as_view(), name='auth_logout'),
     path('auth/perfil/', PerfilView.as_view(), name='auth_perfil'),
     path('auth/onboarding/', OnboardingView.as_view(), name='auth_onboarding'),
+    path('auth/agentes-comerciales/', commercial_agents_collection, name='commercial_agents_collection'),
+    path('auth/agentes-comerciales/<int:agent_id>/', commercial_agent_detail, name='commercial_agent_detail'),
+    path('auth/agentes-comerciales/<int:agent_id>/set-default/', commercial_agent_set_default, name='commercial_agent_set_default'),
     path('auth/send-otp/', send_otp, name='auth_send_otp'),
     path('auth/verify-otp/', verify_otp, name='auth_verify_otp'),
     path('auth/plan-status/', plan_status, name='plan_status'),
@@ -52,6 +57,7 @@ urlpatterns = [
     path('listados/<int:pk>/', ListadoDetalleView.as_view(), name='listado_detalle'),
     path('listados/upload-fotos/', upload_fotos_listado, name='upload_fotos_listado'),
     path('listados/<int:pk>/html/', generar_html, name='generar_html'),
+    path('listados/<int:pk>/export-zip/', export_listado_zip, name='export_listado_zip'),
     path('listados/<int:pk>/generar-video/', generar_video, name='generar_video'),
     path('listados/<int:pk>/video/', generar_video, name='generar_video_legacy'),
     path('listados/<int:listado_id>/pdf-proxy/', proxy_pdf_view, name='pdf_proxy'),

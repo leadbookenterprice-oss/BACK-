@@ -10,7 +10,7 @@
   .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
   .overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(8,8,8,0.95) 0%, rgba(8,8,8,0.68) 38%, rgba(8,8,8,0.2) 64%, rgba(8,8,8,0.5) 100%); z-index: 2; }
   .content { position: absolute; inset: 0; z-index: 3; padding: 80px 64px 100px; display: flex; flex-direction: column; justify-content: space-between; }
-  .top-section { display: flex; flex-direction: column; align-items: center; gap: 28px; }
+  .top-section { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
   .logo { max-width: 240px; max-height: 96px; object-fit: contain; filter: brightness(0) invert(1); }
   .badge { background: var(--accent); color: var(--bg); font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; letter-spacing: 3px; padding: 14px 36px; text-transform: uppercase; border-radius: 999px; }
   .bottom-section { display: flex; flex-direction: column; gap: 24px; }
@@ -21,6 +21,14 @@
   .stat-item { flex: 1; border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 22px 16px; background: rgba(8,8,8,0.62); text-align: center; }
   .stat-value { font-family: 'Bebas Neue', sans-serif; font-size: 46px; color: var(--accent); line-height: 1; }
   .stat-label { font-family: 'Space Mono', monospace; font-size: 15px; letter-spacing: 2px; color: rgba(255,255,255,0.7); text-transform: uppercase; }
+  .contact-strip { margin-top: 14px; display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; border: 1px solid rgba(201,168,76,0.35); border-radius: 14px; padding: 14px 16px; background: rgba(8,8,8,0.62); }
+  .agent-box { display: flex; flex-direction: column; gap: 3px; max-width: 70%; }
+  .agent-name { font-family: 'Bebas Neue', sans-serif; font-size: 40px; letter-spacing: 1px; color: var(--accent); line-height: 1; text-transform: uppercase; }
+  .agent-role { font-family: 'Space Mono', monospace; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.68); }
+  .agent-meta { font-size: 21px; color: rgba(255,255,255,0.9); }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .qr-box img { width: 118px; height: 118px; padding: 6px; background: #fff; border-radius: 8px; }
+  .qr-box span { font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.6); }
 </style>
 </head>
 <body>
@@ -28,8 +36,8 @@
   <div class="overlay"></div>
   <div class="content">
     <div class="top-section">
-      {% if logo_url %}<img src="{{ logo_url }}" class="logo" />{% else %}<div></div>{% endif %}
       <div class="badge">{{ operacion }}</div>
+      {% if logo_url %}<img src="{{ logo_url }}" class="logo" />{% else %}<div></div>{% endif %}
     </div>
     <div class="bottom-section">
       <div class="title">{{ tipoPropiedad }}<br><span>{{ ciudad }}</span></div>
@@ -44,6 +52,19 @@
         {% endfor %}
       </div>
       {% endif %}
+      <div class="contact-strip">
+        <div class="agent-box">
+          <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+          <div class="agent-role">{{ agente_rol|default:"Asesor Comercial" }} · {{ agencia_nombre }}</div>
+          <div class="agent-meta">{{ agente_telefono }}</div>
+        </div>
+        {% if qr_url %}
+        <div class="qr-box">
+          <img src="{{ qr_url }}" alt="QR" />
+          <span>Escaneá</span>
+        </div>
+        {% endif %}
+      </div>
     </div>
   </div>
 </body>

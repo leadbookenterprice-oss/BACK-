@@ -135,6 +135,56 @@ class AgentAssociation(models.Model):
         unique_together = ('agente', 'asociado')
 
 
+class ComercialAgentProfile(models.Model):
+    """
+    Perfil comercial reutilizable para branding en assets.
+    Un usuario puede tener varios perfiles y marcar uno como default.
+    """
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='commercial_agents')
+    nombre = models.CharField(max_length=255)
+    rol = models.CharField(max_length=120, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    telefono_e164 = models.CharField(max_length=20, blank=True, null=True)
+    foto_url = models.TextField(blank=True, null=True)
+    is_default = models.BooleanField(default=False)
+    activo = models.BooleanField(default=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-is_default', '-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner'],
+                condition=models.Q(is_default=True),
+                name='unique_default_commercial_agent_per_owner',
+            )
+        ]
+        indexes = [
+            models.Index(fields=['owner', 'is_default']),
+            models.Index(fields=['owner', 'activo']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.telefono_e164:
+            value = str(self.telefono_e164).strip()
+            if value and not value.startswith('+'):
+                value = f'+{value}'
+            self.telefono_e164 = value
+
+        if self.is_default and self.owner_id:
+            ComercialAgentProfile.objects.filter(
+                owner_id=self.owner_id,
+                is_default=True,
+            ).exclude(pk=self.pk).update(is_default=False)
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.nombre} ({self.owner_id})"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PLANES Y SUSCRIPCIONES
 # ══════════════════════════════════════════════════════════════════════════════

@@ -88,8 +88,10 @@
                                 <tr>
                                     <td style="font-size: 13px; color: #555;">
                                         Presentado por:<br>
-                                        <strong style="color: #080808; font-size: 15px;">{{ agenteNombre|default:"Tu Agente Leadbook" }}</strong><br>
-                                        {{ agenciaNombre|default:"" }}
+                                        <strong style="color: #080808; font-size: 15px;">{{ agenteNombre|default:"Asesor Comercial" }}</strong><br>
+                                        {{ agenteRol|default:"Asesor Comercial" }} · {{ agenciaNombre|default:"" }}<br>
+                                        {% if agenteTelefono %}WhatsApp: {{ agenteTelefono }}{% endif %}
+                                        {% if agenteEmail %}<br>Email: {{ agenteEmail }}{% endif %}
                                     </td>
                                 </tr>
                             </table>

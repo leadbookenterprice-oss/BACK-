@@ -71,7 +71,14 @@
             <td style="padding:0 34px 34px 34px;">
               <div style="padding-top:20px;border-top:1px solid #dfd1c1;color:#6b5c4b;font-size:13px;line-height:1.6;">
                 <strong style="color:#3a2a1f;font-size:14px;">{{ agenteNombre|default:'Asesor Comercial' }}</strong><br>
-                {{ agenciaNombre|default:'' }}
+                {{ agenteRol|default:'Asesor Comercial' }} · {{ agenciaNombre|default:'' }}<br>
+                {% if agenteTelefono %}WhatsApp: {{ agenteTelefono }}{% endif %}
+                {% if agenteEmail %}<br>Email: {{ agenteEmail }}{% endif %}
+              </div>
+              <div style="padding-top:16px;">
+                {% if agenteTelefono %}
+                  <a href="https://wa.me/{{ agenteTelefono|cut:'+' }}" style="display:inline-block;padding:10px 16px;background:#6b4423;color:#ffffff;text-decoration:none;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;">Contactar por WhatsApp</a>
+                {% endif %}
               </div>
             </td>
           </tr>

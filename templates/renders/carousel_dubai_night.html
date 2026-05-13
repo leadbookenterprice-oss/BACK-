@@ -16,8 +16,14 @@
   .middle { display: flex; flex-direction: column; gap: 28px; margin-bottom: 44px; }
   .headline { font-family: 'Bebas Neue', sans-serif; font-size: 152px; line-height: 0.9; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); text-shadow: 0 4px 30px rgba(0,0,0,0.45); }
   .subheadline { font-size: 46px; line-height: 1.28; color: var(--fg); max-width: 900px; }
-  .footer { display: flex; justify-content: flex-end; }
-  .footer-text { font-family: 'Space Mono', monospace; font-size: 22px; color: rgba(255,255,255,0.58); letter-spacing: 3px; text-transform: uppercase; }
+  .footer { display: flex; justify-content: space-between; align-items: flex-end; gap: 14px; border: 1px solid rgba(201,168,76,0.35); border-radius: 12px; padding: 12px 14px; background: rgba(8,8,8,0.58); }
+  .agent-box { display: flex; flex-direction: column; gap: 2px; max-width: 68%; }
+  .agent-name { font-family: 'Bebas Neue', sans-serif; font-size: 33px; color: var(--accent); line-height: 1; letter-spacing: 1px; text-transform: uppercase; }
+  .agent-meta { font-family: 'DM Sans', sans-serif; font-size: 18px; color: rgba(255,255,255,0.9); }
+  .footer-text { font-family: 'Space Mono', monospace; font-size: 14px; color: rgba(255,255,255,0.58); letter-spacing: 2px; text-transform: uppercase; }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .qr-box img { width: 88px; height: 88px; padding: 5px; background: white; border-radius: 7px; }
+  .qr-box span { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.62); }
 </style>
 </head>
 <body>
@@ -25,18 +31,28 @@
   <div class="overlay"></div>
   <div class="content">
     <div class="top">
-      {% if logo_url %}<img src="{{ logo_url }}" class="logo" />{% else %}<div></div>{% endif %}
       <div class="badge">{{ operacion }}</div>
+      {% if logo_url %}<img src="{{ logo_url }}" class="logo" />{% else %}<div></div>{% endif %}
     </div>
     <div class="middle">
       <div class="headline">{{ headline }}</div>
       <div class="subheadline">{{ subheadline }}</div>
     </div>
     <div class="footer">
-      {% if slide_number < total_slides %}
-        <div class="footer-text">Desliza para ver mas</div>
-      {% else %}
-        <div class="footer-text" style="color: var(--accent)">Guardalo y escribinos</div>
+      <div class="agent-box">
+        <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+        <div class="agent-meta">{{ agente_telefono }}</div>
+        {% if slide_number < total_slides %}
+          <div class="footer-text">Deslizá para seguir</div>
+        {% else %}
+          <div class="footer-text" style="color: var(--accent)">Guardalo y escribinos</div>
+        {% endif %}
+      </div>
+      {% if qr_url %}
+      <div class="qr-box">
+        <img src="{{ qr_url }}" alt="QR" />
+        <span>Escaneá</span>
+      </div>
       {% endif %}
     </div>
   </div>

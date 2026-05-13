@@ -21,6 +21,14 @@
   .stat-item { flex: 1; border-top: 3px solid var(--accent); background: rgba(0,0,0,0.68); padding: 20px 12px; text-align: center; }
   .stat-value { font-family: 'Oswald', sans-serif; font-size: 42px; color: #fff; line-height: 1; }
   .stat-label { font-family: 'Oswald', sans-serif; font-size: 14px; letter-spacing: 3px; color: rgba(255,255,255,0.72); text-transform: uppercase; }
+  .contact-strip { margin-top: 14px; display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; border: 1px solid rgba(230,57,70,0.42); border-radius: 14px; padding: 14px 16px; background: rgba(0,0,0,0.72); }
+  .agent-box { display: flex; flex-direction: column; gap: 3px; max-width: 70%; }
+  .agent-name { font-family: 'Oswald', sans-serif; font-size: 39px; line-height: 1; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+  .agent-role { font-family: 'Oswald', sans-serif; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.75); }
+  .agent-meta { font-size: 20px; color: #ffffff; }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .qr-box img { width: 118px; height: 118px; padding: 6px; background: #fff; border-radius: 8px; }
+  .qr-box span { font-family: 'Oswald', sans-serif; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.62); }
 </style>
 </head>
 <body>
@@ -44,6 +52,19 @@
         {% endfor %}
       </div>
       {% endif %}
+      <div class="contact-strip">
+        <div class="agent-box">
+          <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+          <div class="agent-role">{{ agente_rol|default:"Asesor Comercial" }} · {{ agencia_nombre }}</div>
+          <div class="agent-meta">{{ agente_telefono }}</div>
+        </div>
+        {% if qr_url %}
+        <div class="qr-box">
+          <img src="{{ qr_url }}" alt="QR" />
+          <span>Escaneá</span>
+        </div>
+        {% endif %}
+      </div>
     </div>
   </div>
 </body>
