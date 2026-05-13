@@ -8,9 +8,12 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   
   :root {
-    --black: #080808;
+    --black: {{ bg_color|default:'#080808' }};
     --white: #F5F3EE;
-    --accent: #C8FF00;
+    --accent: {{ accent_color|default:'#C8FF00' }};
+    --overlay-bottom: {{ overlay_bottom|default:'rgba(8,8,8,0.95)' }};
+    --overlay-mid: {{ overlay_mid|default:'rgba(8,8,8,0.60)' }};
+    --overlay-top: {{ overlay_top|default:'rgba(8,8,8,0.30)' }};
   }
   
   body {
@@ -35,7 +38,7 @@
   .overlay {
     position: absolute;
     inset: 0;
-    background: linear-gradient(0deg, rgba(8,8,8,0.95) 0%, rgba(8,8,8,0.6) 40%, rgba(8,8,8,0.3) 100%);
+    background: linear-gradient(0deg, var(--overlay-bottom) 0%, var(--overlay-mid) 40%, var(--overlay-top) 100%);
     z-index: 2;
   }
   

@@ -11,6 +11,8 @@ from django.http import HttpResponse, StreamingHttpResponse
 from decouple import config
 import cloudinary
 import cloudinary.uploader
+import random
+import re
 from api.services.almacenamiento import AlmacenamientoCloudinary
 import logging
 
@@ -45,6 +47,199 @@ def actualizar_resultados_listado(listado, tipo, resultado):
     
     listado.datos_extra['resultados'][tipo] = resultado
     listado.save(update_fields=['datos_extra'])
+
+
+TEMPLATE_IDS = (
+    'dubai_night',
+    'beverly_hills',
+    'manhattan',
+    'mediterraneo',
+    'tech_modern',
+)
+
+TEMPLATE_POST_MAP = {
+    template_id: f'renders/post_{template_id}.html'
+    for template_id in TEMPLATE_IDS
+}
+
+CAROUSEL_TEMPLATE_STYLES = {
+    'dubai_night': {
+        'bg_color': '#080808',
+        'accent_color': '#c9a84c',
+        'overlay_bottom': 'rgba(8, 8, 8, 0.94)',
+        'overlay_mid': 'rgba(8, 8, 8, 0.62)',
+        'overlay_top': 'rgba(8, 8, 8, 0.28)',
+    },
+    'beverly_hills': {
+        'bg_color': '#1f2833',
+        'accent_color': '#e8c547',
+        'overlay_bottom': 'rgba(31, 40, 51, 0.93)',
+        'overlay_mid': 'rgba(31, 40, 51, 0.58)',
+        'overlay_top': 'rgba(31, 40, 51, 0.25)',
+    },
+    'manhattan': {
+        'bg_color': '#111111',
+        'accent_color': '#e63946',
+        'overlay_bottom': 'rgba(17, 17, 17, 0.95)',
+        'overlay_mid': 'rgba(17, 17, 17, 0.65)',
+        'overlay_top': 'rgba(17, 17, 17, 0.30)',
+    },
+    'mediterraneo': {
+        'bg_color': '#5c3d2e',
+        'accent_color': '#c17f3a',
+        'overlay_bottom': 'rgba(92, 61, 46, 0.94)',
+        'overlay_mid': 'rgba(92, 61, 46, 0.60)',
+        'overlay_top': 'rgba(92, 61, 46, 0.24)',
+    },
+    'tech_modern': {
+        'bg_color': '#0d47a1',
+        'accent_color': '#00e5ff',
+        'overlay_bottom': 'rgba(13, 71, 161, 0.92)',
+        'overlay_mid': 'rgba(13, 71, 161, 0.55)',
+        'overlay_top': 'rgba(13, 71, 161, 0.22)',
+    },
+}
+
+
+def _normalize_template_id(value):
+    if not value:
+        return None
+    template_id = str(value).strip().lower()
+    template_id = template_id.replace('template_', '').replace('post_', '').replace('.html', '')
+    if template_id in TEMPLATE_IDS:
+        return template_id
+    return None
+
+
+def _extract_template_id_from_payload(data):
+    if not isinstance(data, dict):
+        return None
+    return _normalize_template_id(
+        data.get('template_id')
+        or data.get('templateId')
+        or data.get('template')
+    )
+
+
+def _template_id_from_listado(listado):
+    if not listado or not isinstance(listado.datos_extra, dict):
+        return None
+    return _normalize_template_id(
+        listado.datos_extra.get('template_id')
+        or listado.datos_extra.get('template')
+    )
+
+
+def _persist_template_id(listado, template_id, source=''):
+    if not listado or not template_id:
+        return
+
+    if not isinstance(listado.datos_extra, dict):
+        listado.datos_extra = {}
+
+    datos = listado.datos_extra
+    datos['template_id'] = template_id
+    datos['template'] = template_id
+
+    resultados = datos.get('resultados')
+    if not isinstance(resultados, dict):
+        resultados = {}
+
+    meta = resultados.get('template_meta')
+    if not isinstance(meta, dict):
+        meta = {}
+
+    meta['template_id'] = template_id
+    meta['updated_at'] = timezone.now().isoformat()
+    if source:
+        meta['last_source'] = source
+
+    resultados['template_meta'] = meta
+    datos['resultados'] = resultados
+    listado.datos_extra = datos
+    listado.save(update_fields=['datos_extra'])
+
+
+def _resolve_cloudinary_asset_url(value):
+    if isinstance(value, dict):
+        if value.get('url') and isinstance(value.get('url'), str):
+            return value.get('url').strip()
+        if value.get('public_id'):
+            cloud_name = value.get('cloudinary_account', 'df1vldrhb')
+            public_id = value.get('public_id', '')
+            return f"https://res.cloudinary.com/{cloud_name}/image/upload/{public_id}"
+
+    if isinstance(value, str):
+        val = value.strip()
+        if val.startswith('http'):
+            return re.sub(r's--[^/]+--/', '', val)
+
+    return ''
+
+
+def _collect_property_images(data):
+    portada = data.get('portadaUrl') if isinstance(data, dict) else None
+    fotos = data.get('fotosRecorrido', []) if isinstance(data, dict) else []
+    if not isinstance(fotos, list):
+        fotos = []
+
+    candidates = []
+    if portada:
+        candidates.append(portada)
+    candidates.extend(fotos)
+
+    urls = []
+    seen = set()
+    for item in candidates:
+        item_val = item
+        if isinstance(item, dict) and item.get('url') and not item.get('public_id'):
+            item_val = item.get('url')
+        resolved = _resolve_cloudinary_asset_url(item_val)
+        if resolved and resolved not in seen:
+            seen.add(resolved)
+            urls.append(resolved)
+    return urls
+
+
+def _sanitize_caption_text(raw_text, max_chars=2200):
+    if not raw_text:
+        return ''
+
+    text = str(raw_text).strip()
+    text = re.sub(r"```(?:json|markdown|text)?", "", text, flags=re.IGNORECASE)
+    text = text.replace("```", "")
+    text = text.replace("**", "")
+    text = re.sub(r'^\s*---+\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
+
+    meta_prefix = re.compile(
+        r'^\s*(caption|copy|salida|output|explicacion|explicación|nota|instrucciones|observaciones?)\s*:\s*',
+        flags=re.IGNORECASE,
+    )
+
+    cleaned_lines = []
+    for line in text.splitlines():
+        current = line.strip()
+        if not current:
+            cleaned_lines.append('')
+            continue
+
+        current = re.sub(r'^\s*[-*•]+\s*', '', current)
+        current = meta_prefix.sub('', current).strip()
+
+        if re.match(r'^(json|formato|estructura)\b', current, flags=re.IGNORECASE):
+            continue
+
+        cleaned_lines.append(current)
+
+    text = '\n'.join(cleaned_lines)
+    text = re.sub(r'\n{3,}', '\n\n', text).strip().strip('"').strip("'")
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip()
+
+    return text
 
 LIMITES_PLAN = {
     'free':     {'listados_mes': 10},
@@ -241,8 +436,6 @@ import concurrent.futures
 @permission_classes([IsAuthenticated])
 def generar_guion(request):
     import json as _json
-    import re
-
     data = request.data
     tipo_video_raw = str(data.get('tipoVideo', 'reel')).strip().lower()
     tipo_video = {
@@ -251,6 +444,39 @@ def generar_guion(request):
         'reel_rapido': 'reel',
         'reel-rapido': 'reel',
     }.get(tipo_video_raw, tipo_video_raw if tipo_video_raw in ('tour', 'reel') else 'reel')
+
+    script_rules = {
+        'tour': {
+            'required_scenes': 7,
+            'min_total_words': 100,
+            'max_total_words': 185,
+            'scene_min_words': 12,
+            'scene_max_words': 30,
+            'scene_names': [
+                'Gancho',
+                'Fachada y entorno',
+                'Zona social',
+                'Cocina y detalles',
+                'Habitaciones',
+                'Beneficio de inversion',
+                'Cierre con CTA',
+            ],
+        },
+        'reel': {
+            'required_scenes': 4,
+            'min_total_words': 30,
+            'max_total_words': 65,
+            'scene_min_words': 6,
+            'scene_max_words': 18,
+            'scene_names': [
+                'Gancho',
+                'Diferencial',
+                'Prueba social',
+                'Cierre con CTA',
+            ],
+        },
+    }
+    rules = script_rules[tipo_video]
 
     tipo = data.get('tipoPropiedad', 'Propiedad')
     ciudad = data.get('ciudad', '')
@@ -264,80 +490,93 @@ def generar_guion(request):
     tono = data.get('tono', 'profesional')
     contexto_adicional = data.get('contextoAdicional', '')
 
-    max_chars_total = 150 if tipo_video == 'reel' else 300
-    min_escenas = 3 if tipo_video == 'reel' else 4
-
     tono_map = {
-        'profesional': 'profesional y formal, directo, transmite confianza y seriedad',
-        'lujo': 'de lujo y exclusividad, sofisticado y aspiracional',
-        'energetico': 'dinámico y energético, frases cortas de alto impacto',
+        'profesional': 'profesional y formal, transmite confianza sin sonar rigido',
+        'lujo': 'sofisticado, aspiracional y sensorial',
+        'energetico': 'dinamico, directo y de alto impacto',
     }
     tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
 
     narrador_instrucciones = (
         'voz masculina: firme y segura'
         if voz == 'masculina'
-        else 'voz femenina: cálida y cercana'
+        else 'voz femenina: calida y cercana'
     )
 
     contexto_extra = f"\nENFOQUE ADICIONAL: {contexto_adicional}" if contexto_adicional else ''
+    scene_names_hint = ', '.join(rules['scene_names'])
 
-    prompt = f"""Sos copywriter inmobiliario experto.
-Generá guión para {tipo_video.upper()}.
+    prompt = f"""Sos copywriter inmobiliario experto en videos cortos para redes.
+Genera un guion para formato {tipo_video.upper()}.
 
 DATOS:
 - Tipo: {tipo}
-- Operación: {operacion}
+- Operacion: {operacion}
 - Ciudad: {ciudad}
-- País: {pais}
+- Pais: {pais}
 - Precio: {moneda} {precio}
-- Recámaras: {recamaras}
-- Baños: {banos}
+- Recamaras: {recamaras}
+- Banos: {banos}
 - Tono: {tono_instrucciones}
 - Narrador: {narrador_instrucciones}{contexto_extra}
 
-REGLAS ESTRICTAS:
-- Mínimo {min_escenas} escenas
-- Suma total de caracteres de TODOS los campos "texto" <= {max_chars_total}
-- Salida JSON pura
+REGLAS ESTRICTAS (OBLIGATORIAS):
+- EXACTAMENTE {rules['required_scenes']} escenas
+- TOTAL de palabras entre {rules['min_total_words']} y {rules['max_total_words']}
+- Cada escena entre {rules['scene_min_words']} y {rules['scene_max_words']} palabras
+- Escenas sugeridas (orden recomendado): {scene_names_hint}
+- No repitas frases entre escenas
+- Salida SOLO en JSON valido (sin markdown, sin texto extra)
 
 FORMATO:
 {{"escenas": [
-  {{"nombre":"Apertura","texto":"...","icono":"🏠"}},
-  {{"nombre":"Detalle","texto":"...","icono":"✨"}},
-  {{"nombre":"Cierre","texto":"...","icono":"📞"}}
+  {{"nombre":"...","texto":"...","icono":"🎬"}}
 ]}}
 """
 
-    try:
-        with concurrent.futures.ThreadPoolExecutor() as ex:
-            future = ex.submit(call_gemini_api, prompt, agente=request.user)
-            descripcion_ia = future.result(timeout=20)
-    except GeminiQuotaExhaustedError as e:
-        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-    except Exception as e:
-        logger.exception("Error llamando Gemini en generar_guion")
-        return Response({"error": "gemini_no_disponible", "detalle": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    def _count_words(text):
+        return len(re.findall(r"\b[\w\u00C0-\u017F']+\b", str(text), flags=re.UNICODE))
 
-    if not descripcion_ia:
-        return Response({"error": "gemini_sin_respuesta"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    def _clean_scene_text(text):
+        cleaned = str(text or '').strip()
+        cleaned = cleaned.replace('**', '')
+        cleaned = re.sub(r'^\s*[-*•]+\s*', '', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip('"').strip("'").strip()
+        return cleaned
 
-    raw = str(descripcion_ia).strip()
+    def _extract_json_candidates(text):
+        source = str(text or '').strip()
+        candidates = [source]
+        if not source:
+            return candidates
+
+        fence_trimmed = re.sub(r'^\s*```(?:json)?\s*', '', source, flags=re.IGNORECASE)
+        fence_trimmed = re.sub(r'\s*```\s*$', '', fence_trimmed, flags=re.IGNORECASE).strip()
+        if fence_trimmed and fence_trimmed != source:
+            candidates.append(fence_trimmed)
+
+        for open_char, close_char in (('{', '}'), ('[', ']')):
+            start = source.find(open_char)
+            while start != -1:
+                depth = 0
+                for idx in range(start, len(source)):
+                    char = source[idx]
+                    if char == open_char:
+                        depth += 1
+                    elif char == close_char:
+                        depth -= 1
+                        if depth == 0:
+                            snippet = source[start:idx + 1].strip()
+                            if snippet:
+                                candidates.append(snippet)
+                            break
+                start = source.find(open_char, start + 1)
+
+        return candidates
 
     def _parse_json_flexible(text):
-        candidates = [text]
-        clean_fence = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
-        if clean_fence and clean_fence != text:
-            candidates.append(clean_fence)
-        obj_match = re.search(r"\{[\s\S]*\}", text)
-        if obj_match:
-            candidates.append(obj_match.group(0).strip())
-        arr_match = re.search(r"\[[\s\S]*\]", text)
-        if arr_match:
-            candidates.append(arr_match.group(0).strip())
-
         used = set()
-        for candidate in candidates:
+        for candidate in _extract_json_candidates(text):
             if not candidate or candidate in used:
                 continue
             used.add(candidate)
@@ -347,71 +586,165 @@ FORMATO:
                 continue
         return None
 
-    parsed = _parse_json_flexible(raw)
-    if parsed is None:
+    def _extract_escenas(parsed):
+        if isinstance(parsed, list):
+            return parsed
+
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get('escenas'), list):
+                return parsed.get('escenas')
+            for key in ('scenes', 'guion', 'slides'):
+                if isinstance(parsed.get(key), list):
+                    return parsed.get(key)
+            if parsed and all(isinstance(v, (dict, str)) for v in parsed.values()):
+                return list(parsed.values())
+
+        return []
+
+    def _normalize_escenas(parsed):
+        source = _extract_escenas(parsed)
+        normalized = []
+
+        for idx, escena in enumerate(source, start=1):
+            if isinstance(escena, dict):
+                texto = _clean_scene_text(escena.get('texto', ''))
+                nombre = _clean_scene_text(escena.get('nombre') or f'Escena {idx}')
+                icono = _clean_scene_text(escena.get('icono') or '🎬')
+            elif isinstance(escena, str):
+                texto = _clean_scene_text(escena)
+                nombre = f'Escena {idx}'
+                icono = '🎬'
+            else:
+                continue
+
+            if texto:
+                normalized.append({
+                    'nombre': nombre or f'Escena {idx}',
+                    'texto': texto,
+                    'icono': icono[:2] if icono else '🎬',
+                })
+
+        return normalized
+
+    def _validate_escenas(escenas):
+        if len(escenas) < rules['required_scenes']:
+            return False, f"Escenas insuficientes: {len(escenas)}/{rules['required_scenes']}"
+
+        limited = escenas[:rules['required_scenes']]
+        total_words = sum(_count_words(e.get('texto', '')) for e in limited)
+        too_short = [
+            idx + 1
+            for idx, escena in enumerate(limited)
+            if _count_words(escena.get('texto', '')) < max(4, rules['scene_min_words'] - 2)
+        ]
+
+        if too_short:
+            return False, f"Escenas demasiado cortas: {too_short}"
+
+        if total_words < rules['min_total_words']:
+            return False, f"Palabras insuficientes: {total_words}/{rules['min_total_words']}"
+
+        return True, '', {
+            'escenas': limited,
+            'total_words': total_words,
+        }
+
+    def _repair_with_gemini(raw_text, reason):
+        repair_prompt = f"""Reformatea y mejora este guion inmobiliario.
+Motivo de correccion: {reason}
+
+Objetivo final obligatorio:
+- EXACTAMENTE {rules['required_scenes']} escenas
+- Minimo {rules['min_total_words']} palabras totales
+- Cada escena entre {rules['scene_min_words']} y {rules['scene_max_words']} palabras
+- Mantener tono {tono_instrucciones}
+- Devolver SOLO JSON valido con la clave \"escenas\"
+
+Contenido original:
+{str(raw_text)[:7000]}
+"""
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            future = ex.submit(call_gemini_api, repair_prompt, agente=request.user)
+            return future.result(timeout=25)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            future = ex.submit(call_gemini_api, prompt, agente=request.user)
+            raw_response = future.result(timeout=25)
+    except GeminiQuotaExhaustedError as e:
+        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+    except Exception as e:
+        logger.exception("Error llamando Gemini en generar_guion")
+        return Response({"error": "gemini_no_disponible", "detalle": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    if not raw_response:
+        return Response({"error": "gemini_sin_respuesta"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    attempts = [str(raw_response).strip()]
+    final_validation = None
+    final_reason = 'sin detalle'
+
+    for attempt_idx in range(2):
+        candidate_text = attempts[-1]
+        parsed = _parse_json_flexible(candidate_text)
+
+        if parsed is None:
+            final_reason = 'Gemini no devolvio JSON parseable'
+            if attempt_idx == 0:
+                try:
+                    repaired = _repair_with_gemini(candidate_text, final_reason)
+                    if repaired:
+                        attempts.append(str(repaired).strip())
+                        continue
+                except GeminiQuotaExhaustedError as e:
+                    return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                except Exception:
+                    pass
+            break
+
+        escenas = _normalize_escenas(parsed)
+        is_valid, reason, payload = _validate_escenas(escenas)
+        final_reason = reason or final_reason
+        if is_valid:
+            final_validation = payload
+            break
+
+        if attempt_idx == 0:
+            try:
+                repaired = _repair_with_gemini(_json.dumps({'escenas': escenas}, ensure_ascii=False), reason)
+                if repaired:
+                    attempts.append(str(repaired).strip())
+                    continue
+            except GeminiQuotaExhaustedError as e:
+                return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            except Exception:
+                pass
+
+    if not final_validation:
         return Response(
             {
-                "error": "formato_ia_invalido",
-                "detalle": "Gemini no devolvió JSON válido",
-                "raw": raw[:500],
+                "error": "respuesta_ia_invalida",
+                "detalle": final_reason,
+                "raw": attempts[-1][:900],
             },
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
-    escenas_raw = None
-    if isinstance(parsed, dict) and isinstance(parsed.get('escenas'), list):
-        escenas_raw = parsed.get('escenas')
-    elif isinstance(parsed, list):
-        escenas_raw = parsed
-
-    escenas = []
-    for i, escena in enumerate(escenas_raw or [], start=1):
-        if isinstance(escena, dict):
-            texto = str(escena.get('texto', '')).strip()
-            nombre = str(escena.get('nombre') or f'Escena {i}').strip()
-            icono = str(escena.get('icono') or '🎬').strip()
-        elif isinstance(escena, str):
-            texto = escena.strip()
-            nombre = f'Escena {i}'
-            icono = '🎬'
-        else:
-            continue
-
-        if texto:
-            escenas.append({'nombre': nombre, 'texto': texto, 'icono': icono[:2] if icono else '🎬'})
-
-    if len(escenas) < min_escenas:
-        return Response(
-            {
-                "error": "respuesta_ia_incompleta",
-                "detalle": f"Gemini no devolvió suficientes escenas (mínimo {min_escenas})",
-            },
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
-
-    total_chars = sum(len(e['texto']) for e in escenas)
-    if total_chars > max_chars_total:
-        min_chars_escena = 12 if tipo_video == 'reel' else 20
-        guard = 0
-        while total_chars > max_chars_total and guard < 5000:
-            guard += 1
-            idx = max(range(len(escenas)), key=lambda n: len(escenas[n]['texto']))
-            txt = escenas[idx]['texto']
-            if len(txt) <= min_chars_escena:
-                break
-            escenas[idx]['texto'] = txt[:-1].rstrip()
-            total_chars = sum(len(e['texto']) for e in escenas)
+    escenas_finales = final_validation['escenas']
+    total_words = final_validation['total_words']
 
     from .plan_utils import registrar_uso
     registrar_uso(request.user, 'ai')
     return Response(
         {
-            'escenas': escenas,
+            'escenas': escenas_finales,
             'tipo_video': tipo_video,
             'source': 'gemini',
             'meta': {
-                'actual_chars_total': total_chars,
-                'max_chars_total': max_chars_total,
+                'required_scenes': rules['required_scenes'],
+                'actual_scenes': len(escenas_finales),
+                'min_total_words': rules['min_total_words'],
+                'actual_total_words': total_words,
             },
         }
     )
@@ -696,7 +1029,7 @@ def publicar_redes_sociales(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_carrusel(request):
-    """Genera 5 imágenes de carrusel y un caption con Gemini."""
+    """Genera 5 imagenes de carrusel y un caption con Gemini."""
     try:
         user = request.user
         # TODO: re-habilitar cuando el sistema de planes esté estable
@@ -708,54 +1041,81 @@ def generar_carrusel(request):
         #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
-        fotos = data.get('fotosRecorrido', [])
-        if not isinstance(fotos, list): fotos = []
-        
-        # Aseguramos tener 5 fotos (repetimos si es necesario)
-        portada = data.get('portadaUrl')
-        images_to_use = []
-        if portada: images_to_use.append(portada)
-        images_to_use.extend([f.get('url') if isinstance(f, dict) else f for f in fotos if f])
-        
-        # Si no hay imágenes, generamos slides de diseño puro (sin foto de fondo)
-        # Pasamos None para que generate_social_image use fondo negro/degradado
-        if not images_to_use:
+        listado_id_val = data.get('listado_id') or data.get('listadoId')
+
+        listado_obj = None
+        if listado_id_val:
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+
+        template_id = (
+            _extract_template_id_from_payload(data)
+            or _template_id_from_listado(listado_obj)
+            or random.choice(TEMPLATE_IDS)
+        )
+
+        if listado_obj:
+            _persist_template_id(listado_obj, template_id, source='carrusel')
+
+        style = CAROUSEL_TEMPLATE_STYLES.get(template_id, CAROUSEL_TEMPLATE_STYLES['dubai_night'])
+
+        images_pool = _collect_property_images(data)
+        if not images_pool:
             images_to_use = [None] * 5
-        
-        while len(images_to_use) < 5:
-            images_to_use.append(images_to_use[len(images_to_use) % len(images_to_use)])
-            
+        else:
+            images_to_use = [images_pool[i % len(images_pool)] for i in range(5)]
+
+        recamaras = data.get('recamaras') or 'N/D'
+        banos = data.get('banos') or 'N/D'
+        superficie = data.get('superficieCubierta') or data.get('superficieTotal') or 'N/D'
+
         slides_urls = []
         slides_content = [
-            {"headline": data.get('tipoPropiedad', 'Propiedad'), "subheadline": f"Una oportunidad única en {data.get('ciudad', '')}"},
-            {"headline": "Espacios", "subheadline": "Diseño y amplitud pensados para tu máximo confort."},
-            {"headline": "Detalles", "subheadline": "Terminaciones de calidad que marcan la diferencia."},
-            {"headline": "Inversión", "subheadline": f"Tu próximo hogar por solo {data.get('moneda', 'USD')} {data.get('precio', '')}"},
-            {"headline": "Contacto", "subheadline": "No dejes pasar esta oportunidad. Contactanos hoy."}
+            {
+                "headline": data.get('tipoPropiedad', 'Propiedad'),
+                "subheadline": f"Una oportunidad unica en {data.get('ciudad', '')}",
+            },
+            {
+                "headline": "Espacios",
+                "subheadline": f"{recamaras} hab | {banos} banos para vivir con comodidad.",
+            },
+            {
+                "headline": "Detalles",
+                "subheadline": f"{superficie} m2 pensados para tu estilo de vida.",
+            },
+            {
+                "headline": "Inversion",
+                "subheadline": f"{data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.",
+            },
+            {
+                "headline": "Contacto",
+                "subheadline": "Agenda tu visita y asegura esta propiedad hoy.",
+            },
         ]
 
         for i in range(5):
-            # Preparar contexto para el slide actual
             context = {
                 "portada_url": images_to_use[i],
                 "headline": slides_content[i]["headline"],
                 "subheadline": slides_content[i]["subheadline"],
                 "slide_number": i + 1,
                 "total_slides": 5,
-                "logo_url": data.get('logoAgenciaUrl')
+                "logo_url": data.get('logoAgenciaUrl'),
+                "bg_color": style['bg_color'],
+                "accent_color": style['accent_color'],
+                "overlay_bottom": style['overlay_bottom'],
+                "overlay_mid": style['overlay_mid'],
+                "overlay_top": style['overlay_top'],
+                "template_id": template_id,
             }
-            
-            # Renderizar el slide con Playwright
+
             html_content = render_to_string('renders/carousel.html', context)
             image_stream = render_html_to_image(html_content, 1080, 1350)
-            
-            # Subir a Cloudinary via Almacenamiento centralizado
+
             try:
                 image_stream.seek(0)
-                listado_id_val = data.get('listado_id')
                 url = AlmacenamientoCloudinary.guardar_slide_carrusel(
-                    image_stream, 
-                    user_id=request.user.id, 
+                    image_stream,
+                    user_id=request.user.id,
                     listado_id=listado_id_val,
                     indice=i + 1
                 )
@@ -766,22 +1126,28 @@ def generar_carrusel(request):
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
-        # Generar Caption con Gemini (con fallback a Groq)
         prompt_text = f"Escribí un caption para un carrusel de Instagram de una propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Enfocado en vender el estilo de vida y llamar a la acción. Usá emojis y hashtags."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario digital.", agente=user)
+        caption = _sanitize_caption_text(caption)
 
-        # PERSISTENCIA: Guardar en el listado
-        if listado_id_val:
-            from .models import Listado
-            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
-            actualizar_resultados_listado(listado_obj, 'carrusel', {"slides": slides_urls, "caption": caption})
+        if listado_obj:
+            actualizar_resultados_listado(
+                listado_obj,
+                'carrusel',
+                {
+                    "slides": slides_urls,
+                    "caption": caption,
+                    "template_id": template_id,
+                },
+            )
 
         if user.is_authenticated:
             incrementar_uso(user, 'image')
 
         return Response({
             "slides": slides_urls,
-            "caption": caption
+            "caption": caption,
+            "template_id": template_id,
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         crear_notificacion(
@@ -1308,7 +1674,21 @@ def generar_pdf(request):
         from api.ai_services import generar_html_gemini, generar_html_desde_template
         from .models import Listado
 
+        listado_obj = None
+        if listado_id_hint:
+            listado_obj = Listado.objects.filter(id=listado_id_hint, agente=request.user).first()
+
+        template_id = (
+            _extract_template_id_from_payload(data)
+            or _template_id_from_listado(listado_obj)
+            or random.choice(TEMPLATE_IDS)
+        )
+
         context['listado_id'] = listado_id_hint
+        context['template_id'] = template_id
+
+        if listado_obj:
+            _persist_template_id(listado_obj, template_id, source='pdf')
 
         try:
             html_string = generar_html_desde_template(context, request.user)
@@ -1334,21 +1714,19 @@ def generar_pdf(request):
                 )
                 
                 # Persistir la URL en el listado para el historial
-                if listado_id_hint and pdf_url:
-                    try:
-                        listado = Listado.objects.get(id=listado_id_hint)
-                        if not listado.datos_extra: listado.datos_extra = {}
-                        if 'resultados' not in listado.datos_extra: listado.datos_extra['resultados'] = {}
-                        
-                        # Guardamos ambos para que el frontend tenga fallback
-                        listado.datos_extra['resultados']['pdf'] = {
-                            "html": html_string,
-                            "url": pdf_url
-                        }
-                        listado.save()
-                        print(f"[PDF] URL guardada en DB: {pdf_url}")
-                    except Listado.DoesNotExist:
-                        pass
+                if listado_obj and pdf_url:
+                    if not listado_obj.datos_extra:
+                        listado_obj.datos_extra = {}
+                    if 'resultados' not in listado_obj.datos_extra:
+                        listado_obj.datos_extra['resultados'] = {}
+
+                    listado_obj.datos_extra['resultados']['pdf'] = {
+                        "html": html_string,
+                        "url": pdf_url,
+                        "template_id": template_id,
+                    }
+                    listado_obj.save(update_fields=['datos_extra'])
+                    print(f"[PDF] URL guardada en DB: {pdf_url}")
             else:
                 print("[PDF] Error: Playwright devolvió bytes vacíos.")
         except Exception as pdf_err:
@@ -1367,7 +1745,8 @@ def generar_pdf(request):
         return Response({
             "html": html_string,
             "url": pdf_url,
-            "listado_id": listado_id_hint
+            "listado_id": listado_id_hint,
+            "template_id": template_id,
         }, status=status.HTTP_200_OK)
 
     except GeminiQuotaExhaustedError as e:
@@ -1458,44 +1837,32 @@ def generar_imagen_post(request):
         context["portada_url"] = portada_post
         context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
 
-        # Renderizar HTML y luego convertir a imagen PNG con Playwright
-        TEMPLATES_POST = [
-            'renders/post_dubai_night.html',
-            'renders/post_beverly_hills.html',
-            'renders/post_manhattan.html',
-            'renders/post_mediterraneo.html',
-            'renders/post_tech_modern.html',
-        ]
-        template_post = None
-        listado_id_val = data.get('listado_id')
+        listado_id_val = data.get('listado_id') or data.get('listadoId')
+        listado_obj = None
         if listado_id_val:
-            try:
-                from .models import Listado
-                listado = Listado.objects.filter(id=listado_id_val).first()
-                if listado and listado.datos_extra:
-                    template_nombre = listado.datos_extra.get('template', '')
-                    if template_nombre:
-                        template_post = f'renders/post_{template_nombre}.html'
-                        print(f"[POST] Template leído de DB: {template_post}")
-            except Exception as e:
-                print(f"[POST] Error leyendo template: {e}")
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
 
-        if not template_post:
-            import random
-            template_post = random.choice(TEMPLATES_POST)
-            print(f"[POST] Template elegido al azar (fallback): {template_post}")
+        template_id = (
+            _extract_template_id_from_payload(data)
+            or _template_id_from_listado(listado_obj)
+            or random.choice(TEMPLATE_IDS)
+        )
+        template_post = TEMPLATE_POST_MAP.get(template_id, TEMPLATE_POST_MAP['dubai_night'])
+
+        if listado_obj:
+            _persist_template_id(listado_obj, template_id, source='post')
+
         html_content = render_to_string(template_post, context)
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
-        # Generar caption con IA (con fallback)
         prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres, usá hashtags y emojis."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
+        caption = _sanitize_caption_text(caption)
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
             image_stream.seek(0)
-            listado_id_val = data.get('listado_id')
             img_url = AlmacenamientoCloudinary.guardar_post(
                 image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
@@ -1509,11 +1876,16 @@ def generar_imagen_post(request):
                 "mensaje": "No se pudo subir la imagen a la nube. Reintentá en unos segundos."
             }, status=500)
 
-        # PERSISTENCIA: Guardar en el listado
-        if listado_id_val:
-            from .models import Listado
-            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
-            actualizar_resultados_listado(listado_obj, 'post', {"url": img_url, "caption": caption})
+        if listado_obj:
+            actualizar_resultados_listado(
+                listado_obj,
+                'post',
+                {
+                    "url": img_url,
+                    "caption": caption,
+                    "template_id": template_id,
+                },
+            )
 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'image')
@@ -1524,7 +1896,8 @@ def generar_imagen_post(request):
             "url": img_url,
             "public_id": public_id,
             "caption": caption,
-            "texto": caption
+            "texto": caption,
+            "template_id": template_id,
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         from .models import UserAPIQuota
@@ -1579,16 +1952,19 @@ def generar_imagen_story(request):
 
         prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
+        caption = _sanitize_caption_text(caption, max_chars=500)
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
             image_stream.seek(0)
-            listado_id_val = data.get('listado_id')
+            listado_id_val = data.get('listado_id') or data.get('listadoId')
             img_url = AlmacenamientoCloudinary.guardar_story(
                 image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
             if not img_url:
                 raise Exception("Cloudinary no devolvió una URL válida")
+            public_id = img_url
+            img_base64 = None
         except Exception as cloud_err:
             print(f"[Cloudinary] Error crítico subiendo story: {cloud_err}")
             return Response({
@@ -3316,7 +3692,9 @@ def generar_escena(request):
     }
     tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
     narrador = 'firme, directo, con autoridad' if voz == 'masculina' else 'cálido, cercano, invitador'
-    palabras = '25-38' if tipo_video == 'reel' else '50-75'
+    tipo_video_norm = str(tipo_video or '').strip().lower()
+    es_reel = tipo_video_norm in ('reel', 'reel_rapido', 'reel-rapido')
+    palabras = '7-14' if es_reel else '14-24'
     contexto_extra = f"\nEnfoque adicional: {contexto_adicional}" if contexto_adicional else ''
 
     prompt = f"""Sos un copywriter inmobiliario experto.

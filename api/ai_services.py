@@ -41,6 +41,28 @@ TEMPLATE_COLORES = {
     },
 }
 
+TEMPLATE_IDS = tuple(
+    filename.replace('template_', '').replace('.html', '')
+    for filename in TEMPLATE_COLORES.keys()
+)
+
+
+def _normalize_template_id(value):
+    if not value:
+        return None
+    template_id = str(value).strip().lower()
+    template_id = template_id.replace('template_', '').replace('post_', '').replace('.html', '')
+    if template_id in TEMPLATE_IDS:
+        return template_id
+    return None
+
+
+def _template_file_from_id(template_id):
+    normalized = _normalize_template_id(template_id)
+    if not normalized:
+        return None
+    return f'template_{normalized}.html'
+
 def generar_html_desde_template(context, agente):
     """
     Genera HTML usando un template prediseñado.
@@ -50,22 +72,38 @@ def generar_html_desde_template(context, agente):
     print(f"[Template DEBUG] portada_url raw: {repr(context.get('portada_url', 'NO EXISTE'))}")
     print(f"[Template DEBUG] portadaUrl raw: {repr(context.get('portadaUrl', 'NO EXISTE'))}")
     
-    # 1. Elegir template al azar (siempre aleatorio al regenerar)
-    templates = list(TEMPLATE_COLORES.keys())
-    template_elegido = random.choice(templates)  # siempre aleatorio al regenerar
+    # 1. Resolver template con prioridad: payload/contexto -> DB -> aleatorio
+    template_id = _normalize_template_id(context.get('template_id'))
+    template_elegido = _template_file_from_id(template_id)
 
-    # Guardar template en DB para persistencia
     listado_id = context.get('listado_id')
+    listado = None
+
     if listado_id:
         try:
             from .models import Listado
             listado = Listado.objects.filter(id=listado_id).first()
-            if listado:
+            if listado and not template_elegido:
                 datos = listado.datos_extra or {}
-                datos['template'] = template_elegido.replace('.html', '').replace('template_', '')
-                listado.datos_extra = datos
-                listado.save(update_fields=['datos_extra'])
-                print(f"[Template] Guardado template en DB: {datos['template']}")
+                template_id_db = _normalize_template_id(datos.get('template_id') or datos.get('template'))
+                template_elegido = _template_file_from_id(template_id_db)
+        except Exception as e:
+            print(f"[Template] Error leyendo template en DB: {e}")
+
+    if not template_elegido:
+        template_elegido = random.choice(list(TEMPLATE_COLORES.keys()))
+
+    template_id = template_elegido.replace('template_', '').replace('.html', '')
+    context['template_id'] = template_id
+
+    if listado:
+        try:
+            datos = listado.datos_extra or {}
+            datos['template_id'] = template_id
+            datos['template'] = template_id
+            listado.datos_extra = datos
+            listado.save(update_fields=['datos_extra'])
+            print(f"[Template] Guardado template en DB: {template_id}")
         except Exception as e:
             print(f"[Template] Error guardando template: {e}")
     
