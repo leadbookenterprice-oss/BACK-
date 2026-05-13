@@ -69,7 +69,7 @@ body { width: 1080px; height: 1350px; background: #f5f5f3; font-family: 'Oswald'
   </div>
 </div>
 <div class="watermark-strip">
-  <img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+  {% if leadbook_logo_url %}<img src="{{ leadbook_logo_url }}" alt="LeadBook">{% else %}<img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">{% endif %}
   <span>Generado con LeadBook</span>
 </div>
 </body>

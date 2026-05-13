@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ asunto }}</title>
+</head>
+<body style="margin:0;padding:0;background:#070707;color:#f5f3ee;font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#070707;padding:28px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="620" cellpadding="0" cellspacing="0" border="0" style="width:620px;max-width:620px;background:#0f0f0f;border:1px solid #1d1d1d;">
+          <tr>
+            <td style="padding:28px 34px;background:#0a0a0a;border-bottom:1px solid rgba(201,168,76,0.35);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="left" valign="middle">
+                    {% if logo_url %}
+                      <img src="{{ logo_url }}" alt="{{ agenciaNombre|default:'Agencia' }}" width="150" style="display:block;max-width:150px;height:auto;">
+                    {% else %}
+                      <div style="font-family:'Playfair Display',Georgia,serif;font-size:24px;letter-spacing:3px;color:#c9a84c;text-transform:uppercase;">{{ agenciaNombre|default:'Agencia' }}</div>
+                    {% endif %}
+                  </td>
+                  <td align="right" valign="middle">
+                    <span style="display:inline-block;padding:8px 14px;background:#c9a84c;color:#111;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:600;">{{ operacion }}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:34px 34px 12px 34px;">
+              <div style="font-size:11px;letter-spacing:3px;color:#c9a84c;text-transform:uppercase;margin-bottom:10px;">Propiedad destacada</div>
+              <h1 style="margin:0;font-family:'Playfair Display',Georgia,serif;font-size:40px;line-height:1.08;font-weight:700;color:#f5f3ee;">{{ tipoPropiedad }}<br><span style="color:#c9a84c;">{{ ciudad }}</span></h1>
+            </td>
+          </tr>
+
+          {% if portada_url %}
+          <tr>
+            <td style="padding:18px 34px 0 34px;">
+              <img src="{{ portada_url }}" alt="Imagen de la propiedad" width="552" style="display:block;width:100%;height:auto;max-height:320px;object-fit:cover;border:1px solid #2a2a2a;">
+            </td>
+          </tr>
+          {% endif %}
+
+          <tr>
+            <td style="padding:30px 34px 22px 34px;">
+              <div style="font-size:15px;line-height:1.8;color:#ddd7cb;">{{ html_content|safe }}</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 34px 26px 34px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#111;border:1px solid #252525;">
+                <tr>
+                  <td style="padding:18px 20px;border-right:1px solid #252525;" width="50%">
+                    <div style="font-size:10px;letter-spacing:2px;color:#8d8d8d;text-transform:uppercase;margin-bottom:5px;">Precio</div>
+                    <div style="font-family:'Playfair Display',Georgia,serif;font-size:30px;color:#c9a84c;font-weight:700;">{{ moneda }} {{ precio }}</div>
+                  </td>
+                  <td style="padding:18px 20px;" width="50%">
+                    <div style="font-size:10px;letter-spacing:2px;color:#8d8d8d;text-transform:uppercase;margin-bottom:5px;">Operacion</div>
+                    <div style="font-size:18px;color:#f5f3ee;font-weight:600;text-transform:uppercase;">{{ operacion }}</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 34px 34px 34px;">
+              <div style="padding-top:20px;border-top:1px solid #252525;color:#b8b3a8;font-size:13px;line-height:1.6;">
+                <strong style="color:#f5f3ee;font-size:14px;">{{ agenteNombre|default:'Asesor Comercial' }}</strong><br>
+                {{ agenciaNombre|default:'' }}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

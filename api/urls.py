@@ -14,7 +14,7 @@ from .views import (
     amenidades_presets, recuperar_password, confirmar_recuperacion,
     publicar_redes_sociales, proxy_pdf_view, proxy_pdf_thumbnail_view,
     generar_html, generar_escena, CustomTokenObtainPairView,
-    upload_fotos_listado
+    upload_fotos_listado, templates_catalog
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -66,6 +66,7 @@ urlpatterns = [
     path('generar-imagen-post/', generar_imagen_post, name='generar_imagen_post'),
     path('generar-imagen-story/', generar_imagen_story, name='generar_imagen_story'),
     path('generar-email/', generar_email, name='generar_email'),
+    path('templates-catalog/', templates_catalog, name='templates_catalog'),
     path('publicar-instagram/', publicar_instagram, name='publicar_instagram'),
     path('publicar-redes/', publicar_redes_sociales, name='publicar_redes_sociales'),
     path('pdf/<str:uuid_str>/', serve_pdf_file, name='serve_pdf'),

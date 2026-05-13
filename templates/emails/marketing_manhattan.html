@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ asunto }}</title>
+</head>
+<body style="margin:0;padding:0;background:#0f0f0f;color:#f4f4f4;font-family:'Source Sans 3','Helvetica Neue',Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0f0f0f;padding:28px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="620" cellpadding="0" cellspacing="0" border="0" style="width:620px;max-width:620px;background:#161616;border:1px solid #2a2a2a;">
+          <tr>
+            <td style="padding:28px 34px;background:#111;border-bottom:1px solid rgba(230,57,70,0.45);">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="left" valign="middle">
+                    {% if logo_url %}
+                      <img src="{{ logo_url }}" alt="{{ agenciaNombre|default:'Agencia' }}" width="150" style="display:block;max-width:150px;height:auto;filter:brightness(0) invert(1);">
+                    {% else %}
+                      <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:23px;letter-spacing:4px;color:#ffffff;text-transform:uppercase;">{{ agenciaNombre|default:'Agencia' }}</div>
+                    {% endif %}
+                  </td>
+                  <td align="right" valign="middle">
+                    <span style="display:inline-block;padding:8px 14px;background:#e63946;color:#ffffff;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;">{{ operacion }}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:32px 34px 14px 34px;">
+              <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:11px;letter-spacing:4px;color:#e63946;text-transform:uppercase;margin-bottom:10px;">Nueva oportunidad</div>
+              <h1 style="margin:0;font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:44px;line-height:1;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#f4f4f4;">{{ tipoPropiedad }}<br><span style="color:#e63946;">{{ ciudad }}</span></h1>
+            </td>
+          </tr>
+
+          {% if portada_url %}
+          <tr>
+            <td style="padding:14px 34px 0 34px;">
+              <img src="{{ portada_url }}" alt="Imagen de la propiedad" width="552" style="display:block;width:100%;height:auto;max-height:320px;object-fit:cover;border:1px solid #2d2d2d;">
+            </td>
+          </tr>
+          {% endif %}
+
+          <tr>
+            <td style="padding:30px 34px 22px 34px;">
+              <div style="font-size:15px;line-height:1.78;color:#dbdbdb;">{{ html_content|safe }}</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 34px 26px 34px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#111;border:1px solid #2a2a2a;">
+                <tr>
+                  <td style="padding:18px 20px;border-right:1px solid #2a2a2a;" width="50%">
+                    <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:10px;letter-spacing:3px;color:#9b9b9b;text-transform:uppercase;margin-bottom:5px;">Precio</div>
+                    <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:31px;color:#e63946;font-weight:700;">{{ moneda }} {{ precio }}</div>
+                  </td>
+                  <td style="padding:18px 20px;" width="50%">
+                    <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:10px;letter-spacing:3px;color:#9b9b9b;text-transform:uppercase;margin-bottom:5px;">Operacion</div>
+                    <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:18px;color:#f4f4f4;font-weight:600;text-transform:uppercase;">{{ operacion }}</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 34px 34px 34px;">
+              <div style="padding-top:20px;border-top:1px solid #2a2a2a;color:#afafaf;font-size:13px;line-height:1.6;">
+                <strong style="color:#f4f4f4;font-size:14px;">{{ agenteNombre|default:'Asesor Comercial' }}</strong><br>
+                {{ agenciaNombre|default:'' }}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

@@ -57,6 +57,89 @@ TEMPLATE_IDS = (
     'tech_modern',
 )
 
+TEMPLATE_CATALOG = {
+    'dubai_night': {
+        'name': 'Dubai Night',
+        'description': 'Lujo nocturno con contraste alto y acento dorado.',
+        'colors': {
+            'primary': '#1a0a2e',
+            'secondary': '#2d1b4e',
+            'accent': '#c9a84c',
+            'background': '#080808',
+            'text': '#f5f3ee',
+        },
+        'fonts': {
+            'display': 'Playfair Display / Bebas Neue',
+            'body': 'Inter / DM Sans',
+            'mono': 'Space Mono',
+        },
+    },
+    'beverly_hills': {
+        'name': 'Beverly Hills',
+        'description': 'Editorial elegante, limpio y sofisticado.',
+        'colors': {
+            'primary': '#2c3e50',
+            'secondary': '#34495e',
+            'accent': '#e8c547',
+            'background': '#fafaf8',
+            'text': '#20242a',
+        },
+        'fonts': {
+            'display': 'Cormorant Garamond',
+            'body': 'DM Sans',
+            'mono': 'DM Sans',
+        },
+    },
+    'manhattan': {
+        'name': 'Manhattan',
+        'description': 'Urbano industrial, fuerte y de alto impacto.',
+        'colors': {
+            'primary': '#111111',
+            'secondary': '#1a1a1a',
+            'accent': '#e63946',
+            'background': '#101010',
+            'text': '#f3f3f3',
+        },
+        'fonts': {
+            'display': 'Oswald',
+            'body': 'Source Sans 3 / Source Serif 4',
+            'mono': 'Oswald',
+        },
+    },
+    'mediterraneo': {
+        'name': 'Mediterraneo',
+        'description': 'Calido, residencial y organico con tonos tierra.',
+        'colors': {
+            'primary': '#6b4423',
+            'secondary': '#8b5e3c',
+            'accent': '#c17f3a',
+            'background': '#f8f4ef',
+            'text': '#2c2416',
+        },
+        'fonts': {
+            'display': 'Libre Baskerville',
+            'body': 'Lato',
+            'mono': 'Lato',
+        },
+    },
+    'tech_modern': {
+        'name': 'Tech Modern',
+        'description': 'Estetica digital premium con acento neon.',
+        'colors': {
+            'primary': '#0d47a1',
+            'secondary': '#1565c0',
+            'accent': '#00e5ff',
+            'background': '#081421',
+            'text': '#e8f3ff',
+        },
+        'fonts': {
+            'display': 'Space Grotesk',
+            'body': 'Space Grotesk',
+            'mono': 'Space Mono',
+        },
+    },
+}
+
 TEMPLATE_POST_MAP = {
     template_id: f'renders/post_{template_id}.html'
     for template_id in TEMPLATE_IDS
@@ -72,12 +155,46 @@ TEMPLATE_CAROUSEL_MAP = {
     for template_id in TEMPLATE_IDS
 }
 
+TEMPLATE_EMAIL_MAP = {
+    template_id: f'emails/marketing_{template_id}.html'
+    for template_id in TEMPLATE_IDS
+}
+
+
+def _template_catalog_payload():
+    items = []
+    for template_id in TEMPLATE_IDS:
+        meta = TEMPLATE_CATALOG.get(template_id, {})
+        items.append({
+            'id': template_id,
+            'name': meta.get('name', template_id.replace('_', ' ').title()),
+            'description': meta.get('description', ''),
+            'colors': meta.get('colors', {}),
+            'fonts': meta.get('fonts', {}),
+        })
+    return {'templates': items}
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def templates_catalog(request):
+    return Response(_template_catalog_payload(), status=status.HTTP_200_OK)
+
 
 def _normalize_template_id(value):
     if not value:
         return None
     template_id = str(value).strip().lower()
-    template_id = template_id.replace('template_', '').replace('post_', '').replace('.html', '')
+    template_id = (
+        template_id
+        .replace('template_', '')
+        .replace('post_', '')
+        .replace('story_', '')
+        .replace('carousel_', '')
+        .replace('carrusel_', '')
+        .replace('email_', '')
+        .replace('.html', '')
+    )
     if template_id in TEMPLATE_IDS:
         return template_id
     return None
@@ -279,19 +396,36 @@ def _fallback_caption_text(data, formato='post'):
     operacion = str(data.get('operacion') or 'venta').strip().lower()
     moneda = str(data.get('moneda') or 'USD').strip()
     precio = str(data.get('precio') or '').strip()
+    recamaras = str(data.get('recamaras') or '').strip()
+    banos = str(data.get('banos') or '').strip()
+    superficie = str(data.get('superficieCubierta') or data.get('superficieTotal') or '').strip()
+
+    detalles = []
+    if recamaras:
+        detalles.append(f"{recamaras} recamaras")
+    if banos:
+        detalles.append(f"{banos} banos")
+    if superficie:
+        detalles.append(f"{superficie} m2")
+    specs = ', '.join(detalles) if detalles else 'excelente distribucion'
 
     if formato == 'story':
-        return f"{tipo} en {ciudad}. {operacion.title()} {moneda} {precio}. Escribinos para visitar hoy."
+        return (
+            f"{tipo} en {ciudad}. {operacion.title()} por {moneda} {precio}. "
+            f"Con {specs}, esta opcion destaca por ubicacion, estilo y potencial de valorizacion. "
+            "Si queres fotos, ficha completa y coordinar visita, escribinos ahora y te asesoramos en minutos."
+        )
     if formato == 'carrusel':
         return (
-            f"{tipo} en {ciudad}: una oportunidad real para {operacion}. "
-            f"Precio {moneda} {precio}. Contactanos para coordinar visita. "
-            "#RealEstate #Inmobiliaria"
+            f"{tipo} en {ciudad}: una oportunidad real para {operacion} con propuesta premium y excelente ubicacion. "
+            f"Precio publicado: {moneda} {precio}. La propiedad ofrece {specs}, ambientes luminosos y funcionales para vivir o invertir. "
+            "Escribinos para enviarte toda la informacion y coordinar visita. #RealEstate #Inmobiliaria #Inversion"
         )
     return (
-        f"{tipo} en {ciudad} en {operacion}. "
-        f"Valor {moneda} {precio}. Contactanos para mas informacion y visita. "
-        "#RealEstate #Inmobiliaria"
+        f"{tipo} en {ciudad} en {operacion}, pensada para quienes buscan ubicacion, calidad y rentabilidad. "
+        f"Precio de referencia: {moneda} {precio}. Con {specs}, esta propiedad combina diseno, comodidad y una excelente proyeccion de valor. "
+        "Contactanos para recibir la ficha completa, resolver dudas y coordinar visita personalizada. "
+        "#RealEstate #Inmobiliaria #Propiedades #Inversion"
     )
 
 
@@ -321,6 +455,54 @@ def _fallback_descripcion_pdf(data):
         f"Una opcion destacada para quienes buscan una decision segura en {ciudad}. "
         "Coordina una visita para conocer cada detalle de forma presencial."
     )
+
+
+def _get_leadbook_logo_data_url():
+    logo_path = os.path.join(os.path.dirname(__file__), 'leadbook_logo.png')
+    try:
+        with open(logo_path, 'rb') as f:
+            logo_b64 = base64.b64encode(f.read()).decode('utf-8')
+        return f"data:image/png;base64,{logo_b64}"
+    except Exception:
+        return ''
+
+
+def _ensure_caption_length(text, data, formato='post'):
+    caption = str(text or '').strip()
+    min_chars_map = {'post': 380, 'story': 190, 'carrusel': 320}
+    max_chars_map = {'post': 2200, 'story': 500, 'carrusel': 2200}
+
+    min_chars = min_chars_map.get(formato, 120)
+    max_chars = max_chars_map.get(formato, 2200)
+
+    if not caption:
+        caption = _fallback_caption_text(data, formato=formato)
+
+    if len(caption) < min_chars:
+        tipo = str(data.get('tipoPropiedad') or 'propiedad').strip()
+        ciudad = str(data.get('ciudad') or '').strip()
+        moneda = str(data.get('moneda') or 'USD').strip()
+        precio = str(data.get('precio') or '').strip()
+        extension_blocks = [
+            (
+                f"Si buscas una opcion premium en {ciudad}, esta {tipo.lower()} combina ubicacion, valor y potencial. "
+                f"Valor de referencia: {moneda} {precio}."
+            ),
+            "Te compartimos fotos, distribucion, detalles clave y comparativa de zona para ayudarte a decidir con claridad.",
+            "Escribinos hoy para recibir la ficha completa y coordinar una visita personalizada.",
+            "#RealEstate #Inmobiliaria #Propiedades #Inversion",
+        ]
+
+        for block in extension_blocks:
+            if len(caption) >= min_chars:
+                break
+            separator = "\n\n" if caption else ""
+            caption = f"{caption}{separator}{block}".strip()
+
+    if len(caption) > max_chars:
+        caption = caption[:max_chars].rstrip()
+
+    return caption
 
 LIMITES_PLAN = {
     'free':     {'listados_mes': 10},
@@ -1201,8 +1383,7 @@ def generar_carrusel(request):
         prompt_text = f"Escribí un caption para un carrusel de Instagram de una propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Enfocado en vender el estilo de vida y llamar a la acción. Usá emojis y hashtags."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario digital.", agente=user)
         caption = _sanitize_caption_text(caption)
-        if not caption:
-            caption = _fallback_caption_text(data, formato='carrusel')
+        caption = _ensure_caption_length(caption, data, formato='carrusel')
 
         if listado_obj:
             actualizar_resultados_listado(
@@ -1900,6 +2081,7 @@ def generar_imagen_post(request):
             "agente_nombre": data.get('agenteNombre', ''),
             "agente_telefono": data.get('agenteTelefono', ''),
             "agencia_nombre": data.get('agenciaNombre', '') or data.get('agencia_nombre', ''),
+            "leadbook_logo_url": _get_leadbook_logo_data_url(),
             "qr_url": generar_qr_url(
                 telefono=data.get('agenteTelefono', ''),
                 tipo_propiedad=data.get('tipoPropiedad', ''),
@@ -1940,8 +2122,7 @@ def generar_imagen_post(request):
         prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres, usá hashtags y emojis."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
         caption = _sanitize_caption_text(caption)
-        if not caption:
-            caption = _fallback_caption_text(data, formato='post')
+        caption = _ensure_caption_length(caption, data, formato='post')
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
@@ -2029,9 +2210,12 @@ def generar_imagen_story(request):
         if listado_obj:
             _persist_template_id(listado_obj, template_id, source='story')
 
+        images_pool = _collect_property_images(data)
+        story_cover = images_pool[0] if images_pool else _resolve_cloudinary_asset_url(data.get('portadaUrl'))
+
         # Preparar contexto para la plantilla premium
         context = {
-            "portada_url": data.get('portadaUrl'),
+            "portada_url": story_cover,
             "operacion": data.get('operacion', 'Venta'),
             "tipoPropiedad": data.get('tipoPropiedad', 'Propiedad'),
             "ciudad": data.get('ciudad', ''),
@@ -2054,8 +2238,7 @@ def generar_imagen_story(request):
         prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido."
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
         caption = _sanitize_caption_text(caption, max_chars=500)
-        if not caption:
-            caption = _fallback_caption_text(data, formato='story')[:500]
+        caption = _ensure_caption_length(caption, data, formato='story')
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
@@ -2118,6 +2301,21 @@ def generar_email(request):
         #     }, status=status.HTTP_403_FORBIDDEN)
             
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        listado_id_val = data.get('listado_id') or data.get('listadoId')
+
+        listado_obj = None
+        if listado_id_val:
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+
+        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        template_email = TEMPLATE_EMAIL_MAP.get(template_id, TEMPLATE_EMAIL_MAP['dubai_night'])
+
+        if listado_obj:
+            _persist_template_id(listado_obj, template_id, source='email')
+
+        images_pool = _collect_property_images(data)
+        email_cover = images_pool[0] if images_pool else _resolve_cloudinary_asset_url(data.get('portadaUrl'))
+        template_meta = TEMPLATE_CATALOG.get(template_id, {})
         
         prompt_text = f"""
 Redacta el cuerpo de un email profesional para ofrecer esta propiedad a un cliente interesado.
@@ -2157,7 +2355,7 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'ai')
 
-        # Inyectar en plantilla premium para que no sea solo texto pelado
+        # Inyectar en plantilla premium para consistencia visual total
         context = {
             "asunto": parsed.get("asunto", "Propiedad destacada"),
             "tipoPropiedad": data.get('tipoPropiedad', 'Propiedad'),
@@ -2167,18 +2365,21 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             "operacion": data.get('operacion', 'Venta'),
             "agenteNombre": data.get('agenteNombre') or getattr(request.user, 'first_name', '') or getattr(request.user, 'nombre', '') or request.user.email,
             "agenciaNombre": data.get('agenciaNombre', ''),
-            "portada_url": data.get('portadaUrl'),
+            "portada_url": email_cover,
             "logo_url": data.get('logoAgenciaUrl'),
-            "html_content": parsed.get("html", "")
+            "html_content": parsed.get("html", ""),
+            "template_id": template_id,
+            "template_name": template_meta.get('name', ''),
+            "color_primary": (template_meta.get('colors') or {}).get('primary', '#111111'),
+            "color_secondary": (template_meta.get('colors') or {}).get('secondary', '#222222'),
+            "color_accent": (template_meta.get('colors') or {}).get('accent', '#c9a84c'),
         }
-        premium_html = render_to_string('emails/marketing.html', context)
+        premium_html = render_to_string(template_email, context)
         parsed["html"] = premium_html
+        parsed["template_id"] = template_id
         
         # PERSISTENCIA: Guardar en el listado
-        listado_id_val = data.get('listado_id') or data.get('listadoId')
-        if listado_id_val:
-            from .models import Listado
-            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+        if listado_obj:
             actualizar_resultados_listado(listado_obj, 'email', parsed)
             
         return Response(parsed, status=status.HTTP_200_OK)
