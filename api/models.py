@@ -8,6 +8,7 @@ from django.db import models, transaction
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.utils import timezone
+from django.utils.text import slugify
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -185,6 +186,128 @@ class ComercialAgentProfile(models.Model):
         return f"{self.nombre} ({self.owner_id})"
 
 
+def default_template_tokens():
+    return {
+        'schema_version': 1,
+        'palette': {
+            'primary': '#0d47a1',
+            'secondary': '#1565c0',
+            'accent': '#00e5ff',
+            'background': '#081421',
+            'text': '#e8f3ff',
+        },
+        'typography': {
+            'display': 'Space Grotesk',
+            'body': 'DM Sans',
+            'mono': 'Space Mono',
+            'google_fonts': ['Space Grotesk', 'DM Sans', 'Space Mono'],
+        },
+        'emoji': {
+            'headline': '✨',
+            'price': '💰',
+            'location': '📍',
+            'cta': '📲',
+        },
+        'copy': {
+            'tone': 'premium',
+            'emoji_density': 'low',
+            'cta_style': 'whatsapp_direct',
+        },
+        'layout': {
+            'logo_position': 'top_right',
+            'agent_block_position': 'bottom_left',
+            'qr_position': 'bottom_right',
+        },
+    }
+
+
+class BrandTemplate(models.Model):
+    BASE_TEMPLATE_CHOICES = [
+        ('dubai_night', 'Dubai Night'),
+        ('beverly_hills', 'Beverly Hills'),
+        ('manhattan', 'Manhattan'),
+        ('mediterraneo', 'Mediterraneo'),
+        ('tech_modern', 'Tech Modern'),
+    ]
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='brand_templates')
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=140)
+    description = models.TextField(blank=True, null=True)
+    base_template_id = models.CharField(max_length=40, choices=BASE_TEMPLATE_CHOICES, default='tech_modern')
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-is_default', '-updated_at']
+        constraints = [
+            models.UniqueConstraint(fields=['owner', 'slug'], name='unique_brand_template_slug_per_owner'),
+            models.UniqueConstraint(
+                fields=['owner'],
+                condition=models.Q(is_default=True, is_active=True),
+                name='unique_default_brand_template_per_owner',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['owner', 'is_active']),
+            models.Index(fields=['owner', 'is_default']),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.slug = slugify(self.slug or self.name or '')[:140] or f'template-{self.owner_id or "owner"}'
+
+        if self.is_default and self.owner_id:
+            BrandTemplate.objects.filter(
+                owner_id=self.owner_id,
+                is_default=True,
+                is_active=True,
+            ).exclude(pk=self.pk).update(is_default=False)
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name} ({self.owner_id})"
+
+
+class BrandTemplateRevision(models.Model):
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('published', 'Published'),
+        ('archived', 'Archived'),
+    ]
+
+    template = models.ForeignKey(BrandTemplate, on_delete=models.CASCADE, related_name='revisions')
+    revision = models.IntegerField()
+    tokens_json = models.JSONField(default=default_template_tokens)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    created_by = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='template_revisions_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-revision']
+        constraints = [
+            models.UniqueConstraint(fields=['template', 'revision'], name='unique_template_revision_number'),
+            models.UniqueConstraint(
+                fields=['template'],
+                condition=models.Q(status='published'),
+                name='unique_published_revision_per_template',
+            ),
+        ]
+        indexes = [models.Index(fields=['template', 'status'])]
+
+    def save(self, *args, **kwargs):
+        if not self.revision:
+            last = BrandTemplateRevision.objects.filter(template_id=self.template_id).order_by('-revision').first()
+            self.revision = (last.revision if last else 0) + 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.template_id} r{self.revision}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PLANES Y SUSCRIPCIONES
 # ══════════════════════════════════════════════════════════════════════════════
@@ -283,6 +406,8 @@ class Listado(models.Model):
     video_url        = models.URLField(max_length=500, null=True, blank=True)
     video_status     = models.CharField(max_length=50, default='none')
     videos_creados   = models.IntegerField(default=0)
+    brand_template   = models.ForeignKey('BrandTemplate', on_delete=models.SET_NULL, null=True, blank=True, related_name='listados')
+    brand_template_revision = models.ForeignKey('BrandTemplateRevision', on_delete=models.SET_NULL, null=True, blank=True, related_name='listados')
 
     # Datos adicionales no estructurados
     datos_extra      = models.JSONField(default=dict, blank=True)

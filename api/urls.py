@@ -17,6 +17,9 @@ from .views import (
     upload_fotos_listado, templates_catalog,
     export_listado_zip, commercial_agents_collection,
     commercial_agent_detail, commercial_agent_set_default,
+    brand_templates_collection, brand_template_detail,
+    brand_template_set_default, brand_template_revisions_collection,
+    brand_template_publish_revision,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -45,6 +48,11 @@ urlpatterns = [
     path('auth/agentes-comerciales/', commercial_agents_collection, name='commercial_agents_collection'),
     path('auth/agentes-comerciales/<int:agent_id>/', commercial_agent_detail, name='commercial_agent_detail'),
     path('auth/agentes-comerciales/<int:agent_id>/set-default/', commercial_agent_set_default, name='commercial_agent_set_default'),
+    path('auth/templates/', brand_templates_collection, name='brand_templates_collection'),
+    path('auth/templates/<int:template_id>/', brand_template_detail, name='brand_template_detail'),
+    path('auth/templates/<int:template_id>/set-default/', brand_template_set_default, name='brand_template_set_default'),
+    path('auth/templates/<int:template_id>/revisions/', brand_template_revisions_collection, name='brand_template_revisions_collection'),
+    path('auth/templates/<int:template_id>/publish/<int:revision_id>/', brand_template_publish_revision, name='brand_template_publish_revision'),
     path('auth/send-otp/', send_otp, name='auth_send_otp'),
     path('auth/verify-otp/', verify_otp, name='auth_verify_otp'),
     path('auth/plan-status/', plan_status, name='plan_status'),

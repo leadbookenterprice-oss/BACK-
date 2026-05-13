@@ -24,13 +24,15 @@ logger = logging.getLogger(__name__)
 
 from .models import (
     GeneratedAsset, Listado, OTPCode, ComercialAgentProfile,
+    BrandTemplate, BrandTemplateRevision, default_template_tokens,
     AgentAssociation,
     TerminosCondiciones, PoliticaPrivacidad
 )
 from .serializers import (
     RegisterSerializer, GeneratedAssetSerializer,
     TerminosCondicionesSerializer, PoliticaPrivacidadSerializer,
-    ComercialAgentProfileSerializer,
+    ComercialAgentProfileSerializer, BrandTemplateSerializer,
+    BrandTemplateRevisionSerializer,
 )
 from .tasks import run_asset_generation
 from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError
@@ -167,24 +169,67 @@ TEMPLATE_EMAIL_MAP = {
 }
 
 
-def _template_catalog_payload():
-    items = []
+SYSTEM_FONT_IMPORT_MAP = {
+    'Playfair Display': 'Playfair Display',
+    'Bebas Neue': 'Bebas Neue',
+    'Inter': 'Inter',
+    'DM Sans': 'DM Sans',
+    'Space Mono': 'Space Mono',
+    'Cormorant Garamond': 'Cormorant Garamond',
+    'Oswald': 'Oswald',
+    'Source Sans 3': 'Source Sans 3',
+    'Source Serif 4': 'Source Serif 4',
+    'Libre Baskerville': 'Libre Baskerville',
+    'Lato': 'Lato',
+    'Space Grotesk': 'Space Grotesk',
+}
+
+
+def _template_catalog_payload(user=None):
+    system_items = []
     for template_id in TEMPLATE_IDS:
         meta = TEMPLATE_CATALOG.get(template_id, {})
-        items.append({
+        system_items.append({
             'id': template_id,
+            'type': 'system',
             'name': meta.get('name', template_id.replace('_', ' ').title()),
             'description': meta.get('description', ''),
             'colors': meta.get('colors', {}),
             'fonts': meta.get('fonts', {}),
+            'base_template_id': template_id,
+            'brand_template_id': None,
         })
-    return {'templates': items}
+
+    custom_items = []
+    if user and getattr(user, 'id', None):
+        templates = BrandTemplate.objects.filter(owner=user, is_active=True).order_by('-is_default', '-updated_at')
+        for tpl in templates:
+            published = tpl.revisions.filter(status='published').order_by('-revision').first()
+            tokens = published.tokens_json if published and isinstance(published.tokens_json, dict) else default_template_tokens()
+            custom_items.append({
+                'id': f'custom:{tpl.id}',
+                'type': 'custom',
+                'name': tpl.name,
+                'description': tpl.description or f"Basado en {tpl.base_template_id.replace('_', ' ').title()}",
+                'colors': (tokens.get('palette') or {}),
+                'fonts': (tokens.get('typography') or {}),
+                'base_template_id': tpl.base_template_id,
+                'brand_template_id': tpl.id,
+                'is_default': tpl.is_default,
+                'published_revision': published.revision if published else None,
+            })
+
+    return {
+        'templates': custom_items + system_items,
+        'custom_templates': custom_items,
+        'system_templates': system_items,
+    }
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def templates_catalog(request):
-    return Response(_template_catalog_payload(), status=status.HTTP_200_OK)
+    return Response(_template_catalog_payload(request.user), status=status.HTTP_200_OK)
 
 
 def _normalize_template_id(value):
@@ -206,6 +251,37 @@ def _normalize_template_id(value):
     return None
 
 
+def _parse_brand_template_id(value):
+    if value in (None, ''):
+        return None
+
+    raw = str(value).strip()
+    if raw.startswith('custom:'):
+        raw = raw.split(':', 1)[1]
+    elif raw.startswith('custom-'):
+        raw = raw.split('-', 1)[1]
+
+    try:
+        parsed = int(raw)
+        return parsed if parsed > 0 else None
+    except Exception:
+        return None
+
+
+def _extract_brand_template_id_from_payload(data):
+    if not isinstance(data, dict):
+        return None
+
+    direct = _parse_brand_template_id(
+        data.get('brand_template_id')
+        or data.get('brandTemplateId')
+    )
+    if direct:
+        return direct
+
+    return _parse_brand_template_id(data.get('template_id') or data.get('templateId') or data.get('template'))
+
+
 def _extract_template_id_from_payload(data):
     if not isinstance(data, dict):
         return None
@@ -223,6 +299,67 @@ def _template_id_from_listado(listado):
         listado.datos_extra.get('template_id')
         or listado.datos_extra.get('template')
     )
+
+
+def _build_font_import_url(typography):
+    if not isinstance(typography, dict):
+        return ''
+    fonts = typography.get('google_fonts') if isinstance(typography.get('google_fonts'), list) else []
+    clean = []
+    for font in fonts:
+        mapped = SYSTEM_FONT_IMPORT_MAP.get(font)
+        if mapped and mapped not in clean:
+            clean.append(mapped)
+    if not clean:
+        return ''
+    parts = [f"family={font.replace(' ', '+')}:wght@400;500;700" for font in clean]
+    return f"https://fonts.googleapis.com/css2?{'&'.join(parts)}&display=swap"
+
+
+def _resolve_brand_template_tokens(tokens):
+    source = tokens if isinstance(tokens, dict) else default_template_tokens()
+    fallback = default_template_tokens()
+
+    palette = source.get('palette') if isinstance(source.get('palette'), dict) else {}
+    typography = source.get('typography') if isinstance(source.get('typography'), dict) else {}
+    emoji = source.get('emoji') if isinstance(source.get('emoji'), dict) else {}
+    copy = source.get('copy') if isinstance(source.get('copy'), dict) else {}
+    layout = source.get('layout') if isinstance(source.get('layout'), dict) else {}
+
+    merged = {
+        'schema_version': 1,
+        'palette': {
+            'primary': palette.get('primary') or fallback['palette']['primary'],
+            'secondary': palette.get('secondary') or fallback['palette']['secondary'],
+            'accent': palette.get('accent') or fallback['palette']['accent'],
+            'background': palette.get('background') or fallback['palette']['background'],
+            'text': palette.get('text') or fallback['palette']['text'],
+        },
+        'typography': {
+            'display': typography.get('display') or fallback['typography']['display'],
+            'body': typography.get('body') or fallback['typography']['body'],
+            'mono': typography.get('mono') or fallback['typography']['mono'],
+            'google_fonts': typography.get('google_fonts') or fallback['typography']['google_fonts'],
+        },
+        'emoji': {
+            'headline': emoji.get('headline') or fallback['emoji']['headline'],
+            'price': emoji.get('price') or fallback['emoji']['price'],
+            'location': emoji.get('location') or fallback['emoji']['location'],
+            'cta': emoji.get('cta') or fallback['emoji']['cta'],
+        },
+        'copy': {
+            'tone': copy.get('tone') or fallback['copy']['tone'],
+            'emoji_density': copy.get('emoji_density') or fallback['copy']['emoji_density'],
+            'cta_style': copy.get('cta_style') or fallback['copy']['cta_style'],
+        },
+        'layout': {
+            'logo_position': layout.get('logo_position') or fallback['layout']['logo_position'],
+            'agent_block_position': layout.get('agent_block_position') or fallback['layout']['agent_block_position'],
+            'qr_position': layout.get('qr_position') or fallback['layout']['qr_position'],
+        },
+    }
+    merged['typography']['font_import_url'] = _build_font_import_url(merged['typography'])
+    return merged
 
 
 def _persist_template_id(listado, template_id, source=''):
@@ -265,22 +402,144 @@ def _deterministic_template_id(seed_value):
     return TEMPLATE_IDS[seed_int % len(TEMPLATE_IDS)]
 
 
-def _select_template_id(data, listado_obj=None, listado_id_hint=None):
-    payload_template = _extract_template_id_from_payload(data)
-    if payload_template:
-        return payload_template
+def _get_default_brand_template(user):
+    if not user or not getattr(user, 'id', None):
+        return None
+    return BrandTemplate.objects.filter(owner=user, is_active=True, is_default=True).first()
 
-    listado_template = _template_id_from_listado(listado_obj)
-    if listado_template:
-        return listado_template
 
-    if listado_id_hint:
-        return _deterministic_template_id(listado_id_hint)
+def _resolve_template_selection(data, user, listado_obj=None, listado_id_hint=None):
+    payload_brand_template_id = _extract_brand_template_id_from_payload(data)
+    payload_template_id = _extract_template_id_from_payload(data)
 
-    if listado_obj and getattr(listado_obj, 'id', None):
-        return _deterministic_template_id(listado_obj.id)
+    brand_template = None
+    if payload_brand_template_id:
+        brand_template = BrandTemplate.objects.filter(
+            id=payload_brand_template_id,
+            owner=user,
+            is_active=True,
+        ).first()
 
-    return random.choice(TEMPLATE_IDS)
+    if not brand_template and listado_obj and listado_obj.brand_template_id:
+        candidate = listado_obj.brand_template
+        if candidate and candidate.owner_id == user.id and candidate.is_active:
+            brand_template = candidate
+
+    if not brand_template:
+        brand_template = _get_default_brand_template(user)
+
+    published_revision = None
+    tokens = None
+    if brand_template:
+        published_revision = brand_template.revisions.filter(status='published').order_by('-revision').first()
+        if published_revision:
+            tokens = _resolve_brand_template_tokens(published_revision.tokens_json)
+
+    if brand_template:
+        template_id = brand_template.base_template_id
+    elif payload_template_id:
+        template_id = payload_template_id
+    else:
+        listado_template = _template_id_from_listado(listado_obj)
+        if listado_template:
+            template_id = listado_template
+        elif listado_id_hint:
+            template_id = _deterministic_template_id(listado_id_hint)
+        elif listado_obj and getattr(listado_obj, 'id', None):
+            template_id = _deterministic_template_id(listado_obj.id)
+        else:
+            template_id = random.choice(TEMPLATE_IDS)
+
+    return {
+        'template_id': template_id,
+        'brand_template': brand_template,
+        'brand_template_revision': published_revision,
+        'template_tokens': tokens,
+    }
+
+
+def _persist_template_selection(listado, selection, source=''):
+    if not listado or not isinstance(selection, dict):
+        return
+
+    template_id = selection.get('template_id')
+    brand_template = selection.get('brand_template')
+    brand_template_revision = selection.get('brand_template_revision')
+
+    _persist_template_id(listado, template_id, source=source)
+
+    updates = []
+    listado.brand_template = brand_template
+    updates.append('brand_template')
+    listado.brand_template_revision = brand_template_revision
+    updates.append('brand_template_revision')
+
+    if not isinstance(listado.datos_extra, dict):
+        listado.datos_extra = {}
+    datos = listado.datos_extra
+    resultados = datos.get('resultados') if isinstance(datos.get('resultados'), dict) else {}
+    meta = resultados.get('template_meta') if isinstance(resultados.get('template_meta'), dict) else {}
+    meta['template_source'] = 'custom' if brand_template else 'system'
+    meta['brand_template_id'] = brand_template.id if brand_template else None
+    meta['brand_template_revision'] = brand_template_revision.revision if brand_template_revision else None
+    meta['updated_at'] = timezone.now().isoformat()
+    if source:
+        meta['last_source'] = source
+    resultados['template_meta'] = meta
+    datos['resultados'] = resultados
+    listado.datos_extra = datos
+    updates.append('datos_extra')
+    listado.save(update_fields=updates)
+
+
+def _apply_template_tokens_to_html(html, template_id, template_tokens):
+    if not html or not isinstance(template_tokens, dict):
+        return html
+
+    themed = str(html)
+    palette = template_tokens.get('palette') or {}
+    typography = template_tokens.get('typography') or {}
+
+    base_meta = TEMPLATE_CATALOG.get(template_id, {})
+    base_colors = base_meta.get('colors') if isinstance(base_meta.get('colors'), dict) else {}
+    for key in ('primary', 'secondary', 'accent', 'background', 'text'):
+        old_val = base_colors.get(key)
+        new_val = palette.get(key)
+        if old_val and new_val and old_val != new_val:
+            themed = themed.replace(str(old_val), str(new_val))
+
+    font_import_url = typography.get('font_import_url') or ''
+    display_font = typography.get('display') or 'DM Sans'
+    body_font = typography.get('body') or display_font
+    mono_font = typography.get('mono') or body_font
+
+    style_block = (
+        '<style id="brand-template-overrides">'
+        f":root{{--brand-primary:{palette.get('primary', '#0d47a1')};"
+        f"--brand-secondary:{palette.get('secondary', '#1565c0')};"
+        f"--brand-accent:{palette.get('accent', '#00e5ff')};"
+        f"--brand-bg:{palette.get('background', '#081421')};"
+        f"--brand-text:{palette.get('text', '#e8f3ff')};}}"
+        f"body{{font-family:'{body_font}',sans-serif !important;}}"
+        f"h1,h2,h3,.title,.headline,.hero-titulo{{font-family:'{display_font}',sans-serif !important;}}"
+        f".badge,.stat-label,.agent-role,.qr-label,.mono{{font-family:'{mono_font}',sans-serif !important;}}"
+        '</style>'
+    )
+
+    link_block = f'<link rel="stylesheet" href="{font_import_url}">' if font_import_url else ''
+    injection = f'{link_block}{style_block}'
+
+    if '</head>' in themed:
+        themed = themed.replace('</head>', f'{injection}</head>', 1)
+    else:
+        themed = f'{injection}{themed}'
+
+    return themed
+
+
+def _select_template_id(data, listado_obj=None, listado_id_hint=None, user=None):
+    effective_user = user or getattr(listado_obj, 'agente', None)
+    return _resolve_template_selection(data, effective_user, listado_obj, listado_id_hint).get('template_id')
 
 
 def _resolve_cloudinary_asset_url(value):
@@ -1431,6 +1690,112 @@ def commercial_agent_set_default(request, agent_id):
     profile.save(update_fields=['is_default'])
     return Response({'ok': True, 'default_agent': ComercialAgentProfileSerializer(profile).data}, status=status.HTTP_200_OK)
 
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def brand_templates_collection(request):
+    if request.method == 'GET':
+        templates = BrandTemplate.objects.filter(owner=request.user, is_active=True).order_by('-is_default', '-updated_at')
+        serializer = BrandTemplateSerializer(templates, many=True)
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+    serializer = BrandTemplateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    created = serializer.save(owner=request.user)
+
+    initial_tokens = request.data.get('tokens_json') if isinstance(request.data, dict) else None
+    if not isinstance(initial_tokens, dict):
+        initial_tokens = default_template_tokens()
+
+    revision_serializer = BrandTemplateRevisionSerializer(data={
+        'template': created.id,
+        'tokens_json': initial_tokens,
+        'status': 'published',
+        'notes': 'Revision inicial',
+    })
+    revision_serializer.is_valid(raise_exception=True)
+    revision_serializer.save(template=created, created_by=request.user)
+
+    if created.is_default:
+        BrandTemplate.objects.filter(owner=request.user, is_active=True).exclude(id=created.id).update(is_default=False)
+    elif not BrandTemplate.objects.filter(owner=request.user, is_active=True, is_default=True).exclude(id=created.id).exists():
+        created.is_default = True
+        created.save(update_fields=['is_default'])
+
+    return Response(BrandTemplateSerializer(created).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def brand_template_detail(request, template_id):
+    template = get_object_or_404(BrandTemplate, id=template_id, owner=request.user)
+
+    if request.method == 'GET':
+        return Response(BrandTemplateSerializer(template).data, status=status.HTTP_200_OK)
+
+    if request.method == 'DELETE':
+        was_default = template.is_default
+        template.is_active = False
+        template.is_default = False
+        template.save(update_fields=['is_active', 'is_default'])
+        if was_default:
+            fallback = BrandTemplate.objects.filter(owner=request.user, is_active=True).order_by('-updated_at').first()
+            if fallback:
+                fallback.is_default = True
+                fallback.save(update_fields=['is_default'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = BrandTemplateSerializer(template, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    updated = serializer.save()
+    if updated.is_default:
+        BrandTemplate.objects.filter(owner=request.user, is_active=True).exclude(id=updated.id).update(is_default=False)
+    return Response(BrandTemplateSerializer(updated).data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def brand_template_set_default(request, template_id):
+    template = get_object_or_404(BrandTemplate, id=template_id, owner=request.user, is_active=True)
+    BrandTemplate.objects.filter(owner=request.user, is_active=True, is_default=True).exclude(id=template.id).update(is_default=False)
+    template.is_default = True
+    template.save(update_fields=['is_default'])
+    return Response({'ok': True, 'default_template': BrandTemplateSerializer(template).data}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def brand_template_revisions_collection(request, template_id):
+    template = get_object_or_404(BrandTemplate, id=template_id, owner=request.user, is_active=True)
+
+    if request.method == 'GET':
+        revisions = template.revisions.order_by('-revision')
+        serializer = BrandTemplateRevisionSerializer(revisions, many=True)
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+    serializer = BrandTemplateRevisionSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    status_value = serializer.validated_data.get('status', 'draft')
+    created = serializer.save(template=template, created_by=request.user, status='draft')
+
+    if status_value == 'published':
+        template.revisions.filter(status='published').exclude(id=created.id).update(status='archived')
+        created.status = 'published'
+        created.save(update_fields=['status'])
+
+    return Response(BrandTemplateRevisionSerializer(created).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def brand_template_publish_revision(request, template_id, revision_id):
+    template = get_object_or_404(BrandTemplate, id=template_id, owner=request.user, is_active=True)
+    revision = get_object_or_404(BrandTemplateRevision, id=revision_id, template=template)
+    template.revisions.filter(status='published').exclude(id=revision.id).update(status='archived')
+    revision.status = 'published'
+    revision.save(update_fields=['status'])
+    return Response({'ok': True, 'revision': BrandTemplateRevisionSerializer(revision).data}, status=status.HTTP_200_OK)
+
 from .services.instagram_service import publicar_post, publicar_story, publicar_carrusel, publicar_media_upload_api
 from django.conf import settings
 
@@ -1553,12 +1918,13 @@ def generar_carrusel(request):
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
 
-        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        template_id = selection.get('template_id')
         template_carousel = TEMPLATE_CAROUSEL_MAP.get(template_id, TEMPLATE_CAROUSEL_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
 
         if listado_obj:
-            _persist_template_id(listado_obj, template_id, source='carrusel')
+            _persist_template_selection(listado_obj, selection, source='carrusel')
 
         images_pool = _collect_property_images(data)
         if not images_pool:
@@ -1620,6 +1986,7 @@ def generar_carrusel(request):
             }
 
             html_content = render_to_string(template_carousel, context)
+            html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
             image_stream = render_html_to_image(html_content, 1080, 1350)
 
             try:
@@ -1650,6 +2017,8 @@ def generar_carrusel(request):
                     "slides": slides_urls,
                     "caption": caption,
                     "template_id": template_id,
+                    "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+                    "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
                 },
             )
 
@@ -1660,6 +2029,8 @@ def generar_carrusel(request):
             "slides": slides_urls,
             "caption": caption,
             "template_id": template_id,
+            "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+            "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         crear_notificacion(
@@ -2197,10 +2568,12 @@ def generar_pdf(request):
         if listado_id_hint:
             listado_obj = Listado.objects.filter(id=listado_id_hint, agente=request.user).first()
 
-        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_hint)
+        selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_hint)
+        template_id = selection.get('template_id')
 
         context['listado_id'] = listado_id_hint
         context['template_id'] = template_id
+        context['template_tokens'] = selection.get('template_tokens')
 
         logger.info(
             "[PDF] generar_pdf listado_id=%s template_id=%s user_id=%s",
@@ -2210,7 +2583,7 @@ def generar_pdf(request):
         )
 
         if listado_obj:
-            _persist_template_id(listado_obj, template_id, source='pdf')
+            _persist_template_selection(listado_obj, selection, source='pdf')
 
         try:
             html_string = generar_html_desde_template(context, request.user)
@@ -2246,6 +2619,8 @@ def generar_pdf(request):
                         "html": html_string,
                         "url": pdf_url,
                         "template_id": template_id,
+                        "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+                        "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
                     }
                     listado_obj.save(update_fields=['datos_extra'])
                     print(f"[PDF] URL guardada en DB: {pdf_url}")
@@ -2269,6 +2644,8 @@ def generar_pdf(request):
             "url": pdf_url,
             "listado_id": listado_id_hint,
             "template_id": template_id,
+            "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+            "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
 
     except GeminiQuotaExhaustedError as e:
@@ -2374,13 +2751,15 @@ def generar_imagen_post(request):
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
 
-        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        template_id = selection.get('template_id')
         template_post = TEMPLATE_POST_MAP.get(template_id, TEMPLATE_POST_MAP['dubai_night'])
 
         if listado_obj:
-            _persist_template_id(listado_obj, template_id, source='post')
+            _persist_template_selection(listado_obj, selection, source='post')
 
         html_content = render_to_string(template_post, context)
+        html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
@@ -2413,6 +2792,8 @@ def generar_imagen_post(request):
                     "url": img_url,
                     "caption": caption,
                     "template_id": template_id,
+                    "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+                    "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
                 },
             )
 
@@ -2427,6 +2808,8 @@ def generar_imagen_post(request):
             "caption": caption,
             "texto": caption,
             "template_id": template_id,
+            "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+            "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         try:
@@ -2469,12 +2852,13 @@ def generar_imagen_story(request):
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
 
-        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        template_id = selection.get('template_id')
         template_story = TEMPLATE_STORY_MAP.get(template_id, TEMPLATE_STORY_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
 
         if listado_obj:
-            _persist_template_id(listado_obj, template_id, source='story')
+            _persist_template_selection(listado_obj, selection, source='story')
 
         images_pool = _collect_property_images(data)
         story_cover = images_pool[0] if images_pool else _resolve_cloudinary_asset_url(data.get('portadaUrl'))
@@ -2512,6 +2896,7 @@ def generar_imagen_story(request):
 
         # Renderizar HTML y luego convertir a imagen PNG con Playwright (Formato vertical 9:16)
         html_content = render_to_string(template_story, context)
+        html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
         image_stream = render_html_to_image(html_content, 1080, 1920)
 
         prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido."
@@ -2544,6 +2929,8 @@ def generar_imagen_story(request):
                     "url": img_url,
                     "caption": caption,
                     "template_id": template_id,
+                    "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+                    "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
                 },
             )
 
@@ -2559,6 +2946,8 @@ def generar_imagen_story(request):
             "caption": caption,
             "texto": caption,
             "template_id": template_id,
+            "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+            "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
@@ -2586,12 +2975,13 @@ def generar_email(request):
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
 
-        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        template_id = selection.get('template_id')
         template_email = TEMPLATE_EMAIL_MAP.get(template_id, TEMPLATE_EMAIL_MAP['dubai_night'])
         branding = _resolve_branding_payload(data, request.user)
 
         if listado_obj:
-            _persist_template_id(listado_obj, template_id, source='email')
+            _persist_template_selection(listado_obj, selection, source='email')
 
         images_pool = _collect_property_images(data)
         email_cover = images_pool[0] if images_pool else _resolve_cloudinary_asset_url(data.get('portadaUrl'))
@@ -2666,8 +3056,11 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             "color_accent": (template_meta.get('colors') or {}).get('accent', '#c9a84c'),
         }
         premium_html = render_to_string(template_email, context)
+        premium_html = _apply_template_tokens_to_html(premium_html, template_id, selection.get('template_tokens'))
         parsed["html"] = premium_html
         parsed["template_id"] = template_id
+        parsed["brand_template_id"] = (selection.get('brand_template').id if selection.get('brand_template') else None)
+        parsed["brand_template_revision"] = (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None)
         
         # PERSISTENCIA: Guardar en el listado
         if listado_obj:

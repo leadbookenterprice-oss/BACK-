@@ -47,6 +47,33 @@ TEMPLATE_IDS = tuple(
 )
 
 
+def _resolve_theme_from_context(context, template_file):
+    tokens = context.get('template_tokens') if isinstance(context, dict) else None
+    base = TEMPLATE_COLORES.get(template_file, {})
+    if not isinstance(tokens, dict):
+        return {
+            'primario': base.get('primario', '#0d47a1'),
+            'secundario': base.get('secundario', '#1565c0'),
+            'acento': base.get('acento', '#00e5ff'),
+            'display_font': 'DM Sans',
+            'body_font': 'DM Sans',
+            'mono_font': 'Space Mono',
+            'font_import_url': '',
+        }
+
+    palette = tokens.get('palette') if isinstance(tokens.get('palette'), dict) else {}
+    typography = tokens.get('typography') if isinstance(tokens.get('typography'), dict) else {}
+    return {
+        'primario': palette.get('primary', base.get('primario', '#0d47a1')),
+        'secundario': palette.get('secondary', base.get('secundario', '#1565c0')),
+        'acento': palette.get('accent', base.get('acento', '#00e5ff')),
+        'display_font': typography.get('display', 'DM Sans'),
+        'body_font': typography.get('body', 'DM Sans'),
+        'mono_font': typography.get('mono', 'Space Mono'),
+        'font_import_url': typography.get('font_import_url', ''),
+    }
+
+
 def _normalize_template_id(value):
     if not value:
         return None
@@ -113,10 +140,10 @@ def generar_html_desde_template(context, agente):
         html = f.read()
     
     # 3. Aplicar colores del template
-    colores = TEMPLATE_COLORES[template_elegido]
-    html = html.replace('{{COLOR_PRIMARIO}}', colores['primario'])
-    html = html.replace('{{COLOR_SECUNDARIO}}', colores['secundario'])
-    html = html.replace('{{COLOR_ACENTO}}', colores['acento'])
+    theme = _resolve_theme_from_context(context, template_elegido)
+    html = html.replace('{{COLOR_PRIMARIO}}', theme['primario'])
+    html = html.replace('{{COLOR_SECUNDARIO}}', theme['secundario'])
+    html = html.replace('{{COLOR_ACENTO}}', theme['acento'])
     
     # 4. Reemplazar datos de la propiedad
     html = html.replace('{{TITULO}}', str(context.get('tipo_propiedad', '') + ' en ' + context.get('ciudad', '')))
@@ -201,6 +228,17 @@ def generar_html_desde_template(context, agente):
     html = re.sub(r'\{\{else\}\}', '', html)
     html = re.sub(r'\{\{/if\}\}', '', html)
     html = re.sub(r'\{\{[^}]+\}\}', '', html)
+
+    if '</head>' in html:
+        font_link = f'<link rel="stylesheet" href="{theme["font_import_url"]}">' if theme.get('font_import_url') else ''
+        override = (
+            '<style id="brand-template-overrides">'
+            f"body{{font-family:'{theme['body_font']}',sans-serif !important;}}"
+            f"h1,h2,h3,.hero-titulo,.section-title{{font-family:'{theme['display_font']}',sans-serif !important;}}"
+            f".stat-label,.badge-operacion,.qr-label{{font-family:'{theme['mono_font']}',sans-serif !important;}}"
+            '</style>'
+        )
+        html = html.replace('</head>', f'{font_link}{override}</head>', 1)
     
     
     logger.info(f"[HTML Template] Template elegido: {template_elegido}. HTML generado: {len(html)} chars.")

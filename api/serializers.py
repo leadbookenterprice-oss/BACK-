@@ -1,8 +1,10 @@
 from rest_framework import serializers
 from .models import (
     GeneratedAsset, Agent, ComercialAgentProfile,
+    BrandTemplate, BrandTemplateRevision,
     TerminosCondiciones, PoliticaPrivacidad
 )
+import re
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -71,3 +73,119 @@ class ComercialAgentProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('telefono_e164 debe estar en formato E.164 (ej: +5491123456789).')
 
         return phone
+
+
+ALLOWED_FONTS = {
+    'Playfair Display',
+    'Bebas Neue',
+    'Inter',
+    'DM Sans',
+    'Space Mono',
+    'Cormorant Garamond',
+    'Oswald',
+    'Source Sans 3',
+    'Source Serif 4',
+    'Libre Baskerville',
+    'Lato',
+    'Space Grotesk',
+}
+
+
+def _validate_hex_color(value, field_name):
+    if not isinstance(value, str) or not re.match(r'^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$', value.strip()):
+        raise serializers.ValidationError(f'{field_name} debe ser un color HEX valido (ej: #0d47a1).')
+    return value.strip()
+
+
+class BrandTemplateRevisionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BrandTemplateRevision
+        fields = ['id', 'template', 'revision', 'tokens_json', 'status', 'created_by', 'created_at', 'notes']
+        read_only_fields = ['id', 'template', 'revision', 'created_by', 'created_at']
+
+    def validate_tokens_json(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('tokens_json debe ser un objeto JSON.')
+
+        palette = value.get('palette') or {}
+        for key in ('primary', 'secondary', 'accent', 'background', 'text'):
+            if key not in palette:
+                raise serializers.ValidationError(f'palette.{key} es requerido.')
+            palette[key] = _validate_hex_color(palette[key], f'palette.{key}')
+
+        typography = value.get('typography') or {}
+        for key in ('display', 'body', 'mono'):
+            font_value = typography.get(key)
+            if font_value not in ALLOWED_FONTS:
+                raise serializers.ValidationError(f'typography.{key} debe estar en la allowlist de fuentes.')
+
+        google_fonts = typography.get('google_fonts') or []
+        if not isinstance(google_fonts, list) or not google_fonts:
+            raise serializers.ValidationError('typography.google_fonts debe ser una lista no vacia.')
+        for font_name in google_fonts:
+            if font_name not in ALLOWED_FONTS:
+                raise serializers.ValidationError('typography.google_fonts contiene una fuente no permitida.')
+
+        emoji = value.get('emoji') or {}
+        for key in ('headline', 'price', 'location', 'cta'):
+            symbol = str(emoji.get(key, '')).strip()
+            if not symbol:
+                raise serializers.ValidationError(f'emoji.{key} es requerido.')
+            if len(symbol) > 6:
+                raise serializers.ValidationError(f'emoji.{key} es demasiado largo.')
+
+        copy = value.get('copy') or {}
+        if copy.get('tone') not in {'premium', 'profesional', 'lujo', 'minimal'}:
+            raise serializers.ValidationError('copy.tone invalido.')
+        if copy.get('emoji_density') not in {'none', 'low', 'medium'}:
+            raise serializers.ValidationError('copy.emoji_density invalido.')
+        if copy.get('cta_style') not in {'whatsapp_direct', 'soft', 'strong'}:
+            raise serializers.ValidationError('copy.cta_style invalido.')
+
+        layout = value.get('layout') or {}
+        if layout.get('logo_position') not in {'top_left', 'top_right'}:
+            raise serializers.ValidationError('layout.logo_position invalido.')
+        if layout.get('agent_block_position') not in {'bottom_left', 'bottom_right'}:
+            raise serializers.ValidationError('layout.agent_block_position invalido.')
+        if layout.get('qr_position') not in {'bottom_left', 'bottom_right'}:
+            raise serializers.ValidationError('layout.qr_position invalido.')
+
+        value['schema_version'] = 1
+        value['palette'] = palette
+        value['typography'] = typography
+        value['emoji'] = emoji
+        value['copy'] = copy
+        value['layout'] = layout
+        return value
+
+
+class BrandTemplateSerializer(serializers.ModelSerializer):
+    published_revision = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BrandTemplate
+        fields = [
+            'id',
+            'owner',
+            'name',
+            'slug',
+            'description',
+            'base_template_id',
+            'is_default',
+            'is_active',
+            'created_at',
+            'updated_at',
+            'published_revision',
+        ]
+        read_only_fields = ['id', 'owner', 'created_at', 'updated_at', 'published_revision']
+
+    def get_published_revision(self, obj):
+        published = obj.revisions.filter(status='published').order_by('-revision').first()
+        if not published:
+            return None
+        return {
+            'id': published.id,
+            'revision': published.revision,
+            'tokens_json': published.tokens_json,
+            'created_at': published.created_at,
+        }
