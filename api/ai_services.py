@@ -90,6 +90,80 @@ def _template_file_from_id(template_id):
         return None
     return f'template_{normalized}.html'
 
+
+def _render_conditional_block(html_text, key, enabled, replacements=None):
+    if not isinstance(html_text, str):
+        return html_text
+
+    replacements = replacements or {}
+    key_escaped = re.escape(str(key))
+
+    # Bloque con else
+    pattern_with_else = re.compile(
+        rf'\{{\{{#if {key_escaped}\}}\}}(.*?)\{{\{{else\}}\}}(.*?)\{{\{{/if\}}\}}',
+        flags=re.DOTALL,
+    )
+
+    def _replace_with_else(match):
+        chunk = match.group(1) if enabled else match.group(2)
+        for token, value in replacements.items():
+            chunk = chunk.replace(token, value)
+        return chunk
+
+    rendered = pattern_with_else.sub(_replace_with_else, html_text)
+
+    # Bloque sin else
+    pattern_plain = re.compile(rf'\{{\{{#if {key_escaped}\}}\}}(.*?)\{{\{{/if\}}\}}', flags=re.DOTALL)
+
+    if enabled:
+        def _replace_plain(match):
+            chunk = match.group(1)
+            for token, value in replacements.items():
+                chunk = chunk.replace(token, value)
+            return chunk
+
+        rendered = pattern_plain.sub(_replace_plain, rendered)
+    else:
+        rendered = pattern_plain.sub('', rendered)
+
+    return rendered
+
+
+def _format_phone_display(value):
+    raw = str(value or '').strip()
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return ''
+
+    if raw.startswith('+'):
+        normalized = f'+{digits}'
+    else:
+        normalized = f'+{digits}'
+
+    country = ''
+    area = ''
+    local = ''
+
+    if digits.startswith('54') and len(digits) >= 10:
+        country = '54'
+        rest = digits[2:]
+        if rest.startswith('9') and len(rest) > 5:
+            rest = rest[1:]
+        if len(rest) >= 10:
+            area = rest[:4]
+            local = rest[4:]
+        elif len(rest) >= 8:
+            area = rest[:3]
+            local = rest[3:]
+        else:
+            local = rest
+    else:
+        local = digits
+
+    if country and area and local:
+        return f'+{country} {area} {local}'
+    return normalized
+
 def generar_html_desde_template(context, agente):
     """
     Genera HTML usando un template prediseñado.
@@ -157,33 +231,60 @@ def generar_html_desde_template(context, agente):
     html = html.replace('{{SUPERFICIE_TOTAL}}', str(context.get('superficie_total', 'N/A')))
     html = html.replace('{{SUPERFICIE_CUBIERTA}}', str(context.get('superficie_cubierta', 'N/A')))
     html = html.replace('{{ESTACIONAMIENTOS}}', str(context.get('estacionamientos', 'N/A')))
+    agent_phone_raw = str(context.get('agente_telefono', '') or '').strip()
+    phone_href = ''.join(ch for ch in agent_phone_raw if ch.isdigit())
+    if phone_href:
+        phone_href = f'+{phone_href}'
+    phone_display = _format_phone_display(agent_phone_raw)
+
     html = html.replace('{{AGENTE_NOMBRE}}', str(context.get('agente_nombre', '')))
-    html = html.replace('{{AGENTE_TELEFONO}}', str(context.get('agente_telefono', '')))
+    html = html.replace('{{AGENTE_TELEFONO}}', phone_display)
+    html = html.replace('{{AGENTE_TELEFONO_DISPLAY}}', phone_display)
+    html = html.replace('{{AGENTE_TELEFONO_HREF}}', phone_href)
     html = html.replace('{{AGENTE_EMAIL}}', str(context.get('agente_email', '')))
     html = html.replace('{{AGENCIA_NOMBRE}}', str(context.get('agencia_nombre', '')))
     
     # 5. Logo de agencia
     logo_url = context.get('logo_url_raw', '')
-    if logo_url:
-        html = html.replace('{{#if LOGO_AGENCIA}}', '')
-        html = html.replace('{{/if}}', '')
-        html = html.replace('{{LOGO_AGENCIA}}', logo_url)
-    else:
-        # Eliminar bloque condicional del logo, dejar solo el texto
-        html = re.sub(r'\{\{#if LOGO_AGENCIA\}\}.*?\{\{else\}\}', '', html, flags=re.DOTALL)
-        html = re.sub(r'\{\{/if\}\}', '', html)
+    html = _render_conditional_block(
+        html,
+        'LOGO_AGENCIA',
+        bool(logo_url),
+        replacements={'{{LOGO_AGENCIA}}': str(logo_url or '')},
+    )
     
-    # 6. QR en base64 — CRÍTICO: reemplazar antes de cualquier otra cosa
+    # 6. Foto del agente (perfil)
+    agent_photo_raw = (
+        context.get('agente_foto_url', '')
+        or context.get('agente_foto', '')
+        or context.get('logo_url_raw', '')
+    )
+    if isinstance(agent_photo_raw, dict) and 'public_id' in agent_photo_raw:
+        cloud = agent_photo_raw.get('cloudinary_account', 'df1vldrhb')
+        pid = agent_photo_raw.get('public_id', '')
+        agent_photo = f"https://res.cloudinary.com/{cloud}/image/upload/{pid}"
+    elif isinstance(agent_photo_raw, str) and agent_photo_raw.startswith('http'):
+        agent_photo = re.sub(r's--[^/]+--/', '', agent_photo_raw)
+    else:
+        agent_photo = ''
+    html = _render_conditional_block(
+        html,
+        'AGENTE_FOTO',
+        bool(agent_photo),
+        replacements={'{{AGENTE_FOTO}}': agent_photo},
+    )
+
+    # 7. QR en base64 — CRÍTICO: reemplazar antes de cualquier otra cosa
     qr_code = context.get('qr_code', '')
     print(f"[Template] QR code presente: {bool(qr_code)}, largo: {len(str(qr_code))}")
-    if qr_code:
-        html = html.replace('{{#if QR_CODE}}', '')
-        html = re.sub(r'\{\{/if\}\}', '', html)
-        html = html.replace('{{QR_CODE}}', qr_code)
-    else:
-        html = re.sub(r'\{\{#if QR_CODE\}\}.*?\{\{/if\}\}', '', html, flags=re.DOTALL)
+    html = _render_conditional_block(
+        html,
+        'QR_CODE',
+        bool(qr_code),
+        replacements={'{{QR_CODE}}': str(qr_code or '')},
+    )
     
-    # 7. Foto de portada — siempre galeria_0 del listado
+    # 8. Foto de portada — siempre galeria_0 del listado
     def _build_cloudinary_url(val):
         if isinstance(val, dict) and 'public_id' in val:
             cloud = val.get('cloudinary_account', 'df1vldrhb')
@@ -208,7 +309,7 @@ def generar_html_desde_template(context, agente):
     html = html.replace('{{FOTO_PORTADA}}', portada_url)
 
     
-    # 8. Fotos de galería
+    # 9. Fotos de galería
     galeria_html = ''
     for i, foto in enumerate(fotos_raw):
         foto_url = _build_cloudinary_url(foto)
@@ -217,7 +318,7 @@ def generar_html_desde_template(context, agente):
 
     html = html.replace('{{GALERIA_FOTOS}}', galeria_html)
     
-    # 9. Amenidades — generar chips HTML (ANTES DE LIMPIAR)
+    # 10. Amenidades — generar chips HTML (ANTES DE LIMPIAR)
     amenidades = context.get('amenidades', [])
     print(f"[Template] Amenidades: {amenidades}")
     chips_html = ''.join([f'<span class="amenidad-chip">{a}</span>' for a in amenidades])

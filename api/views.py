@@ -627,7 +627,13 @@ def _resolve_branding_payload(data, user):
     default_profile = _get_default_commercial_agent(user)
 
     payload_logo = payload.get('logoAgenciaUrl') or payload.get('logo_url')
-    profile_photo = (default_profile.foto_url if default_profile else '') or ''
+    profile_photo = (
+        payload.get('agenteFotoUrl')
+        or payload.get('agente_foto_url')
+        or (default_profile.foto_url if default_profile else '')
+        or getattr(user, 'logo_url', '')
+        or ''
+    )
 
     agent_name = (
         payload.get('agenteNombre')

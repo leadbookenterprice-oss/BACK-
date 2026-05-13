@@ -6,18 +6,22 @@
 <title>{{TITULO}} - {{AGENCIA_NOMBRE}}</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
+@page { size: A4; margin: 10mm; }
 :root {
   --primario: {{COLOR_PRIMARIO}};
   --secundario: {{COLOR_SECUNDARIO}};
   --acento: {{COLOR_ACENTO}};
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
+body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+
+.topbar, .hero, .precio-bar, .stats, .descripcion, .amenidades, .galeria, .footer { break-inside: avoid; page-break-inside: avoid; }
 
 /* TOP BAR */
 .topbar { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; background: #111; border-bottom: 1px solid var(--acento); }
-.topbar .logo img { height: 40px; object-fit: contain; }
-.topbar .logo-text { font-family: 'Playfair Display', serif; font-size: 22px; color: var(--acento); letter-spacing: 2px; text-transform: uppercase; }
+.topbar .logo { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.topbar .agent-avatar { width: 66px; height: 66px; border-radius: 999px; object-fit: cover; border: 2px solid var(--acento); box-shadow: 0 0 0 2px rgba(201,168,76,0.2); }
+.topbar .logo-text { font-family: 'Playfair Display', serif; font-size: 22px; color: var(--acento); letter-spacing: 2px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .badge-operacion { background: var(--acento); color: #000; font-size: 11px; font-weight: 500; letter-spacing: 2px; padding: 6px 14px; text-transform: uppercase; }
 
 /* HERO */
@@ -44,7 +48,7 @@ body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
 /* DESCRIPCION */
 .descripcion { padding: 48px 40px; background: #0f0f0f; border-bottom: 1px solid #1a1a1a; }
 .section-title { font-family: 'Playfair Display', serif; font-size: 13px; letter-spacing: 4px; text-transform: uppercase; color: var(--acento); margin-bottom: 20px; }
-.descripcion-texto { font-size: 16px; line-height: 1.9; color: rgba(255,255,255,0.75); font-weight: 300; max-width: 800px; }
+.descripcion-texto { font-size: 16px; line-height: 1.8; color: rgba(255,255,255,0.75); font-weight: 300; max-width: 800px; orphans: 3; widows: 3; }
 
 /* AMENIDADES */
 .amenidades { padding: 40px 40px; background: #0a0a0a; border-bottom: 1px solid #1a1a1a; }
@@ -54,11 +58,14 @@ body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
 /* GALERIA */
 .galeria { padding: 40px 40px; background: #0f0f0f; }
 .galeria-grid { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; }
-.galeria-foto { width: 100%; height: 420px; object-fit: cover; }
+.galeria-foto { width: 100%; height: 340px; object-fit: cover; break-inside: avoid; page-break-inside: avoid; }
 
 /* FOOTER */
-.footer { background: #111; padding: 40px 40px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--acento); }
-.agente-info { display: flex; flex-direction: column; gap: 6px; }
+.footer { background: #111; padding: 34px 40px 28px; border-top: 1px solid var(--acento); display: flex; flex-direction: column; gap: 22px; }
+.footer-main { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.agente-info { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.agente-avatar { width: 68px; height: 68px; border-radius: 999px; object-fit: cover; border: 2px solid var(--acento); flex: 0 0 auto; }
+.agente-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .agente-nombre { font-family: 'Playfair Display', serif; font-size: 20px; color: var(--acento); }
 .agente-agencia { font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.5); }
 .agente-contacto { font-size: 14px; color: rgba(255,255,255,0.7); }
@@ -66,27 +73,16 @@ body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
 .qr-container { text-align: center; }
 .qr-container img { width: 90px; height: 90px; }
 .qr-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-top: 6px; }
-
-.watermark {
-  position: fixed;
-  bottom: 18px;
-  right: 20px;
-  width: 120px;
-  opacity: 0.13;
-  pointer-events: none;
-  z-index: 9999;
-}
+.footer-watermark { display: flex; justify-content: center; }
+.footer-watermark img { width: 126px; opacity: 0.13; }
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="logo">
-    {{#if LOGO_AGENCIA}}
-    <img src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">
-    {{else}}
+    {{#if AGENTE_FOTO}}<img class="agent-avatar" src="{{AGENTE_FOTO}}" alt="{{AGENTE_NOMBRE}}">{{/if}}
     <span class="logo-text">{{AGENCIA_NOMBRE}}</span>
-    {{/if}}
   </div>
   <span class="badge-operacion">{{OPERACION}}</span>
 </div>
@@ -155,23 +151,29 @@ body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0ede6; }
 </div>
 
 <div class="footer">
-  <div class="agente-info">
-    <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
-    <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
-    <div class="agente-contacto">
-      <a href="tel:{{AGENTE_TELEFONO}}">{{AGENTE_TELEFONO}}</a> &nbsp;·&nbsp;
-      <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
+  <div class="footer-main">
+    <div class="agente-info">
+      {{#if AGENTE_FOTO}}<img class="agente-avatar" src="{{AGENTE_FOTO}}" alt="{{AGENTE_NOMBRE}}">{{/if}}
+      <div class="agente-meta">
+        <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
+        <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
+        <div class="agente-contacto">
+          <a href="tel:{{AGENTE_TELEFONO_HREF}}">{{AGENTE_TELEFONO_DISPLAY}}</a> &nbsp;·&nbsp;
+          <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
+        </div>
+      </div>
     </div>
+    {{#if QR_CODE}}
+    <div class="qr-container">
+      <img src="{{QR_CODE}}" alt="QR WhatsApp">
+      <div class="qr-label">Contactar agente</div>
+    </div>
+    {{/if}}
   </div>
-  {{#if QR_CODE}}
-  <div class="qr-container">
-    <img src="{{QR_CODE}}" alt="QR WhatsApp">
-    <div class="qr-label">Contactar agente</div>
+  <div class="footer-watermark">
+    <img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
   </div>
-  {{/if}}
 </div>
-
-<img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
 
 </body>
 </html>
