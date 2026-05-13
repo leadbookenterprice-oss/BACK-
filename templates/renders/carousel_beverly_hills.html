@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=DM+Sans:wght@300;400;500;700&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --bg: #f4f4f2; --fg: #232d38; --accent: #e8c547; }
+  body { width: 1080px; height: 1350px; background: var(--bg); font-family: 'DM Sans', sans-serif; color: var(--fg); overflow: hidden; position: relative; }
+  .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+  .overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(244,244,242,0.95) 0%, rgba(244,244,242,0.58) 38%, rgba(244,244,242,0.22) 100%); z-index: 2; }
+  .content { position: absolute; inset: 0; z-index: 3; padding: 84px 74px; display: flex; flex-direction: column; justify-content: space-between; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .logo { max-width: 240px; max-height: 96px; object-fit: contain; }
+  .badge { border: 1px solid rgba(44,62,80,0.7); color: #2c3e50; font-size: 17px; letter-spacing: 4px; padding: 9px 16px; text-transform: uppercase; border-radius: 999px; background: rgba(255,255,255,0.7); }
+  .middle { display: flex; flex-direction: column; gap: 24px; margin-bottom: 34px; }
+  .headline { font-family: 'Cormorant Garamond', serif; font-size: 130px; line-height: 0.9; color: #1f2f40; }
+  .subheadline { font-size: 43px; line-height: 1.3; color: #23313f; max-width: 900px; }
+  .footer { display: flex; justify-content: flex-end; }
+  .footer-text { font-size: 20px; color: rgba(44,62,80,0.62); letter-spacing: 2px; text-transform: uppercase; }
+</style>
+</head>
+<body>
+  {% if portada_url %}<img src="{{ portada_url }}" class="bg-image" />{% endif %}
+  <div class="overlay"></div>
+  <div class="content">
+    <div class="top">
+      {% if logo_url %}<img src="{{ logo_url }}" class="logo" />{% else %}<div></div>{% endif %}
+      <div class="badge">{{ operacion }}</div>
+    </div>
+    <div class="middle">
+      <div class="headline">{{ headline }}</div>
+      <div class="subheadline">{{ subheadline }}</div>
+    </div>
+    <div class="footer">
+      {% if slide_number < total_slides %}
+        <div class="footer-text">Desliza para conocer mas</div>
+      {% else %}
+        <div class="footer-text" style="color: #2c3e50">Guardalo y agenda visita</div>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

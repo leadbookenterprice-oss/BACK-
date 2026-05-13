@@ -62,42 +62,14 @@ TEMPLATE_POST_MAP = {
     for template_id in TEMPLATE_IDS
 }
 
-CAROUSEL_TEMPLATE_STYLES = {
-    'dubai_night': {
-        'bg_color': '#080808',
-        'accent_color': '#c9a84c',
-        'overlay_bottom': 'rgba(8, 8, 8, 0.94)',
-        'overlay_mid': 'rgba(8, 8, 8, 0.62)',
-        'overlay_top': 'rgba(8, 8, 8, 0.28)',
-    },
-    'beverly_hills': {
-        'bg_color': '#1f2833',
-        'accent_color': '#e8c547',
-        'overlay_bottom': 'rgba(31, 40, 51, 0.93)',
-        'overlay_mid': 'rgba(31, 40, 51, 0.58)',
-        'overlay_top': 'rgba(31, 40, 51, 0.25)',
-    },
-    'manhattan': {
-        'bg_color': '#111111',
-        'accent_color': '#e63946',
-        'overlay_bottom': 'rgba(17, 17, 17, 0.95)',
-        'overlay_mid': 'rgba(17, 17, 17, 0.65)',
-        'overlay_top': 'rgba(17, 17, 17, 0.30)',
-    },
-    'mediterraneo': {
-        'bg_color': '#5c3d2e',
-        'accent_color': '#c17f3a',
-        'overlay_bottom': 'rgba(92, 61, 46, 0.94)',
-        'overlay_mid': 'rgba(92, 61, 46, 0.60)',
-        'overlay_top': 'rgba(92, 61, 46, 0.24)',
-    },
-    'tech_modern': {
-        'bg_color': '#0d47a1',
-        'accent_color': '#00e5ff',
-        'overlay_bottom': 'rgba(13, 71, 161, 0.92)',
-        'overlay_mid': 'rgba(13, 71, 161, 0.55)',
-        'overlay_top': 'rgba(13, 71, 161, 0.22)',
-    },
+TEMPLATE_STORY_MAP = {
+    template_id: f'renders/story_{template_id}.html'
+    for template_id in TEMPLATE_IDS
+}
+
+TEMPLATE_CAROUSEL_MAP = {
+    template_id: f'renders/carousel_{template_id}.html'
+    for template_id in TEMPLATE_IDS
 }
 
 
@@ -160,6 +132,34 @@ def _persist_template_id(listado, template_id, source=''):
     listado.save(update_fields=['datos_extra'])
 
 
+def _deterministic_template_id(seed_value):
+    if seed_value is None:
+        return random.choice(TEMPLATE_IDS)
+    try:
+        seed_int = int(seed_value)
+    except Exception:
+        seed_int = sum(ord(ch) for ch in str(seed_value))
+    return TEMPLATE_IDS[seed_int % len(TEMPLATE_IDS)]
+
+
+def _select_template_id(data, listado_obj=None, listado_id_hint=None):
+    payload_template = _extract_template_id_from_payload(data)
+    if payload_template:
+        return payload_template
+
+    listado_template = _template_id_from_listado(listado_obj)
+    if listado_template:
+        return listado_template
+
+    if listado_id_hint:
+        return _deterministic_template_id(listado_id_hint)
+
+    if listado_obj and getattr(listado_obj, 'id', None):
+        return _deterministic_template_id(listado_obj.id)
+
+    return random.choice(TEMPLATE_IDS)
+
+
 def _resolve_cloudinary_asset_url(value):
     if isinstance(value, dict):
         if value.get('url') and isinstance(value.get('url'), str):
@@ -212,10 +212,36 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
     text = re.sub(r'^\s*---+\s*$', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
 
+    intro_patterns = [
+        r'^\s*[!¡]*\s*absolutamente[!¡\s\-,:.]*',
+        r'^\s*(aqui|aquí)\s+tienes\s+un\s+caption[^:\n]{0,180}:\s*',
+        r'^\s*(aqui|aquí)\s+tienes[^:\n]{0,180}:\s*',
+        r'^\s*te\s+comparto\s+un\s+caption[^:\n]{0,180}:\s*',
+    ]
+    for pattern in intro_patterns:
+        text = re.sub(pattern, '', text, count=1, flags=re.IGNORECASE)
+
     meta_prefix = re.compile(
         r'^\s*(caption|copy|salida|output|explicacion|explicación|nota|instrucciones|observaciones?)\s*:\s*',
         flags=re.IGNORECASE,
     )
+
+    def _is_meta_paragraph(paragraph):
+        p = str(paragraph or '').strip().lower()
+        if not p:
+            return False
+        meta_signals = (
+            'aqui tienes',
+            'aquí tienes',
+            'caption optimizado',
+            'caption para instagram',
+            'disenado para captar',
+            'diseñado para captar',
+            'te comparto el caption',
+            'este caption',
+            'copia optimizada',
+        )
+        return any(signal in p for signal in meta_signals)
 
     cleaned_lines = []
     for line in text.splitlines():
@@ -233,6 +259,11 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
         cleaned_lines.append(current)
 
     text = '\n'.join(cleaned_lines)
+    paragraphs = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
+    while paragraphs and _is_meta_paragraph(paragraphs[0]):
+        paragraphs.pop(0)
+    text = '\n\n'.join(paragraphs)
+
     text = re.sub(r'\n{3,}', '\n\n', text).strip().strip('"').strip("'")
     text = re.sub(r'[ \t]{2,}', ' ', text)
 
@@ -1047,16 +1078,11 @@ def generar_carrusel(request):
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
 
-        template_id = (
-            _extract_template_id_from_payload(data)
-            or _template_id_from_listado(listado_obj)
-            or random.choice(TEMPLATE_IDS)
-        )
+        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        template_carousel = TEMPLATE_CAROUSEL_MAP.get(template_id, TEMPLATE_CAROUSEL_MAP['dubai_night'])
 
         if listado_obj:
             _persist_template_id(listado_obj, template_id, source='carrusel')
-
-        style = CAROUSEL_TEMPLATE_STYLES.get(template_id, CAROUSEL_TEMPLATE_STYLES['dubai_night'])
 
         images_pool = _collect_property_images(data)
         if not images_pool:
@@ -1100,15 +1126,11 @@ def generar_carrusel(request):
                 "slide_number": i + 1,
                 "total_slides": 5,
                 "logo_url": data.get('logoAgenciaUrl'),
-                "bg_color": style['bg_color'],
-                "accent_color": style['accent_color'],
-                "overlay_bottom": style['overlay_bottom'],
-                "overlay_mid": style['overlay_mid'],
-                "overlay_top": style['overlay_top'],
+                "operacion": data.get('operacion', 'Venta'),
                 "template_id": template_id,
             }
 
-            html_content = render_to_string('renders/carousel.html', context)
+            html_content = render_to_string(template_carousel, context)
             image_stream = render_html_to_image(html_content, 1080, 1350)
 
             try:
@@ -1678,14 +1700,17 @@ def generar_pdf(request):
         if listado_id_hint:
             listado_obj = Listado.objects.filter(id=listado_id_hint, agente=request.user).first()
 
-        template_id = (
-            _extract_template_id_from_payload(data)
-            or _template_id_from_listado(listado_obj)
-            or random.choice(TEMPLATE_IDS)
-        )
+        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_hint)
 
         context['listado_id'] = listado_id_hint
         context['template_id'] = template_id
+
+        logger.info(
+            "[PDF] generar_pdf listado_id=%s template_id=%s user_id=%s",
+            listado_id_hint,
+            template_id,
+            request.user.id,
+        )
 
         if listado_obj:
             _persist_template_id(listado_obj, template_id, source='pdf')
@@ -1842,11 +1867,7 @@ def generar_imagen_post(request):
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
 
-        template_id = (
-            _extract_template_id_from_payload(data)
-            or _template_id_from_listado(listado_obj)
-            or random.choice(TEMPLATE_IDS)
-        )
+        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_post = TEMPLATE_POST_MAP.get(template_id, TEMPLATE_POST_MAP['dubai_night'])
 
         if listado_obj:
@@ -1928,7 +1949,18 @@ def generar_imagen_story(request):
         #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
-        
+        listado_id_val = data.get('listado_id') or data.get('listadoId')
+
+        listado_obj = None
+        if listado_id_val:
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+
+        template_id = _select_template_id(data, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        template_story = TEMPLATE_STORY_MAP.get(template_id, TEMPLATE_STORY_MAP['dubai_night'])
+
+        if listado_obj:
+            _persist_template_id(listado_obj, template_id, source='story')
+
         # Preparar contexto para la plantilla premium
         context = {
             "portada_url": data.get('portadaUrl'),
@@ -1938,6 +1970,7 @@ def generar_imagen_story(request):
             "precio": data.get('precio', ''),
             "moneda": data.get('moneda', 'USD'),
             "logo_url": data.get('logoAgenciaUrl'),
+            "titulo": f"{data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}",
             "caracteristicas": [
                 {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
                 {"label": "Hab", "valor": data.get('recamaras')},
@@ -1947,7 +1980,7 @@ def generar_imagen_story(request):
         context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
 
         # Renderizar HTML y luego convertir a imagen PNG con Playwright (Formato vertical 9:16)
-        html_content = render_to_string('renders/story.html', context)
+        html_content = render_to_string(template_story, context)
         image_stream = render_html_to_image(html_content, 1080, 1920)
 
         prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido."
@@ -1957,7 +1990,6 @@ def generar_imagen_story(request):
         # Intentar subir a Cloudinary via Almacenamiento
         try:
             image_stream.seek(0)
-            listado_id_val = data.get('listado_id') or data.get('listadoId')
             img_url = AlmacenamientoCloudinary.guardar_story(
                 image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
@@ -1972,11 +2004,16 @@ def generar_imagen_story(request):
                 "mensaje": "No se pudo subir la historia a la nube."
             }, status=500)
 
-        # PERSISTENCIA: Guardar en el listado
-        if listado_id_val:
-            from .models import Listado
-            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
-            actualizar_resultados_listado(listado_obj, 'story', {"url": img_url, "caption": caption})
+        if listado_obj:
+            actualizar_resultados_listado(
+                listado_obj,
+                'story',
+                {
+                    "url": img_url,
+                    "caption": caption,
+                    "template_id": template_id,
+                },
+            )
 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'image')
@@ -1988,7 +2025,8 @@ def generar_imagen_story(request):
             "img_base64": img_base64,
             "public_id": public_id,
             "caption": caption,
-            "texto": caption
+            "texto": caption,
+            "template_id": template_id,
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
@@ -2057,7 +2095,7 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             "precio": data.get('precio', ''),
             "moneda": data.get('moneda', 'USD'),
             "operacion": data.get('operacion', 'Venta'),
-            "agenteNombre": data.get('agenteNombre', request.user.first_name if request.user.first_name else request.user.username),
+            "agenteNombre": data.get('agenteNombre') or getattr(request.user, 'first_name', '') or getattr(request.user, 'nombre', '') or request.user.email,
             "agenciaNombre": data.get('agenciaNombre', ''),
             "portada_url": data.get('portadaUrl'),
             "logo_url": data.get('logoAgenciaUrl'),

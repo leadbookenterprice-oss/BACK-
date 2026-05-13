@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --bg: #07111d; --fg: #e8f3ff; --accent: #00e5ff; }
+  body { width: 1080px; height: 1350px; background: var(--bg); font-family: 'Space Grotesk', sans-serif; color: var(--fg); overflow: hidden; position: relative; }
+  .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+  .overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(7,17,29,0.96) 0%, rgba(7,17,29,0.62) 42%, rgba(7,17,29,0.22) 100%); z-index: 2; }
+  .accent-line { position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--accent); z-index: 8; }
+  .content { position: absolute; inset: 0; z-index: 3; padding: 78px 70px; display: flex; flex-direction: column; justify-content: space-between; }
+  .top { display: flex; justify-content: space-between; align-items: center; }
+  .logo { max-width: 230px; max-height: 90px; object-fit: contain; filter: brightness(0) invert(1); }
+  .badge { border: 1px solid var(--accent); color: var(--accent); font-family: 'Space Mono', monospace; font-size: 17px; letter-spacing: 3px; padding: 10px 16px; text-transform: uppercase; background: rgba(0,229,255,0.08); }
+  .middle { display: flex; flex-direction: column; gap: 24px; margin-bottom: 24px; }
+  .headline { font-family: 'Space Grotesk', sans-serif; font-size: 134px; font-weight: 700; line-height: 0.86; letter-spacing: -1px; text-transform: uppercase; color: var(--accent); }
+  .subheadline { font-size: 42px; line-height: 1.3; color: rgba(232,243,255,0.95); max-width: 900px; }
+  .footer { display: flex; justify-content: flex-end; }
+  .footer-text { font-family: 'Space Mono', monospace; font-size: 20px; color: rgba(232,243,255,0.62); letter-spacing: 2px; text-transform: uppercase; }
+</style>
+</head>
+<body>
+  <div class="accent-line"></div>
+  {% if portada_url %}<img src="{{ portada_url }}" class="bg-image" />{% endif %}
+  <div class="overlay"></div>
+  <div class="content">
+    <div class="top">
+      <div class="badge">{{ operacion }}</div>
+      {% if logo_url %}<img src="{{ logo_url }}" class="logo" />{% else %}<div></div>{% endif %}
+    </div>
+    <div class="middle">
+      <div class="headline">{{ headline }}</div>
+      <div class="subheadline">{{ subheadline }}</div>
+    </div>
+    <div class="footer">
+      {% if slide_number < total_slides %}
+        <div class="footer-text">Sigue deslizando</div>
+      {% else %}
+        <div class="footer-text" style="color: var(--accent)">Hablemos por DM</div>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

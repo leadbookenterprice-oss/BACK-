@@ -66,21 +66,6 @@
     filter: brightness(0) invert(1);
   }
   
-  .slide-counter {
-    background: rgba(255,255,255,0.1);
-    backdrop-filter: blur(10px);
-    border: 2px solid rgba(255,255,255,0.2);
-    color: var(--white);
-    font-family: 'Space Mono', monospace;
-    font-size: 28px;
-    font-weight: 700;
-    padding: 12px 24px;
-    border-radius: 100px;
-  }
-  
-  .slide-counter span {
-    color: var(--accent);
-  }
   
   /* Middle Section */
   .middle-section {
@@ -140,7 +125,7 @@
       {% else %}
         <div></div>
       {% endif %}
-      <div class="slide-counter"><span>{{ slide_number }}</span> / {{ total_slides }}</div>
+      <div></div>
     </div>
     
     <div class="middle-section">
