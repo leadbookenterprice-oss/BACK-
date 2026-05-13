@@ -5,8 +5,48 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.utils import timezone
 
-from api.models import APIKey, APIRequestLog, AdminAlert, Servicio, UserAPIQuota
+from api.models import APIKey, APIRequestLog, AdminAlert, Servicio, UserAPIAssignment, UserAPIQuota
 from api.services.pool_service import APIPoolService
+
+
+def _emit_service_exhausted_event(agente, servicio):
+    emit_ws_event({
+        'type': 'api_service_exhausted',
+        'data': {
+            'user': getattr(agente, 'email', ''),
+            'user_id': getattr(agente, 'id', None),
+            'service': servicio.nombre,
+            'percentage': 100,
+        },
+    })
+
+
+def _mark_service_exhausted(agente, servicio, quota, key_obj=None, reason='servicio agotado'):
+    limit = quota.user_daily_limit or servicio.default_daily_limit or 1500
+    quota.requests_today = max(quota.requests_today, limit)
+    quota.is_blocked = True
+    quota.blocked_reason = reason[:255]
+    quota.save(update_fields=['requests_today', 'is_blocked', 'blocked_reason', 'updated_at'])
+
+    AdminAlert.objects.get_or_create(
+        tipo='quota_warning',
+        severidad='critical',
+        related_user=agente,
+        related_api_key=key_obj,
+        creado_en__date=timezone.now().date(),
+        defaults={
+            'titulo': f'{servicio.nombre} al 100% para {agente.email}',
+            'mensaje': f'El usuario {agente.email} agotó el 100% de {servicio.nombre}. Motivo: {reason}.',
+        },
+    )
+    _emit_service_exhausted_event(agente, servicio)
+
+
+def _raise_service_exhausted(service, message):
+    if str(service or '').lower() == 'gemini':
+        from api.ai_services import GeminiQuotaExhaustedError
+        raise GeminiQuotaExhaustedError(message)
+    raise Exception(message)
 
 
 def emit_ws_event(event_data):
@@ -49,13 +89,24 @@ def track_api_call(service, action=''):
             quota.maybe_reset_daily()
 
             if quota.is_blocked:
-                raise Exception(f"Usuario bloqueado para el servicio {service}: {quota.blocked_reason}")
+                _mark_service_exhausted(agente, servicio, quota, reason=quota.blocked_reason or 'límite alcanzado')
+                _raise_service_exhausted(service, f"Servicio {service} agotado: {quota.blocked_reason or 'límite alcanzado'}")
 
             if quota.requests_today >= quota.user_daily_limit:
-                quota.is_blocked = True
-                quota.blocked_reason = 'Límite diario alcanzado'
-                quota.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
-                raise Exception(f"Límite diario alcanzado para el servicio {service}")
+                _mark_service_exhausted(agente, servicio, quota, reason='Límite diario alcanzado')
+                _raise_service_exhausted(service, f"Servicio {service} agotado: límite diario alcanzado")
+
+            assignment = UserAPIAssignment.objects.filter(
+                user=agente,
+                servicio=servicio,
+                is_primary=True,
+                activo=True,
+            ).select_related('apikey').order_by('assigned_at').first()
+            if assignment and assignment.apikey.status == 'exhausted':
+                _mark_service_exhausted(agente, servicio, quota, assignment.apikey, reason='API key obligatoria agotada')
+                _raise_service_exhausted(service, f"Servicio {service} agotado para este usuario")
+            if assignment and assignment.apikey.status in {'dead', 'disabled'}:
+                raise Exception(f"Servicio {service} no disponible para este usuario")
 
             from api.pool_manager import get_api_key
 
@@ -81,6 +132,15 @@ def track_api_call(service, action=''):
             except Exception as e:
                 error_msg = str(e)
                 status_code = 500
+
+                if e.__class__.__name__ == 'GeminiQuotaExhaustedError':
+                    _mark_service_exhausted(
+                        agente,
+                        servicio,
+                        quota,
+                        key_obj,
+                        reason='Gemini devolvió cuota agotada',
+                    )
 
                 if key_obj:
                     key_obj.error_count += 1

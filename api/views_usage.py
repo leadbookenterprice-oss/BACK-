@@ -61,6 +61,12 @@ def mi_uso_apis(request):
         
         limite = q.user_daily_limit or 1500
         consumido = q.requests_today
+        exhausted_by_key = UserAPIAssignment.objects.filter(
+            user=user,
+            servicio=q.servicio,
+            activo=True,
+            apikey__status='exhausted',
+        ).exists()
         
         # ElevenLabs: si es posible, consultar a la API real para mayor precisión
         # (Solo si tiene una key asignada y activa)
@@ -75,8 +81,14 @@ def mi_uso_apis(request):
                     pass
 
         porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
-        if q.is_blocked:
+        if q.is_blocked or exhausted_by_key:
             porcentaje = 100
+            consumido = max(consumido, limite)
+            if not q.is_blocked:
+                q.is_blocked = True
+                q.blocked_reason = 'API key obligatoria agotada'
+                q.requests_today = consumido
+                q.save(update_fields=['is_blocked', 'blocked_reason', 'requests_today', 'updated_at'])
             
         stats.append({
             "servicio": svc_name,
@@ -86,7 +98,7 @@ def mi_uso_apis(request):
             "limite": limite,
             "unidad": info['unidad'],
             "porcentaje": porcentaje,
-            "status": "exhausted" if q.is_blocked else "ok"
+            "status": "exhausted" if q.is_blocked or exhausted_by_key else "ok"
         })
 
     return Response({
@@ -110,6 +122,9 @@ def admin_uso_global(request):
         limite = k.google_daily_limit or 1500
         consumido = k.requests_today
         porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
+        if k.status == 'exhausted':
+            porcentaje = 100
+            consumido = max(consumido, limite)
         
         resultado.append({
             "id": k.id,

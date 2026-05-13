@@ -29,20 +29,9 @@ class APIPoolService:
             if not servicio:
                 continue
 
-            UserAPIAssignment.objects.filter(
-                user=user,
-                servicio=servicio,
-                is_primary=True,
-                activo=True,
-            ).exclude(apikey__status__in=['assigned', 'available']).update(activo=False)
-
             # Ya tiene asignación primaria activa → skip
             if UserAPIAssignment.objects.filter(
-                user=user,
-                servicio=servicio,
-                is_primary=True,
-                activo=True,
-                apikey__status__in=['assigned', 'available'],
+                user=user, servicio=servicio, is_primary=True, activo=True
             ).exists():
                 asignados.append(nombre_servicio)
                 continue
@@ -204,19 +193,8 @@ class APIPoolService:
             if not servicio:
                 continue
 
-            UserAPIAssignment.objects.filter(
-                user=user,
-                servicio=servicio,
-                is_primary=True,
-                activo=True,
-            ).exclude(apikey__status__in=['assigned', 'available']).update(activo=False)
-
             tiene_activa = UserAPIAssignment.objects.filter(
-                user=user,
-                servicio=servicio,
-                is_primary=True,
-                activo=True,
-                apikey__status__in=['assigned', 'available'],
+                user=user, servicio=servicio, is_primary=True, activo=True
             ).exists()
 
             if tiene_activa:
