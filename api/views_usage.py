@@ -52,6 +52,13 @@ def mi_uso_apis(request):
 
     stats = []
     for q in quotas:
+        q.maybe_reset_daily()
+        q.recalcular_limite(plan=user.plan_nombre)
+        if q.is_blocked and q.requests_today < q.user_daily_limit:
+            q.is_blocked = False
+            q.blocked_reason = None
+            q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
+
         svc_name = q.servicio.nombre
         info = SERVICIO_MAP.get(svc_name, {
             'nombre': svc_name.capitalize(),
@@ -61,18 +68,28 @@ def mi_uso_apis(request):
         
         limite = q.user_daily_limit or 1500
         consumido = q.requests_today
-        has_usable_key = UserAPIAssignment.objects.filter(
+        active_assignments = UserAPIAssignment.objects.filter(
             user=user,
             servicio=q.servicio,
             activo=True,
             apikey__status__in=['assigned', 'available'],
-        ).exists()
+        ).select_related('apikey')
+        has_usable_key = any(
+            not (a.apikey.google_daily_limit and a.apikey.requests_today >= a.apikey.google_daily_limit)
+            for a in active_assignments
+        )
         exhausted_by_key = not has_usable_key and UserAPIAssignment.objects.filter(
             user=user,
             servicio=q.servicio,
             activo=True,
             apikey__status='exhausted',
         ).exists()
+        extras_activos = UserAPIAssignment.objects.filter(
+            user=user,
+            servicio=q.servicio,
+            activo=True,
+            is_primary=False,
+        ).count()
         
         # ElevenLabs: si es posible, consultar a la API real para mayor precisión
         # (Solo si tiene una key asignada y activa)
@@ -102,6 +119,7 @@ def mi_uso_apis(request):
             "icono": info['icono'],
             "consumido": consumido,
             "limite": limite,
+            "extras_activos": extras_activos,
             "unidad": info['unidad'],
             "porcentaje": porcentaje,
             "status": "exhausted" if q.is_blocked or exhausted_by_key else "ok"

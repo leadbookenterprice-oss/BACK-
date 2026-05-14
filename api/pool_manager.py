@@ -2,6 +2,13 @@ from api.models import APIKey, UserAPIAssignment
 from api.services.pool_service import APIPoolService
 
 
+def _key_usage_ratio(key):
+    limit = key.google_daily_limit or 0
+    if limit <= 0:
+        return 0
+    return key.requests_today / limit
+
+
 def get_api_key(agente, servicio):
     """
     Devuelve la API key asignada al usuario para un servicio.
@@ -12,13 +19,37 @@ def get_api_key(agente, servicio):
         return None
 
     def _buscar_asignada():
-        asig = UserAPIAssignment.objects.filter(
+        assignments = UserAPIAssignment.objects.filter(
             user=agente,
             servicio__nombre__iexact=servicio_nombre,
             activo=True,
             apikey__status__in=['assigned', 'available']
-        ).select_related('apikey').order_by('-is_primary', 'assigned_at').first()
-        return asig.apikey.api_key if asig and asig.apikey else None
+        ).select_related('apikey').order_by('assigned_at')
+
+        candidates = []
+        for asig in assignments:
+            key = asig.apikey
+            if not key:
+                continue
+
+            limit = key.google_daily_limit or 0
+            if limit and key.requests_today >= limit:
+                key.status = 'exhausted'
+                key.save(update_fields=['status', 'updated_at'])
+                continue
+
+            candidates.append(asig)
+
+        if not candidates:
+            return None
+
+        # Balancea entre primaria y extras: una extra recién comprada empieza a
+        # usarse aunque la primaria todavía tenga cupo.
+        selected = min(
+            candidates,
+            key=lambda asig: (_key_usage_ratio(asig.apikey), not asig.is_primary, asig.assigned_at),
+        )
+        return selected.apikey.api_key if selected.apikey else None
 
     key_val = _buscar_asignada()
     if key_val:

@@ -770,8 +770,12 @@ class UserAPIQuota(models.Model):
         ).count()
 
         incremento = self.servicio.extra_increment
-        self.user_daily_limit = base + (extras * incremento)
-        self.save(update_fields=['user_daily_limit', 'updated_at'])
+        if servicio_nombre == 'uploadpost' and incremento == 1500:
+            incremento = 10
+        nuevo_limite = base + (extras * incremento)
+        if self.user_daily_limit != nuevo_limite:
+            self.user_daily_limit = nuevo_limite
+            self.save(update_fields=['user_daily_limit', 'updated_at'])
 
     def __str__(self):
         return f"{self.user.email} — {self.servicio.nombre}: {self.requests_today}/{self.user_daily_limit}"
@@ -1169,11 +1173,5 @@ def recalcular_quotas_al_cambiar_plan(sender, instance, created, **kwargs):
     Evita que un usuario que hizo downgrade mantenga límites del plan anterior.
     """
     if not created:
-        # Solo si cambió el plan
-        try:
-            old = Agent.objects.get(pk=instance.pk)
-            if old.plan_nombre != instance.plan_nombre:
-                for quota in instance.api_quotas.all():
-                    quota.recalcular_limite(plan=instance.plan_nombre)
-        except Agent.DoesNotExist:
-            pass
+        for quota in instance.api_quotas.all():
+            quota.recalcular_limite(plan=instance.plan_nombre)

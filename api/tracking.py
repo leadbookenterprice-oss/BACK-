@@ -87,6 +87,12 @@ def track_api_call(service, action=''):
                 },
             )
             quota.maybe_reset_daily()
+            quota.recalcular_limite(plan=agente.plan_nombre)
+
+            if quota.is_blocked and quota.requests_today < quota.user_daily_limit:
+                quota.is_blocked = False
+                quota.blocked_reason = None
+                quota.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
 
             if quota.is_blocked:
                 _mark_service_exhausted(agente, servicio, quota, reason=quota.blocked_reason or 'límite alcanzado')
@@ -187,6 +193,10 @@ def track_api_call(service, action=''):
                     )
 
                     limit = key_obj.google_daily_limit or 0
+                    if limit and key_obj.requests_today >= limit:
+                        key_obj.status = 'exhausted'
+                        key_obj.save(update_fields=['status', 'updated_at'])
+
                     if limit and key_obj.requests_today >= int(limit * 0.8):
                         AdminAlert.objects.get_or_create(
                             tipo='quota_warning',

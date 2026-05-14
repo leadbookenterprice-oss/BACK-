@@ -6113,6 +6113,12 @@ def estado_cuota_ia(request):
     from .models import UserAPIQuota, Suscripcion
     try:
         quota = UserAPIQuota.objects.get(user=request.user, servicio__nombre='gemini')
+        quota.maybe_reset_daily()
+        quota.recalcular_limite(plan=request.user.plan_nombre)
+        if quota.is_blocked and quota.requests_today < quota.user_daily_limit:
+            quota.is_blocked = False
+            quota.blocked_reason = None
+            quota.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
         agotada = quota.is_blocked
         usado = quota.requests_today
         limite = quota.user_daily_limit
@@ -6148,9 +6154,9 @@ def debug_quota(request):
                 q.is_blocked = False
                 q.save()
                 desbloqueados += 1
-        # Corregir límites incorrectos por servicio
-        UserAPIQuota.objects.filter(servicio__nombre='uploadpost', user_daily_limit__gt=100).update(user_daily_limit=10)
-        UserAPIQuota.objects.filter(servicio__nombre='gemini', user_daily_limit__lt=100).update(user_daily_limit=1500)
+        # Corregir límites stale según plan + extras activos.
+        for q in UserAPIQuota.objects.select_related('user', 'servicio'):
+            q.recalcular_limite(plan=q.user.plan_nombre)
         
         return Response({'desbloqueados': desbloqueados})
 
