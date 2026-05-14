@@ -33,7 +33,17 @@ SECRET_KEY = config('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*').split(',')
+ALLOWED_HOSTS_ENV = config('ALLOWED_HOSTS', default='')
+_env_allowed_hosts = [h.strip() for h in ALLOWED_HOSTS_ENV.split(',') if h.strip()]
+_default_allowed_hosts = [
+    '.up.railway.app',
+    'backend-production-cd305.up.railway.app',
+    'leadbook.com.ar',
+    'www.leadbook.com.ar',
+    'localhost',
+    '127.0.0.1',
+]
+ALLOWED_HOSTS = ['*'] if '*' in _env_allowed_hosts else list(dict.fromkeys(_env_allowed_hosts + _default_allowed_hosts))
 
 # Application definition
 
