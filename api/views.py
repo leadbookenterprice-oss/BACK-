@@ -5314,9 +5314,17 @@ def generar_escena(request):
     }
     tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
     narrador = 'firme, directo, con autoridad' if voz == 'masculina' else 'cálido, cercano, invitador'
-    tipo_video_norm = str(tipo_video or '').strip().lower()
-    es_reel = tipo_video_norm in ('reel', 'reel_rapido', 'reel-rapido')
-    palabras = '7-14' if es_reel else '14-24'
+    tipo_video_raw = str(tipo_video or '').strip().lower()
+    tipo_video_norm = {
+        'tour_narrado': 'tour',
+        'tour-narrado': 'tour',
+        'reel_rapido': 'reel',
+        'reel-rapido': 'reel',
+    }.get(tipo_video_raw, tipo_video_raw if tipo_video_raw in ('tour', 'reel') else 'reel')
+    reglas_palabras = {
+        'tour': {'min': 24, 'max': 55},
+        'reel': {'min': 6, 'max': 18},
+    }[tipo_video_norm]
     contexto_extra = f"\nEnfoque adicional: {contexto_adicional}" if contexto_adicional else ''
 
     prompt = f"""Sos un copywriter inmobiliario experto.
@@ -5327,7 +5335,7 @@ TONO: {tono_instrucciones}
 NARRADOR: {narrador}{contexto_extra}
 
 REQUISITOS:
-- Exactamente {palabras} palabras
+- Entre {reglas_palabras['min']} y {reglas_palabras['max']} palabras
 - El texto es para narración en voz en off, debe sonar natural al hablar
 - No pongas el nombre de la escena, solo el texto a narrar
 - Responde SOLO el texto, sin JSON, sin comillas, sin explicaciones"""
