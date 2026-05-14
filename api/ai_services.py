@@ -258,7 +258,6 @@ def generar_html_desde_template(context, agente):
     agent_photo_raw = (
         context.get('agente_foto_url', '')
         or context.get('agente_foto', '')
-        or context.get('logo_url_raw', '')
     )
     if isinstance(agent_photo_raw, dict) and 'public_id' in agent_photo_raw:
         cloud = agent_photo_raw.get('cloudinary_account', 'df1vldrhb')

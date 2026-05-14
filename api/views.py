@@ -17,6 +17,8 @@ import re
 import json
 import io
 import zipfile
+import html as html_lib
+import unicodedata
 from api.services.almacenamiento import AlmacenamientoCloudinary
 import logging
 
@@ -715,11 +717,80 @@ def _resolve_cloudinary_asset_url(value):
     return ''
 
 
+def _looks_like_property_image(value):
+    """Evita que portada/galeria del listado se usen como logo o avatar."""
+    if isinstance(value, dict):
+        raw = ' '.join(
+            str(value.get(key) or '')
+            for key in ('public_id', 'url', 'secure_url')
+        )
+    else:
+        raw = str(value or '')
+
+    normalized = raw.replace('\\', '/').lower()
+    if not normalized:
+        return False
+
+    property_markers = (
+        '/listado_',
+        'listado_',
+        '/galeria',
+        'galeria_',
+        '/portada',
+        'tipo_foto=galeria',
+        'tipo_foto=portada',
+    )
+    return any(marker in normalized for marker in property_markers)
+
+
+def _resolve_brand_asset_url(value, allow_data_url=False):
+    if not value or _looks_like_property_image(value):
+        return ''
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if allow_data_url and cleaned.startswith('data:image'):
+            return cleaned
+        if cleaned.startswith('http'):
+            return re.sub(r's--[^/]+--/', '', cleaned)
+        return ''
+
+    resolved = _resolve_cloudinary_asset_url(value)
+    if resolved and not _looks_like_property_image(resolved):
+        return resolved
+    return ''
+
+
+def _inject_agency_logo_fallback(html, logo_url, agency_name):
+    if logo_url or not agency_name or '<div></div>' not in html:
+        return html
+
+    safe_agency = html_lib.escape(str(agency_name).strip())
+    if not safe_agency:
+        return html
+
+    css = (
+        '<style id="agency-logo-fallback">'
+        '.agency-logo-text{max-width:260px;color:var(--accent,var(--acento,#c9a84c));'
+        'font-family:Inter,DM Sans,Arial,sans-serif;font-size:24px;font-weight:900;'
+        'line-height:1.05;letter-spacing:3px;text-transform:uppercase;text-align:right;}'
+        '</style>'
+    )
+    out = html.replace('</head>', f'{css}</head>', 1) if '</head>' in html else f'{css}{html}'
+    return out.replace('<div></div>', f'<div class="agency-logo-text">{safe_agency}</div>', 1)
+
+
 def _collect_property_images(data):
     portada = data.get('portadaUrl') if isinstance(data, dict) else None
     fotos = data.get('fotosRecorrido', []) if isinstance(data, dict) else []
     if not isinstance(fotos, list):
         fotos = []
+
+    excluded = set()
+    for key in ('logoAgenciaUrl', 'logo_url', 'logoUrl', 'agencyLogo', 'agenteFotoUrl', 'agente_foto_url'):
+        resolved_brand = _resolve_brand_asset_url(data.get(key), allow_data_url=True) if isinstance(data, dict) else ''
+        if resolved_brand:
+            excluded.add(resolved_brand)
 
     candidates = []
     if portada:
@@ -733,7 +804,7 @@ def _collect_property_images(data):
         if isinstance(item, dict) and item.get('url') and not item.get('public_id'):
             item_val = item.get('url')
         resolved = _resolve_cloudinary_asset_url(item_val)
-        if resolved and resolved not in seen:
+        if resolved and resolved not in seen and resolved not in excluded:
             seen.add(resolved)
             urls.append(resolved)
     return urls
@@ -782,7 +853,13 @@ def _resolve_branding_payload(data, user):
     payload = data if isinstance(data, dict) else {}
     default_profile = _get_default_commercial_agent(user)
 
-    payload_logo = payload.get('logoAgenciaUrl') or payload.get('logo_url')
+    payload_logo = (
+        payload.get('logoAgenciaUrl')
+        or payload.get('logo_url')
+        or payload.get('logoUrl')
+        or payload.get('agencyLogo')
+        or payload.get('agenciaLogoUrl')
+    )
     active_asset = None
     if default_profile:
         active_asset = default_profile.media_assets.filter(kind='agent_photo', is_active=True).order_by('-uploaded_at').first()
@@ -792,7 +869,6 @@ def _resolve_branding_payload(data, user):
         or payload.get('agenteFotoUrl')
         or payload.get('agente_foto_url')
         or (default_profile.foto_url if default_profile else '')
-        or getattr(user, 'logo_url', '')
         or ''
     )
 
@@ -831,7 +907,11 @@ def _resolve_branding_payload(data, user):
         or 'Agencia'
     )
 
-    logo_url = payload_logo or getattr(user, 'logo_url', '') or ''
+    logo_url = (
+        _resolve_brand_asset_url(payload_logo, allow_data_url=True)
+        or _resolve_brand_asset_url(getattr(user, 'logo_url', ''), allow_data_url=True)
+    )
+    agent_photo_url = _resolve_brand_asset_url(profile_photo, allow_data_url=True)
 
     return {
         'agente_nombre': str(agent_name).strip(),
@@ -839,8 +919,8 @@ def _resolve_branding_payload(data, user):
         'agente_email': str(agent_email).strip(),
         'agente_telefono': str(agent_phone).strip(),
         'agencia_nombre': str(agency_name).strip(),
-        'logo_url': str(logo_url).strip(),
-        'agente_foto_url': str(profile_photo).strip(),
+        'logo_url': str(logo_url or '').strip(),
+        'agente_foto_url': str(agent_photo_url or '').strip(),
         'agente_foto_asset': active_asset.as_cloudinary_ref() if active_asset else None,
         'default_agent_profile': default_profile,
     }
@@ -861,7 +941,58 @@ def _normalize_hashtags(value):
         tag = re.sub(r'[^#\wÁÉÍÓÚÜÑáéíóúüñ]', '', tag)
         if len(tag) > 1 and tag not in tags:
             tags.append(tag[:50])
-    return tags[:20]
+    return tags[:35]
+
+
+def _hashtag_from_text(value):
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    normalized = unicodedata.normalize('NFKD', text)
+    ascii_text = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+    cleaned = re.sub(r'[^A-Za-z0-9]+', ' ', ascii_text).strip().title().replace(' ', '')
+    return f'#{cleaned[:48]}' if cleaned else ''
+
+
+def _build_dynamic_hashtags(data, formato='post'):
+    data = data if isinstance(data, dict) else {}
+    tipo = data.get('tipoPropiedad') or data.get('tipo_propiedad') or ''
+    ciudad = data.get('ciudad') or ''
+    pais = data.get('pais') or ''
+    operacion = str(data.get('operacion') or '').strip().lower()
+
+    tags = [
+        '#RealEstate', '#Inmobiliaria', '#Propiedades', '#BienesRaices',
+        '#InversionInmobiliaria', '#OportunidadInmobiliaria', '#PropiedadPremium',
+        '#LuxuryRealEstate', '#RealEstateMarketing', '#BrokerInmobiliario',
+        '#AgenteInmobiliario', '#ListadoInmobiliario', '#TourInmobiliario',
+        '#VentaInmobiliaria', '#CompraInteligente', '#InversionSegura',
+        '#MercadoInmobiliario', '#RealEstateLatam', '#LeadBook',
+    ]
+
+    for candidate in (tipo, ciudad, pais):
+        tag = _hashtag_from_text(candidate)
+        if tag:
+            tags.append(tag)
+
+    tipo_tag = _hashtag_from_text(tipo)
+    if tipo_tag:
+        suffix = 'EnAlquiler' if any(word in operacion for word in ('alquiler', 'renta', 'rent')) else 'EnVenta'
+        tags.append(f'{tipo_tag}{suffix}'[:50])
+
+    ciudad_tag = _hashtag_from_text(ciudad)
+    if ciudad_tag:
+        tags.extend([f'{ciudad_tag}RealEstate'[:50], f'#VivirEn{ciudad_tag[1:]}'[:50]])
+
+    if formato == 'carrusel':
+        tags.extend(['#CarruselInmobiliario', '#DeslizaParaVer', '#FichaInmobiliaria'])
+    elif formato == 'story':
+        tags.extend(['#InstagramStories', '#ConsultaPorWhatsApp', '#DisponibleAhora'])
+    else:
+        tags.extend(['#InstagramRealEstate', '#PostInmobiliario', '#AgendaTuVisita'])
+
+    normalized = _normalize_hashtags(tags)
+    return normalized[:32]
 
 
 def _resolve_content_preferences(user, template_tokens=None, payload=None):
@@ -876,7 +1007,11 @@ def _resolve_content_preferences(user, template_tokens=None, payload=None):
         payload.get('hashtags')
         or (tokens_copy or {}).get('hashtags')
         or (prefs.hashtags if prefs else None)
-        or ['#RealEstate', '#Inmobiliaria', '#Propiedades', '#Inversion']
+        or [
+            '#RealEstate', '#Inmobiliaria', '#Propiedades', '#BienesRaices',
+            '#InversionInmobiliaria', '#PropiedadPremium', '#LuxuryRealEstate',
+            '#OportunidadInmobiliaria', '#AgenteInmobiliario', '#AgendaTuVisita',
+        ]
     )
     emoji_density = (
         payload.get('emoji_density')
@@ -901,7 +1036,7 @@ def _caption_preference_prompt(prefs):
     hashtags = ' '.join(prefs.get('hashtags') or [])
     template_instructions = str(prefs.get('template_instructions') or '').strip()
     extra = f" Instrucciones del template personalizado: {template_instructions}" if template_instructions else ''
-    return f"Tono {prefs.get('tone', 'premium')}; {emoji_text}; usar estos hashtags si aplican: {hashtags}.{extra}"
+    return f"Tono {prefs.get('tone', 'premium')}; {emoji_text}; usar estos hashtags base si aplican y sumar hashtags especificos de ciudad, propiedad, inversion y lifestyle: {hashtags}.{extra}"
 
 
 def _attach_template_instructions_to_prefs(prefs, selection):
@@ -911,13 +1046,21 @@ def _attach_template_instructions_to_prefs(prefs, selection):
     return prefs
 
 
-def _apply_caption_preferences(caption, prefs, max_chars=2200):
+def _apply_caption_preferences(caption, prefs, max_chars=2200, data=None, formato='post'):
     text = str(caption or '').strip()
-    tags = [tag for tag in (prefs.get('hashtags') or []) if tag not in text]
+    tag_pool = []
+    tag_pool.extend(prefs.get('hashtags') or [])
+    tag_pool.extend(_build_dynamic_hashtags(data or {}, formato=formato))
+    tags = [tag for tag in _normalize_hashtags(tag_pool) if tag not in text]
     if tags:
-        suffix = ' '.join(tags[:10])
-        if len(text) + len(suffix) + 2 <= max_chars:
-            text = f"{text}\n\n{suffix}".strip()
+        selected = []
+        for tag in tags[:32]:
+            candidate = ' '.join(selected + [tag])
+            if len(text) + len(candidate) + 2 > max_chars:
+                break
+            selected.append(tag)
+        if selected:
+            text = f"{text}\n\n{' '.join(selected)}".strip()
     if not prefs.get('use_emojis') or prefs.get('emoji_density') == 'none':
         text = re.sub(r'[\U0001F300-\U0001FAFF\U00002700-\U000027BF]+', '', text).strip()
     return text[:max_chars].rstrip()
@@ -1075,7 +1218,7 @@ def _finalize_caption_text(raw_text, data, formato='post', prefs=None, max_chars
         caption = ''
     caption = _ensure_caption_length(caption, data, formato=formato)
     if prefs:
-        caption = _apply_caption_preferences(caption, prefs, max_chars=max_chars)
+        caption = _apply_caption_preferences(caption, prefs, max_chars=max_chars, data=data, formato=formato)
     return caption
 
 
@@ -1102,19 +1245,23 @@ def _fallback_caption_text(data, formato='post'):
         return (
             f"{tipo} en {ciudad}. {operacion.title()} por {moneda} {precio}. "
             f"Con {specs}, esta opcion destaca por ubicacion, estilo y potencial de valorizacion. "
-            "Si queres fotos, ficha completa y coordinar visita, escribinos ahora y te asesoramos en minutos."
+            "Si queres fotos, ficha completa y coordinar visita, escribinos ahora y te asesoramos en minutos. "
+            "#DisponibleAhora #ConsultaPorWhatsApp #Propiedades #RealEstate"
         )
     if formato == 'carrusel':
         return (
             f"{tipo} en {ciudad}: una oportunidad real para {operacion} con propuesta premium y excelente ubicacion. "
             f"Precio publicado: {moneda} {precio}. La propiedad ofrece {specs}, ambientes luminosos y funcionales para vivir o invertir. "
-            "Escribinos para enviarte toda la informacion y coordinar visita. #RealEstate #Inmobiliaria #Inversion"
+            "Desliza el carrusel para ver recorrido, diferenciales y datos clave antes de decidir. "
+            "Escribinos para enviarte toda la informacion, disponibilidad actualizada y coordinar visita. "
+            "#RealEstate #Inmobiliaria #Inversion #BienesRaices #PropiedadPremium #CarruselInmobiliario"
         )
     return (
         f"{tipo} en {ciudad} en {operacion}, pensada para quienes buscan ubicacion, calidad y rentabilidad. "
         f"Precio de referencia: {moneda} {precio}. Con {specs}, esta propiedad combina diseno, comodidad y una excelente proyeccion de valor. "
-        "Contactanos para recibir la ficha completa, resolver dudas y coordinar visita personalizada. "
-        "#RealEstate #Inmobiliaria #Propiedades #Inversion"
+        "Ideal para compradores e inversores que valoran informacion clara, buen asesoramiento y una decision segura. "
+        "Contactanos para recibir la ficha completa, resolver dudas, revisar condiciones comerciales y coordinar visita personalizada. "
+        "#RealEstate #Inmobiliaria #Propiedades #Inversion #BienesRaices #PropiedadPremium #AgendaTuVisita"
     )
 
 
@@ -1158,8 +1305,8 @@ def _get_leadbook_logo_data_url():
 
 def _ensure_caption_length(text, data, formato='post'):
     caption = str(text or '').strip()
-    min_chars_map = {'post': 650, 'story': 280, 'carrusel': 620}
-    max_chars_map = {'post': 2200, 'story': 500, 'carrusel': 2200}
+    min_chars_map = {'post': 1100, 'story': 380, 'carrusel': 1150}
+    max_chars_map = {'post': 2200, 'story': 650, 'carrusel': 2200}
 
     min_chars = min_chars_map.get(formato, 120)
     max_chars = max_chars_map.get(formato, 2200)
@@ -1192,9 +1339,10 @@ def _ensure_caption_length(text, data, formato='post'):
                 "• Ubicación competitiva frente a opciones similares de la zona.",
                 "• Distribución pensada para comodidad, funcionalidad y estilo.",
                 "• Potencial de renta y valorización a mediano plazo.",
+                "• Contenido visual pensado para evaluar la propiedad con más claridad antes de visitar.",
                 "\nCTA",
-                "Escribinos para recibir la ficha completa, comparativa de mercado y coordinar visita.",
-                "#RealEstate #InversionInmobiliaria #Propiedades #TuNuevoHogar",
+                "Escribinos para recibir la ficha completa, comparativa de mercado, disponibilidad y coordinar visita privada.",
+                "#RealEstate #InversionInmobiliaria #Propiedades #BienesRaices #PropiedadPremium #CarruselInmobiliario #AgendaTuVisita #LuxuryRealEstate",
             ]
         else:
             extension_blocks = [
@@ -1204,9 +1352,10 @@ def _ensure_caption_length(text, data, formato='post'):
                 "• Balance entre calidad constructiva, ubicación y proyección de valor.",
                 "\nENFOQUE COMERCIAL",
                 "Esta propiedad se posiciona como una alternativa sólida para quien busca decidir con información clara y respaldo profesional.",
+                "Además, permite comunicar valor desde el primer contacto: ubicación, estilo de vida, potencial de inversión y una propuesta concreta para avanzar sin vueltas.",
                 "\nSIGUIENTE PASO",
                 "Escribinos para enviarte la ficha técnica completa, videos, disponibilidad y agendar visita personalizada.",
-                "#RealEstate #Propiedades #Inmobiliaria #Inversion",
+                "#RealEstate #Propiedades #Inmobiliaria #Inversion #BienesRaices #PropiedadPremium #OportunidadInmobiliaria #AgendaTuVisita #LuxuryRealEstate #BrokerInmobiliario",
             ]
 
         for block in extension_blocks:
@@ -1620,7 +1769,7 @@ FORMATO:
 
     def _validate_escenas(escenas):
         if len(escenas) < rules['required_scenes']:
-            return False, f"Escenas insuficientes: {len(escenas)}/{rules['required_scenes']}"
+            return False, f"Escenas insuficientes: {len(escenas)}/{rules['required_scenes']}", None
 
         limited = escenas[:rules['required_scenes']]
         total_words = sum(_count_words(e.get('texto', '')) for e in limited)
@@ -1631,10 +1780,10 @@ FORMATO:
         ]
 
         if too_short:
-            return False, f"Escenas demasiado cortas: {too_short}"
+            return False, f"Escenas demasiado cortas: {too_short}", None
 
         if total_words < rules['min_total_words']:
-            return False, f"Palabras insuficientes: {total_words}/{rules['min_total_words']}"
+            return False, f"Palabras insuficientes: {total_words}/{rules['min_total_words']}", None
 
         return True, '', {
             'escenas': limited,
@@ -2519,7 +2668,6 @@ def generar_carrusel(request):
             {"kind": "template", "image": pick_image(0), "headline": tipo_propiedad, "subheadline": f"{ubicacion_text} | {operacion_text} por {precio_text}. {superficie} m2, {recamaras} hab, {banos} banos."},
             {"kind": "template", "image": pick_image(1), "headline": "Beneficios", "subheadline": f"{amenities_text}. Una propiedad pensada para destacar frente al mercado."},
             {"kind": "template", "image": pick_image(2), "headline": "Diferencial", "subheadline": descripcion_corta},
-            {"kind": "template", "image": pick_image(3), "headline": "Galeria", "subheadline": "Desliza para ver las fotos reales de la propiedad, sin textos ni distracciones."},
         ]
 
         for image_url in images_pool:
@@ -2531,10 +2679,11 @@ def generar_carrusel(request):
         ])
 
         for i in range(len(slides_content)):
+            slide = slides_content[i]
             context = {
-                "portada_url": slides_content[i].get("image"),
-                "headline": slides_content[i]["headline"],
-                "subheadline": slides_content[i]["subheadline"],
+                "portada_url": slide.get("image"),
+                "headline": slide.get("headline", ""),
+                "subheadline": slide.get("subheadline", ""),
                 "slide_number": i + 1,
                 "total_slides": len(slides_content),
                 "logo_url": branding.get('logo_url', ''),
@@ -2556,14 +2705,15 @@ def generar_carrusel(request):
                 "template_id": template_id,
             }
 
-            if slides_content[i].get('kind') == 'gallery':
-                html_content = render_clean_gallery_slide(slides_content[i].get('image'))
-            elif slides_content[i].get('kind') == 'contact':
+            if slide.get('kind') == 'gallery':
+                html_content = render_clean_gallery_slide(slide.get('image'))
+            elif slide.get('kind') == 'contact':
                 html_content = render_contact_slide(context)
             else:
                 html_content = render_to_string(template_carousel, context)
                 html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
                 html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
+                html_content = _inject_agency_logo_fallback(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
             image_stream = render_html_to_image(html_content, 1080, 1350)
 
             try:
@@ -2581,11 +2731,19 @@ def generar_carrusel(request):
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
-        prompt_text = f"""Escribí UN SOLO caption final para Instagram Carrusel.
-Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}.
+        prompt_text = f"""Escribí UN SOLO caption final para Instagram Carrusel, listo para publicar.
+Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
 Operación y precio: {data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-Incluí gancho fuerte, por qué comprar/invertir, amenities o diferenciales, plan de pago/consulta comercial, CTA a WhatsApp, emojis medidos y hashtags.
-No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
+Detalles: {recamaras} habitaciones, {banos} baños, {superficie} m2. Amenities/diferenciales: {amenities_text}. Contexto: {descripcion_corta}.
+
+Requisitos obligatorios:
+- 1100 a 1900 caracteres.
+- Gancho con personalidad en la primera línea.
+- 2 a 4 párrafos cortos, con deseo, exclusividad, inversión y beneficio concreto.
+- Mencionar que el carrusel muestra recorrido/fotos reales y que conviene guardar o compartir.
+- CTA claro a WhatsApp/consulta privada.
+- Cerrar con 25 a 30 hashtags variados y específicos, no genéricos repetidos.
+- No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
         caption = smart_call(prompt_text, system_prompt="Sos un director de marketing inmobiliario digital. Devolvés solo copy final listo para publicar.", agente=user)
         caption = _finalize_caption_text(caption, data, formato='carrusel', prefs=content_prefs, max_chars=2200)
@@ -3009,8 +3167,7 @@ def construir_contexto_pdf(data, user, request=None):
     agente_foto_url = branding.get('agente_foto_url', '')
 
     # ─── Procesar imágenes (base64 Y URLs) ───────────────────────────────
-    logo_val_raw = branding.get('logo_url', '')
-    logo_url = resolver_imagen(logo_val_raw)
+    logo_url = branding.get('logo_url', '')
 
     portada_val_raw = data.get('portadaUrl', '')
     fotos_raw = data.get('fotosRecorrido', [])
@@ -3018,13 +3175,13 @@ def construir_contexto_pdf(data, user, request=None):
     fotos_limpias = []
     for f in fotos_raw:
         if isinstance(f, dict):
-            if f.get('public_id') and f != logo_val_raw:
+            if f.get('public_id') and _resolve_cloudinary_asset_url(f) != logo_url:
                 fotos_limpias.append(f)
-        elif isinstance(f, str) and f and f != logo_val_raw:
+        elif isinstance(f, str) and f and f != logo_url:
             fotos_limpias.append(f)
 
     # Si la portada viene vacía o es igual al logo, usar la primera foto real de la propiedad
-    if not portada_val_raw or portada_val_raw == logo_val_raw:
+    if not portada_val_raw or portada_val_raw == logo_url:
         if fotos_limpias:
             portada_val_raw = fotos_limpias[0]
 
@@ -3356,14 +3513,24 @@ def generar_imagen_post(request):
         html_content = render_to_string(template_post, context)
         html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
         html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
+        html_content = _inject_agency_logo_fallback(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
-        prompt_text = f"""Escribí UN SOLO caption final para Instagram Feed.
-Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}.
+        prompt_text = f"""Escribí UN SOLO caption final para Instagram Feed, listo para publicar.
+Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
 Operación y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-Debe tener gancho, valor comercial, detalles clave, CTA a WhatsApp y hashtags.
-No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
+Datos: habitaciones {data.get('recamaras', '')}, baños {data.get('banos', '')}, superficie {data.get('superficieCubierta') or data.get('superficieTotal') or ''}. Amenities: {', '.join(data.get('amenidades', [])) if isinstance(data.get('amenidades'), list) else ''}.
+Contexto adicional: {data.get('contextoAdicional', '') or data.get('notasAdicionales', '')}.
+
+Requisitos obligatorios:
+- 1100 a 1900 caracteres.
+- Primera línea con gancho fuerte y personalidad, no genérica.
+- 2 a 4 párrafos cortos con deseo, valor comercial, inversión/estilo de vida y urgencia elegante.
+- Incluir detalles concretos, no solo adjetivos.
+- CTA directo a WhatsApp o mensaje privado para ficha completa, disponibilidad y visita.
+- Cerrar con 25 a 30 hashtags variados, mezclando ciudad, país, tipo de propiedad, operación, inversión, lujo y real estate.
+- No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
 Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
         caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales. Devolvés solo copy final listo para publicar.", agente=request.user)
         caption = _finalize_caption_text(caption, data, formato='post', prefs=content_prefs, max_chars=2200)
@@ -3503,6 +3670,7 @@ def generar_imagen_story(request):
         html_content = render_to_string(template_story, context)
         html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
         html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
+        html_content = _inject_agency_logo_fallback(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
         image_stream = render_html_to_image(html_content, 1080, 1920)
 
         caption = ''
@@ -3577,10 +3745,11 @@ def generar_caption_story(request):
             selection,
         )
 
-        prompt_text = f"""Escribí UN SOLO caption opcional para Instagram Story.
-Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}.
+        prompt_text = f"""Escribí UN SOLO caption opcional para Instagram Story, listo para publicar.
+Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
 Operación y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-Máximo 500 caracteres. Debe ser directo, premium, con CTA a responder o escribir por WhatsApp.
+Máximo 650 caracteres.
+Debe tener: gancho breve, sensación premium, razón concreta para consultar, CTA a responder la story o escribir por WhatsApp y 8 a 12 hashtags.
 No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
         raw_caption = smart_call(
@@ -3588,7 +3757,7 @@ No des opciones, no uses títulos como "Opción 1", no expliques el caption, no 
             system_prompt="Sos un experto en marketing inmobiliario para stories. Devolvés solo copy final listo para publicar.",
             agente=request.user,
         )
-        caption = _finalize_caption_text(raw_caption, data, formato='story', prefs=content_prefs, max_chars=500)
+        caption = _finalize_caption_text(raw_caption, data, formato='story', prefs=content_prefs, max_chars=650)
 
         if listado_obj:
             datos = listado_obj.datos_extra if isinstance(listado_obj.datos_extra, dict) else {}
