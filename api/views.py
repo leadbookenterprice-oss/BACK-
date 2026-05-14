@@ -1388,10 +1388,11 @@ def generar_guion(request):
     script_rules = {
         'tour': {
             'required_scenes': 7,
-            'min_total_words': 100,
-            'max_total_words': 185,
-            'scene_min_words': 12,
-            'scene_max_words': 30,
+            'min_total_words': 190,
+            'max_total_words': 330,
+            'scene_min_words': 24,
+            'scene_max_words': 55,
+            'scene_style': '2 a 3 frases por escena, con descripcion sensorial y argumento comercial concreto',
             'scene_names': [
                 'Gancho',
                 'Fachada y entorno',
@@ -1408,6 +1409,7 @@ def generar_guion(request):
             'max_total_words': 65,
             'scene_min_words': 6,
             'scene_max_words': 18,
+            'scene_style': '1 frase breve por escena, directa y de alto impacto',
             'scene_names': [
                 'Gancho',
                 'Diferencial',
@@ -1464,6 +1466,7 @@ REGLAS ESTRICTAS (OBLIGATORIAS):
 - EXACTAMENTE {rules['required_scenes']} escenas
 - TOTAL de palabras entre {rules['min_total_words']} y {rules['max_total_words']}
 - Cada escena entre {rules['scene_min_words']} y {rules['scene_max_words']} palabras
+- Estilo por escena: {rules['scene_style']}
 - Escenas sugeridas (orden recomendado): {scene_names_hint}
 - No repitas frases entre escenas
 - Salida SOLO en JSON valido (sin markdown, sin texto extra)
