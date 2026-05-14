@@ -6,6 +6,7 @@ Gestión del pool de APIs usando el nuevo schema:
   - AdminAlert (misma tabla, campos renombrados en v2)
 """
 from django.utils import timezone
+from django.db import transaction
 from api.models import APIKey, UserAPIAssignment, Servicio, AdminAlert, UserAPIQuota
 
 
@@ -132,52 +133,56 @@ class APIPoolService:
         Se usa al completar un pago de 'extra_gemini', 'extra_elevenlabs', etc.
         Devuelve la asignación creada o None si no hay stock.
         """
-        servicio = Servicio.objects.filter(nombre=nombre_servicio, activo=True).first()
-        if not servicio:
-            return None
+        with transaction.atomic():
+            servicio = Servicio.objects.filter(nombre=nombre_servicio, activo=True).first()
+            if not servicio:
+                return None
 
-        keys_en_uso = UserAPIAssignment.objects.filter(
-            user=user, servicio=servicio
-        ).values_list('apikey_id', flat=True)
+            keys_en_uso = UserAPIAssignment.objects.filter(
+                user=user, servicio=servicio
+            ).values_list('apikey_id', flat=True)
 
-        key = APIKey.objects.filter(
-            servicio=servicio,
-            status__in=['available', 'exhausted']
-        ).exclude(id__in=keys_en_uso).first()
+            key = APIKey.objects.select_for_update().filter(
+                servicio=servicio,
+                status='available'
+            ).exclude(id__in=keys_en_uso).first()
 
-        if not key:
-            AdminAlert.objects.create(
-                tipo='assign_failed',
-                severidad='warning',
-                titulo=f'Sin stock extra: {nombre_servicio}',
-                mensaje=f'No hay keys extra disponibles de {nombre_servicio} para {user.email}.',
-                related_user=user,
+            if not key:
+                AdminAlert.objects.create(
+                    tipo='assign_failed',
+                    severidad='warning',
+                    titulo=f'Sin stock extra: {nombre_servicio}',
+                    mensaje=f'No hay keys extra disponibles de {nombre_servicio} para {user.email}.',
+                    related_user=user,
+                )
+                return None
+
+            asig = UserAPIAssignment.objects.create(
+                user=user,
+                apikey=key,
+                servicio=servicio,
+                is_primary=False,
+                activo=True,
+                pago=pago,
             )
-            return None
 
-        asig = UserAPIAssignment.objects.create(
-            user=user,
-            apikey=key,
-            servicio=servicio,
-            is_primary=False,
-            activo=True,
-            pago=pago,
-        )
+            key.status = 'assigned'
+            key.save(update_fields=['status', 'updated_at'])
 
-        # Recalcular quota del usuario
-        try:
-            quota = UserAPIQuota.objects.get(user=user, servicio=servicio)
-            quota.recalcular_limite()
-            quota.is_blocked = False
-            quota.save(update_fields=['user_daily_limit', 'is_blocked', 'updated_at'])
-        except UserAPIQuota.DoesNotExist:
-            UserAPIQuota.objects.create(
+            quota, _ = UserAPIQuota.objects.get_or_create(
                 user=user,
                 servicio=servicio,
-                user_daily_limit=servicio.default_daily_limit + servicio.extra_increment,
+                defaults={
+                    'user_daily_limit': servicio.default_daily_limit,
+                    'user_monthly_limit': servicio.default_monthly_limit,
+                }
             )
+            quota.recalcular_limite()
+            quota.is_blocked = False
+            quota.blocked_reason = None
+            quota.save(update_fields=['user_daily_limit', 'is_blocked', 'blocked_reason', 'updated_at'])
 
-        return asig
+            return asig
 
     # ── Reparación ────────────────────────────────────────────────────────────
 

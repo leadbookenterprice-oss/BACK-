@@ -260,11 +260,12 @@ UPLOADPOST_API_KEY = config('UPLOADPOST_API_KEY', default='')
 NVIDIA_API_KEY     = config('NVIDIA_API_KEY', default='')
 
 # MercadoPago Configuration
-MP_ACCESS_TOKEN    = config('MP_ACCESS_TOKEN', default='')
-MP_PUBLIC_KEY      = config('MP_PUBLIC_KEY', default='')
-MP_WEBHOOK_SECRET  = config('MP_WEBHOOK_SECRET', default='')
-BACKEND_URL        = config('BACKEND_URL', default='http://localhost:8000')
-FRONTEND_URL       = config('FRONTEND_URL', default='http://localhost:5173')
+MP_MODE           = config('MP_MODE', default='production').strip().lower()
+MP_ACCESS_TOKEN   = config('MP_ACCESS_TOKEN', default='')
+MP_PUBLIC_KEY     = config('MP_PUBLIC_KEY', default='')
+MP_WEBHOOK_SECRET = config('MP_WEBHOOK_SECRET', default='')
+BACKEND_URL       = config('BACKEND_URL', default='http://localhost:8000')
+FRONTEND_URL      = config('FRONTEND_URL', default='http://localhost:5173')
 
 # Email / SMTP Configuration
 # Si no hay GMAIL_APP_PASSWORD se usa el console backend (OTP impreso por stdout).

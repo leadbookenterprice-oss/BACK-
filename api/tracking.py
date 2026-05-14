@@ -96,16 +96,31 @@ def track_api_call(service, action=''):
                 _mark_service_exhausted(agente, servicio, quota, reason='Límite diario alcanzado')
                 _raise_service_exhausted(service, f"Servicio {service} agotado: límite diario alcanzado")
 
-            assignment = UserAPIAssignment.objects.filter(
+            usable_assignment = UserAPIAssignment.objects.filter(
                 user=agente,
                 servicio=servicio,
-                is_primary=True,
                 activo=True,
-            ).select_related('apikey').order_by('assigned_at').first()
-            if assignment and assignment.apikey.status == 'exhausted':
-                _mark_service_exhausted(agente, servicio, quota, assignment.apikey, reason='API key obligatoria agotada')
-                _raise_service_exhausted(service, f"Servicio {service} agotado para este usuario")
-            if assignment and assignment.apikey.status in {'dead', 'disabled'}:
+                apikey__status__in=['assigned', 'available'],
+            ).select_related('apikey').order_by('-is_primary', 'assigned_at').first()
+
+            if not usable_assignment:
+                exhausted_assignment = UserAPIAssignment.objects.filter(
+                    user=agente,
+                    servicio=servicio,
+                    activo=True,
+                    apikey__status='exhausted',
+                ).select_related('apikey').order_by('-is_primary', 'assigned_at').first()
+                if exhausted_assignment:
+                    _mark_service_exhausted(agente, servicio, quota, exhausted_assignment.apikey, reason='API keys agotadas')
+                    _raise_service_exhausted(service, f"Servicio {service} agotado para este usuario")
+
+            disabled_assignment = UserAPIAssignment.objects.filter(
+                user=agente,
+                servicio=servicio,
+                activo=True,
+                apikey__status__in=['dead', 'disabled'],
+            ).select_related('apikey').first()
+            if disabled_assignment and not usable_assignment:
                 raise Exception(f"Servicio {service} no disponible para este usuario")
 
             from api.pool_manager import get_api_key

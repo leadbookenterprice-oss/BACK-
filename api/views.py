@@ -3490,10 +3490,10 @@ def generar_pdf(request):
                 quota, _ = UserAPIQuota.objects.get_or_create(
                     user=request.user,
                     servicio=servicio_obj,
-                    defaults={'daily_limit': 1500, 'monthly_limit': 1500}
+                    defaults={'user_daily_limit': 1500, 'user_monthly_limit': 1500}
                 )
                 quota.is_blocked = True
-                quota.requests_today = quota.daily_limit
+                quota.requests_today = quota.user_daily_limit
                 quota.save()
         except Exception as quota_err:
             logger.warning(f"[PDF] No se pudo actualizar UserAPIQuota: {quota_err}")
@@ -3674,10 +3674,10 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
                 quota, _ = UserAPIQuota.objects.get_or_create(
                     user=request.user,
                     servicio=servicio_obj,
-                    defaults={'daily_limit': 1500, 'monthly_limit': 1500}
+                    defaults={'user_daily_limit': 1500, 'user_monthly_limit': 1500}
                 )
                 quota.is_blocked = True
-                quota.requests_today = quota.daily_limit
+                quota.requests_today = quota.user_daily_limit
                 quota.save()
         except Exception as quota_err:
             logger.warning(f"[POST] No se pudo actualizar UserAPIQuota: {quota_err}")
@@ -4074,31 +4074,278 @@ def serve_pdf_file(request, uuid_str):
 
 import mercadopago
 from decouple import config
-from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from django.db import transaction
+
+MP_TEST_PRICE = Decimal('1')
+MP_PRODUCTION_PRICE = Decimal('100000')
+
+MP_PLAN_LABELS = {
+    'starter': 'LeadBook Starter',
+    'pro': 'LeadBook Pro',
+    'scale': 'LeadBook Scale',
+    'business': 'LeadBook Business',
+}
+
+MP_EXTRA_ITEMS = {
+    'gemini': {'nombre': 'Contenido IA — Adicional (+1500 créditos)'},
+    'elevenlabs': {'nombre': 'Voces Neurales — Adicional (+10.000 caracteres)'},
+    'uploadpost': {'nombre': 'Gestor de Redes — Adicional (+10 publicaciones)'},
+    'pack_completo': {'nombre': 'Pack Completo — Todos los recursos'},
+}
+
+MP_EXTRA_SERVICES = {
+    'extra_gemini': ['gemini'],
+    'extra_elevenlabs': ['elevenlabs'],
+    'extra_uploadpost': ['uploadpost'],
+    'extra_pack_completo': ['gemini', 'elevenlabs', 'uploadpost'],
+}
+
+
+def _mp_mode():
+    mode = config('MP_MODE', default='production').strip().lower()
+    return 'test' if mode == 'test' else 'production'
+
+
+def _mp_access_token():
+    return config('MP_ACCESS_TOKEN', default='').strip()
+
+
+def _mp_public_key():
+    return config('MP_PUBLIC_KEY', default='').strip()
+
+
+def _mp_unit_price():
+    return MP_TEST_PRICE if _mp_mode() == 'test' else MP_PRODUCTION_PRICE
+
+
+def _mp_sdk():
+    token = _mp_access_token()
+    if not token:
+        raise ValueError('Mercado Pago access token no configurado')
+    return mercadopago.SDK(token)
+
+
+def _mp_frontend_url():
+    return config('FRONTEND_URL', default='https://front-saas-production-1e0c.up.railway.app').rstrip('/')
+
+
+def _mp_notification_url():
+    backend_url = config('BACKEND_URL', default='http://localhost:8000').rstrip('/')
+    return f'{backend_url}/api/mp/webhook/'
+
+
+def _mp_decimal(value):
+    try:
+        return Decimal(str(value or '0'))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal('0')
+
+
+def _mp_pago_status(mp_status):
+    if mp_status in {'approved', 'authorized'}:
+        return 'approved'
+    if mp_status in {'refunded', 'charged_back'}:
+        return 'refunded'
+    if mp_status in {'pending', 'in_process', 'in_mediation'}:
+        return 'pending'
+    return 'rejected'
+
+
+def _mp_available_stock_missing(user, services):
+    from .models import APIKey, Servicio
+
+    missing = []
+    for service_name in services:
+        servicio = Servicio.objects.filter(nombre=service_name, activo=True).first()
+        if not servicio:
+            missing.append(service_name)
+            continue
+
+        available = APIKey.objects.filter(
+            servicio=servicio,
+            status='available',
+        ).exclude(
+            assignments__user=user,
+            assignments__servicio=servicio,
+        ).exists()
+        if not available:
+            missing.append(service_name)
+    return missing
+
+
+def _mp_create_preference(preference_data):
+    preference_response = _mp_sdk().preference().create(preference_data)
+    if preference_response.get('status') == 201:
+        response = preference_response.get('response', {})
+        init_point = response.get('init_point') or response.get('sandbox_init_point')
+        return {
+            'init_point': init_point,
+            'checkout_url': init_point,
+            'preference_id': response.get('id'),
+            'mode': _mp_mode(),
+            'amount': str(_mp_unit_price()),
+        }
+    print(f"MP Error: {preference_response}")
+    return None
+
+
+def _mp_webhook_event(request):
+    event_type = request.data.get('type') or request.data.get('topic') or request.query_params.get('type') or request.query_params.get('topic')
+    action = request.data.get('action') or request.query_params.get('action') or ''
+    data = request.data.get('data') if isinstance(request.data, dict) else None
+    data_id = (data.get('id') if isinstance(data, dict) else None) or request.data.get('id') or request.query_params.get('id') or request.query_params.get('data.id')
+    return str(event_type or ''), str(action or ''), str(data_id or '')
+
+
+def _mp_fetch_payment(payment_id):
+    response = requests.get(
+        f'https://api.mercadopago.com/v1/payments/{payment_id}',
+        headers={'Authorization': f'Bearer {_mp_access_token()}'},
+        timeout=15,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _mp_notify(user, tipo, titulo, mensaje):
+    try:
+        crear_notificacion(user, tipo, titulo, mensaje)
+    except Exception as exc:
+        logger.warning(f'[MP] No se pudo crear notificación: {exc}')
+
+
+def _mp_assign_paid_extra(agent, tipo, pago):
+    from .models import AdminAlert, Servicio, UserAPIAssignment
+    from .services.pool_service import APIPoolService
+
+    assigned = []
+    missing = []
+    for service_name in MP_EXTRA_SERVICES.get(tipo, []):
+        servicio = Servicio.objects.filter(nombre=service_name, activo=True).first()
+        if not servicio:
+            missing.append(service_name)
+            continue
+
+        exists = UserAPIAssignment.objects.filter(
+            user=agent,
+            servicio=servicio,
+            pago=pago,
+            is_primary=False,
+            activo=True,
+        ).exists()
+        if exists:
+            continue
+
+        assignment = APIPoolService.add_extra_key(agent, service_name, pago=pago)
+        if assignment:
+            assigned.append(service_name)
+        else:
+            missing.append(service_name)
+
+    if assigned:
+        _mp_notify(
+            agent,
+            'api_extra_asignada',
+            'Recurso adicional activado',
+            f"Se activó tu recurso adicional: {', '.join(assigned)}.",
+        )
+
+    if missing:
+        AdminAlert.objects.create(
+            tipo='assign_failed',
+            severidad='critical',
+            titulo=f'Pago aprobado sin stock extra — {agent.email}',
+            mensaje=f"Pago {pago.mp_payment_id} aprobado, pero faltó stock para: {', '.join(missing)}.",
+            related_user=agent,
+        )
+        _mp_notify(
+            agent,
+            'pago_aprobado',
+            'Pago aprobado en revisión',
+            'Recibimos tu pago. Estamos activando el recurso adicional y te avisaremos cuando esté disponible.',
+        )
+
+    return assigned, missing
+
+
+def _mp_process_payment(payment_data):
+    from .models import Agent, Pago
+
+    external_ref = str(payment_data.get('external_reference') or '')
+    if '|' not in external_ref:
+        return {'status': 'ignored', 'reason': 'external_reference_missing'}
+
+    user_id, tipo = external_ref.split('|', 1)
+    if tipo in MP_PLAN_LABELS:
+        tipo = f'plan_{tipo}'
+
+    valid_tipos = {f'plan_{plan}' for plan in MP_PLAN_LABELS} | set(MP_EXTRA_SERVICES)
+    if tipo not in valid_tipos:
+        return {'status': 'ignored', 'reason': 'invalid_type'}
+
+    agent = Agent.objects.get(id=int(user_id))
+    mp_payment_id = str(payment_data.get('id') or '')
+    mp_status = str(payment_data.get('status') or '')
+    pago_status = _mp_pago_status(mp_status)
+    amount = _mp_decimal(payment_data.get('transaction_amount'))
+    currency = str(payment_data.get('currency_id') or 'ARS')[:10]
+
+    with transaction.atomic():
+        pago, _ = Pago.objects.select_for_update().get_or_create(
+            mp_payment_id=mp_payment_id,
+            defaults={
+                'user': agent,
+                'tipo': tipo,
+                'mp_status': pago_status,
+                'monto': amount,
+                'moneda': currency,
+                'external_reference': external_ref,
+                'datos_mp': payment_data,
+            },
+        )
+
+        pago.user = pago.user or agent
+        pago.tipo = tipo
+        pago.mp_status = pago_status
+        pago.monto = amount
+        pago.moneda = currency
+        pago.external_reference = external_ref
+        pago.datos_mp = payment_data
+        pago.procesado_en = timezone.now()
+        pago.save(update_fields=[
+            'user', 'tipo', 'mp_status', 'monto', 'moneda',
+            'external_reference', 'datos_mp', 'procesado_en'
+        ])
+
+        if pago_status != 'approved':
+            return {'status': 'recorded', 'mp_status': pago_status}
+
+        if tipo.startswith('extra_'):
+            assigned, missing = _mp_assign_paid_extra(agent, tipo, pago)
+            return {'status': 'processed', 'assigned': assigned, 'missing': missing}
+
+        plan = tipo.replace('plan_', '', 1)
+        agent.plan_nombre = plan
+        agent.plan_activo = True
+        agent.plan_seleccionado = True
+        agent.save(update_fields=['plan_nombre', 'plan_activo', 'plan_seleccionado'])
+        _mp_notify(agent, 'pago_aprobado', 'Plan activado', f'Tu plan {plan} ya está activo.')
+        return {'status': 'processed', 'plan': plan}
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def mp_checkout(request):
     plan = request.data.get('plan')
     ciclo = request.data.get('ciclo', 'monthly')
-    
-    planes = {
-        'starter': {'nombre': 'LeadBook Starter', 'precio_mensual': 70000, 'precio_anual': 52500},
-        'pro': {'nombre': 'LeadBook Pro', 'precio_mensual': 161000, 'precio_anual': 120750},
-        'scale': {'nombre': 'LeadBook Scale', 'precio_mensual': 270000, 'precio_anual': 202500},
-        'business': {'nombre': 'LeadBook Business', 'precio_mensual': 542000, 'precio_anual': 406500},
-    }
-    
-    if plan not in planes:
+
+    if plan not in MP_PLAN_LABELS:
         return Response({"error": "Plan inválido"}, status=400)
-    
-    plan_data = planes[plan]
-    precio = plan_data['precio_anual'] if ciclo == 'annual' else plan_data['precio_mensual']
-    nombre = f"{plan_data['nombre']} ({'Anual' if ciclo == 'annual' else 'Mensual'})"
-    
-    sdk = mercadopago.SDK(config('MP_ACCESS_TOKEN'))
-    frontend_url = config('FRONTEND_URL', default='https://front-saas-production-1e0c.up.railway.app')
-    
+
+    precio = _mp_unit_price()
+    nombre = f"{MP_PLAN_LABELS[plan]} ({'Anual' if ciclo == 'annual' else 'Mensual'})"
+    frontend_url = _mp_frontend_url()
+
     preference_data = {
         "items": [{
             "id": f"{plan}_{ciclo}",
@@ -4114,50 +4361,56 @@ def mp_checkout(request):
             "pending": f"{frontend_url}/pago-pendiente"
         },
         "auto_return": "approved",
-        "external_reference": f"{request.user.id}|{plan}",
+        "notification_url": _mp_notification_url(),
+        "external_reference": f"{request.user.id}|plan_{plan}",
+        "metadata": {
+            "user_id": request.user.id,
+            "tipo": f"plan_{plan}",
+            "mp_mode": _mp_mode(),
+        },
     }
-    
-    preference_response = sdk.preference().create(preference_data)
-    
-    if preference_response["status"] == 201:
-        return Response({
-            "init_point": preference_response["response"]["init_point"],
-            "preference_id": preference_response["response"]["id"]
-        })
-    else:
-        print(f"MP Error: {preference_response}")
-        return Response({"error": "Error al crear preferencia de pago"}, status=500)
+
+    try:
+        response_data = _mp_create_preference(preference_data)
+    except Exception as exc:
+        logger.exception(f'[MP] Error creando checkout plan: {exc}')
+        response_data = None
+
+    if response_data:
+        return Response(response_data)
+    return Response({"error": "Error al crear preferencia de pago"}, status=500)
 
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def mp_checkout_api_extra(request):
-    """Genera link de pago para comprar una API adicional de Gemini"""
+    """Genera link de pago para comprar una API adicional."""
     servicio = request.data.get('servicio', 'gemini')
-    
-    PRECIOS_EXTRA = {
-        'gemini':       {'nombre': 'Contenido IA — Adicional (+1500 créditos)',     'precio': 1},
-        'elevenlabs':   {'nombre': 'Voces Neurales — Adicional (+10.000 caracteres)', 'precio': 1},
-        'uploadpost':   {'nombre': 'Gestor de Redes — Adicional (+10 publicaciones)', 'precio': 1},
-        'pack_completo':{'nombre': 'Pack Completo — Todos los recursos',              'precio': 1},
-    }
-    
-    if servicio not in PRECIOS_EXTRA:
+
+    if servicio not in MP_EXTRA_ITEMS:
         return Response({"error": "Servicio inválido"}, status=400)
-    
-    item = PRECIOS_EXTRA[servicio]
-    sdk = mercadopago.SDK(config('MP_ACCESS_TOKEN'))
-    frontend_url = config('FRONTEND_URL', default='https://front-saas-production-1e0c.up.railway.app')
-    
+
+    tipo = f'extra_{servicio}'
+    missing_stock = _mp_available_stock_missing(request.user, MP_EXTRA_SERVICES[tipo])
+    if missing_stock:
+        return Response({
+            "error": "Sin stock disponible para este recurso",
+            "servicios_sin_stock": missing_stock,
+        }, status=409)
+
+    item = MP_EXTRA_ITEMS[servicio]
+    precio = _mp_unit_price()
+    frontend_url = _mp_frontend_url()
+
     preference_data = {
         "items": [{
-            "id": f"extra_{servicio}",
+            "id": tipo,
             "title": item['nombre'],
             "description": f"Uso adicional permanente mensual de {item['nombre']}. Se suma a tu límite actual.",
             "quantity": 1,
             "currency_id": "ARS",
-            "unit_price": float(item['precio'])
+            "unit_price": float(precio)
         }],
         "payer": {"email": request.user.email},
         "back_urls": {
@@ -4166,124 +4419,44 @@ def mp_checkout_api_extra(request):
             "pending": f"{frontend_url}/dashboard?extra=pendiente"
         },
         "auto_return": "approved",
-        "external_reference": f"{request.user.id}|extra_{servicio}",
+        "notification_url": _mp_notification_url(),
+        "external_reference": f"{request.user.id}|{tipo}",
+        "metadata": {
+            "user_id": request.user.id,
+            "tipo": tipo,
+            "servicio": servicio,
+            "mp_mode": _mp_mode(),
+        },
     }
-    
-    preference_response = sdk.preference().create(preference_data)
-    
-    if preference_response["status"] == 201:
-        return Response({
-            "init_point": preference_response["response"]["init_point"],
-            "preference_id": preference_response["response"]["id"]
-        })
-    else:
-        return Response({"error": "Error al crear preferencia de pago"}, status=500)
+
+    try:
+        response_data = _mp_create_preference(preference_data)
+    except Exception as exc:
+        logger.exception(f'[MP] Error creando checkout extra: {exc}')
+        response_data = None
+
+    if response_data:
+        return Response(response_data)
+    return Response({"error": "Error al crear preferencia de pago"}, status=500)
 
 
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mp_webhook(request):
-    topic = request.data.get('type')
-    data_id = request.data.get('data', {}).get('id')
-    
-    if not data_id:
+    topic, action, data_id = _mp_webhook_event(request)
+
+    is_payment_event = topic == 'payment' or action.startswith('payment')
+    if not data_id or not is_payment_event:
         return Response({"status": "ok"})
-    
+
     try:
-        import requests as req
-        headers = {"Authorization": f"Bearer {config('MP_ACCESS_TOKEN')}"}
-        
-        if topic == 'payment':
-            response = req.get(
-                f"https://api.mercadopago.com/v1/payments/{data_id}",
-                headers=headers
-            )
-        elif topic == 'subscription_preapproval':
-            response = req.get(
-                f"https://api.mercadopago.com/preapproval/{data_id}",
-                headers=headers
-            )
-        else:
-            return Response({"status": "ok"})
-        
-        data = response.json()
-        status = data.get("status")
-        external_ref = data.get("external_reference", "")
-        
-        if status in ["approved", "authorized"] and "|" in external_ref:
-            user_id, tipo = external_ref.split("|", 1)
-            from .models import Agent
-            try:
-                agent = Agent.objects.get(id=int(user_id))
-                if tipo.startswith('extra_'):
-                    # Compra de API adicional
-                    if tipo == 'extra_pack_completo':
-                        for svc in ['gemini', 'elevenlabs', 'uploadpost']:
-                            keys_ya_usadas = BundleAPIExtra.objects.filter(
-                                usuario=agent, servicio=svc, activa=True
-                            ).values_list('api_key_id', flat=True)
-                            key_disponible = APIKey.objects.filter(
-                                servicio=svc, status__in=['available', 'active']
-                            ).exclude(id__in=keys_ya_usadas).first()
-                            if key_disponible:
-                                BundleAPIExtra.objects.create(
-                                    usuario=agent, api_key=key_disponible,
-                                    servicio=svc, activa=True, pago_id=str(data_id)
-                                )
-                                from .models import UserAPIQuota
-                                quota, _ = UserAPIQuota.objects.get_or_create(user=agent, servicio=Servicio.objects.get(nombre=svc))
-                                quota.is_blocked = False
-                                # Incrementos específicos por servicio
-                                inc = 1500 if svc == 'gemini' else 10000 if svc == 'elevenlabs' else 10
-                                quota.monthly_limit = (quota.monthly_limit or (1500 if svc=='gemini' else 10000 if svc=='elevenlabs' else 10)) + inc
-                                quota.daily_limit = (quota.daily_limit or (1500 if svc=='gemini' else 10000 if svc=='elevenlabs' else 10)) + inc
-                                quota.save()
-                        print(f"[MP] Pack completo asignado: user {user_id}")
-                    else:
-                        servicio = tipo.replace('extra_', '')
-                        from .models import APIKey, BundleAPIExtra
-                        # Buscar una APIKey disponible del servicio que no esté asignada como extra
-                        keys_ya_usadas = BundleAPIExtra.objects.filter(
-                            usuario=agent, servicio=servicio, activa=True
-                        ).values_list('api_key_id', flat=True)
-                        key_disponible = APIKey.objects.filter(
-                            servicio=servicio,
-                            status__in=['available', 'active']
-                        ).exclude(id__in=keys_ya_usadas).first()
-                        
-                        if key_disponible:
-                            BundleAPIExtra.objects.create(
-                                usuario=agent, api_key=key_disponible,
-                                servicio=servicio, activa=True, pago_id=str(data_id)
-                            )
-                            # Actualizar el límite en UserAPIQuota
-                            from .models import UserAPIQuota
-                            quota, _ = UserAPIQuota.objects.get_or_create(user=agent, servicio=Servicio.objects.get(nombre=servicio))
-                            quota.is_blocked = False
-                            # Aumentar límites (mensual y diario)
-                            inc = 1500 if servicio == 'gemini' else 10000 if servicio == 'elevenlabs' else 10
-                            quota.monthly_limit = (quota.monthly_limit or inc) + inc
-                            quota.daily_limit = (quota.daily_limit or inc) + inc
-                            quota.save()
-                            print(f"[MP] API extra asignada: user {user_id} → {servicio} extra")
-                        else:
-                            print(f"[MP] No hay APIKey disponible para {servicio}")
-                else:
-                    # Compra de plan normal
-                    agent.plan_nombre = tipo
-                    agent.plan_activo = True
-                    agent.save()
-                    print(f"[MP] Plan actualizado: user {user_id} → {tipo}")
-
-
-
-            except Agent.DoesNotExist:
-                print(f"[MP] Usuario no encontrado: {user_id}")
+        payment_data = _mp_fetch_payment(data_id)
+        result = _mp_process_payment(payment_data)
+        return Response({"status": "ok", "result": result})
     except Exception as e:
-        print(f"[MP] Error webhook: {e}")
-    
-    return Response({"status": "ok"})
+        logger.exception(f"[MP] Error webhook: {e}")
+        return Response({"status": "error"}, status=500)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -4332,7 +4505,8 @@ def get_plan_info_mp(request):
     ).count()
     return Response({
         "plan_nombre": plan,
-        "mp_public_key": settings.MP_PUBLIC_KEY,
+        "mp_public_key": _mp_public_key(),
+        "mp_mode": _mp_mode(),
         "uso_actual": {
             "properties_used": listados_mes,
             "ai_used": ai_used,
@@ -4609,7 +4783,6 @@ def admin_stats(request):
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
     
-    from .models import Agent, APIKey, UserAPIQuota, APIBundleAssignment
     from django.utils import timezone
     from datetime import timedelta
 
@@ -5942,7 +6115,7 @@ def estado_cuota_ia(request):
         quota = UserAPIQuota.objects.get(user=request.user, servicio__nombre='gemini')
         agotada = quota.is_blocked
         usado = quota.requests_today
-        limite = quota.daily_limit
+        limite = quota.user_daily_limit
     except UserAPIQuota.DoesNotExist:
         agotada = False
         usado = 0
@@ -5964,14 +6137,14 @@ def estado_cuota_ia(request):
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def debug_quota(request):
-    from .models import UserAPIQuota, APIKey, APIBundleAssignment
+    from .models import UserAPIAssignment, UserAPIQuota
     
     if request.method == 'POST':
         from .models import UserAPIQuota
         # Desbloquear todos los usuarios cuyo uso actual es menor al límite
         desbloqueados = 0
         for q in UserAPIQuota.objects.filter(is_blocked=True):
-            if q.requests_today < q.daily_limit:
+            if q.requests_today < q.user_daily_limit:
                 q.is_blocked = False
                 q.save()
                 desbloqueados += 1
@@ -5979,27 +6152,23 @@ def debug_quota(request):
         UserAPIQuota.objects.filter(servicio__nombre='uploadpost', user_daily_limit__gt=100).update(user_daily_limit=10)
         UserAPIQuota.objects.filter(servicio__nombre='gemini', user_daily_limit__lt=100).update(user_daily_limit=1500)
         
-        # Reset extras de prueba (pago_id = 'manual_admin')
-        from .models import BundleAPIExtra
-        extras_borradas = BundleAPIExtra.objects.filter(pago_id='manual_admin').delete()
-        print(f"[DEBUG] Extras de prueba borradas: {extras_borradas}")
-        
         return Response({'desbloqueados': desbloqueados})
-    
-    quotas = list(UserAPIQuota.objects.values(
-        'user_id', 'service', 'daily_limit', 'monthly_limit', 
+
+    quotas = list(UserAPIQuota.objects.select_related('servicio').values(
+        'user_id', 'servicio__nombre', 'user_daily_limit', 'user_monthly_limit',
         'requests_today', 'is_blocked'
     ))
-    assignments = APIBundleAssignment.objects.filter(activo=True).select_related('usuario', 'bundle__key_gemini')
+    assignments = UserAPIAssignment.objects.filter(activo=True).select_related('user', 'servicio', 'apikey')
     keys_info = []
     for a in assignments:
-        k = a.bundle.key_gemini if a.bundle else None
+        k = a.apikey
         if k:
             keys_info.append({
-                'user': a.usuario.email,
+                'user': a.user.email,
+                'service': a.servicio.nombre,
                 'key_id': k.id,
-                'daily_limit': k.daily_limit,
-                'monthly_limit': k.monthly_limit,
+                'daily_limit': k.google_daily_limit,
+                'monthly_limit': k.google_monthly_limit,
                 'status': k.status
             })
     return Response({'quotas': quotas, 'keys': keys_info})

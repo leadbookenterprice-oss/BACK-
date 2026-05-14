@@ -61,7 +61,13 @@ def mi_uso_apis(request):
         
         limite = q.user_daily_limit or 1500
         consumido = q.requests_today
-        exhausted_by_key = UserAPIAssignment.objects.filter(
+        has_usable_key = UserAPIAssignment.objects.filter(
+            user=user,
+            servicio=q.servicio,
+            activo=True,
+            apikey__status__in=['assigned', 'available'],
+        ).exists()
+        exhausted_by_key = not has_usable_key and UserAPIAssignment.objects.filter(
             user=user,
             servicio=q.servicio,
             activo=True,

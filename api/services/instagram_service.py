@@ -299,7 +299,7 @@ def publicar_media_upload_api(
                         if k:
                             k.status = 'exhausted'
                             # Forzamos el límite al máximo para que la UI marque 100% gastado
-                            k.requests_this_month = k.monthly_limit or 10
+                            k.requests_this_month = k.google_monthly_limit or 10
                             k.save()
                 except Exception as e:
                     print(f"Error marcando UploadPost key como agotada: {e}")
