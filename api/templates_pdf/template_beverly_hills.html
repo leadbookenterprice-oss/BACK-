@@ -64,6 +64,7 @@ body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; 
 .agente-contacto { font-size: 14px; color: rgba(255,255,255,0.8); }
 .agente-contacto a { color: #fff; text-decoration: none; }
 .agente-contacto a:first-child { color: #f5d27f; }
+.agente-contacto:empty { display: none; }
 .contact-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
 .whatsapp-cta { display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border-radius: 999px; background: #f5d27f; color: var(--primario) !important; text-decoration: none; font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; }
 .qr-container img { width: 80px; height: 80px; }
@@ -135,10 +136,7 @@ body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; 
       <div class="agente-meta">
         <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
         <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
-        <div class="agente-contacto">
-          <a href="tel:{{AGENTE_TELEFONO_HREF}}">{{AGENTE_TELEFONO_DISPLAY}}</a> &nbsp;·&nbsp;
-          <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
-        </div>
+        <div class="agente-contacto">{{AGENTE_CONTACTO_HTML}}</div>
         {{#if WHATSAPP_URL}}<div class="contact-actions"><a class="whatsapp-cta" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener">Contactar agente</a></div>{{/if}}
       </div>
     </div>

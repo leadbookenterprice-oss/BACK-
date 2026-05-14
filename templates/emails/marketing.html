@@ -54,9 +54,11 @@
                             <table border="0" cellpadding="0" cellspacing="0" width="100%">
                                 <tr>
                                     <td align="left">
+                                        {% if whatsapp_url or agenteEmail %}
                                         <div style="background-color: #C5A059; display: inline-block; padding: 15px 30px; border: 1px solid #080808;">
-                                            <a href="#" style="color: #ffffff; text-decoration: none; font-family: 'Helvetica', Arial, sans-serif; font-size: 12px; font-weight: bold; letter-spacing: 2px; text-transform: uppercase;">CONTACTAR AGENTE</a>
+                                            <a href="{% if whatsapp_url %}{{ whatsapp_url }}{% else %}mailto:{{ agenteEmail }}{% endif %}" style="color: #ffffff; text-decoration: none; font-family: 'Helvetica', Arial, sans-serif; font-size: 12px; font-weight: bold; letter-spacing: 2px; text-transform: uppercase;">CONTACTAR AGENTE</a>
                                         </div>
+                                        {% endif %}
                                     </td>
                                 </tr>
                             </table>
@@ -89,9 +91,9 @@
                                     <td style="font-size: 13px; color: #555;">
                                         Presentado por:<br>
                                         <strong style="color: #080808; font-size: 15px;">{{ agenteNombre|default:"Asesor Comercial" }}</strong><br>
-                                        {{ agenteRol|default:"Asesor Comercial" }} · {{ agenciaNombre|default:"" }}<br>
-                                        {% if agenteTelefono %}WhatsApp: {{ agenteTelefono }}{% endif %}
-                                        {% if agenteEmail %}<br>Email: {{ agenteEmail }}{% endif %}
+                                        {{ agenteRol|default:"Asesor Comercial" }} · {{ agenciaNombre|default:"Agencia" }}<br>
+                                        {% if agenteTelefono %}WhatsApp: {% if whatsapp_url %}<a href="{{ whatsapp_url }}" style="color: #C5A059; text-decoration: none;">{{ agenteTelefonoDisplay|default:agenteTelefono }}</a>{% else %}{{ agenteTelefonoDisplay|default:agenteTelefono }}{% endif %}{% endif %}
+                                        {% if agenteEmail %}<br>Email: <a href="mailto:{{ agenteEmail }}" style="color: #C5A059; text-decoration: none;">{{ agenteEmail }}</a>{% endif %}
                                     </td>
                                 </tr>
                             </table>

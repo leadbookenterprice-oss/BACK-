@@ -243,6 +243,7 @@ def generar_html_desde_template(context, agente):
     html = html.replace('{{AGENTE_TELEFONO_HREF}}', phone_href)
     html = html.replace('{{AGENTE_EMAIL}}', str(context.get('agente_email', '')))
     html = html.replace('{{AGENCIA_NOMBRE}}', str(context.get('agencia_nombre', '')))
+    html = html.replace('{{AGENTE_CONTACTO_HTML}}', str(context.get('agente_contacto_html', '')))
     html = html.replace('{{WHATSAPP_URL}}', str(context.get('whatsapp_url', '')))
     
     # 5. Logo de agencia

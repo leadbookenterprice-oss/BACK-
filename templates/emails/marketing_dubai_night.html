@@ -71,13 +71,15 @@
             <td style="padding:0 34px 34px 34px;">
               <div style="padding-top:20px;border-top:1px solid #252525;color:#b8b3a8;font-size:13px;line-height:1.6;">
                 <strong style="color:#f5f3ee;font-size:14px;">{{ agenteNombre|default:'Asesor Comercial' }}</strong><br>
-                {{ agenteRol|default:'Asesor Comercial' }} · {{ agenciaNombre|default:'' }}<br>
-                {% if agenteTelefono %}WhatsApp: {{ agenteTelefono }}{% endif %}
-                {% if agenteEmail %}<br>Email: {{ agenteEmail }}{% endif %}
+                {{ agenteRol|default:'Asesor Comercial' }} · {{ agenciaNombre|default:'Agencia' }}<br>
+                {% if agenteTelefono %}WhatsApp: {% if whatsapp_url %}<a href="{{ whatsapp_url }}" style="color:#c9a84c;text-decoration:none;">{{ agenteTelefonoDisplay|default:agenteTelefono }}</a>{% else %}{{ agenteTelefonoDisplay|default:agenteTelefono }}{% endif %}{% endif %}
+                {% if agenteEmail %}<br>Email: <a href="mailto:{{ agenteEmail }}" style="color:#c9a84c;text-decoration:none;">{{ agenteEmail }}</a>{% endif %}
               </div>
               <div style="padding-top:16px;">
-                {% if agenteTelefono %}
-                  <a href="https://wa.me/{{ agenteTelefono|cut:'+' }}" style="display:inline-block;padding:10px 16px;background:#c9a84c;color:#0f0f0f;text-decoration:none;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;">Contactar por WhatsApp</a>
+                {% if whatsapp_url %}
+                  <a href="{{ whatsapp_url }}" style="display:inline-block;padding:10px 16px;background:#c9a84c;color:#0f0f0f;text-decoration:none;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;">Contactar por WhatsApp</a>
+                {% elif agenteEmail %}
+                  <a href="mailto:{{ agenteEmail }}" style="display:inline-block;padding:10px 16px;background:#c9a84c;color:#0f0f0f;text-decoration:none;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;">Contactar por Email</a>
                 {% endif %}
               </div>
             </td>

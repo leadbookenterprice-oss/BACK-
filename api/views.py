@@ -828,6 +828,59 @@ def _normalize_phone_e164(value, default_country_code='54'):
     return ''
 
 
+def _format_phone_display(value):
+    raw = str(value or '').strip()
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return ''
+
+    if raw.startswith('+'):
+        normalized = f'+{digits}'
+    else:
+        normalized = f'+{digits}'
+
+    country = ''
+    area = ''
+    local = ''
+
+    if digits.startswith('54') and len(digits) >= 10:
+        country = '54'
+        rest = digits[2:]
+        if rest.startswith('9') and len(rest) > 5:
+            rest = rest[1:]
+        if len(rest) >= 10:
+            area = rest[:4]
+            local = rest[4:]
+        elif len(rest) >= 8:
+            area = rest[:3]
+            local = rest[3:]
+        else:
+            local = rest
+
+    if country and area and local:
+        return f'+{country} {area} {local}'
+    return normalized
+
+
+def _build_agent_contact_html(phone, email):
+    phone_value = str(phone or '').strip()
+    email_value = str(email or '').strip()
+    parts = []
+
+    if phone_value:
+        phone_display = _format_phone_display(phone_value) or phone_value
+        parts.append(
+            f'<a href="tel:{html_lib.escape(phone_value)}">{html_lib.escape(phone_display)}</a>'
+        )
+
+    if email_value:
+        parts.append(
+            f'<a href="mailto:{html_lib.escape(email_value)}">{html_lib.escape(email_value)}</a>'
+        )
+
+    return ' &nbsp;·&nbsp; '.join(parts)
+
+
 def _get_default_commercial_agent(user):
     if not user or not getattr(user, 'id', None):
         return None
@@ -898,6 +951,7 @@ def _resolve_branding_payload(data, user):
     default_phone = (default_profile.telefono_e164 if default_profile else '') or getattr(user, 'telefono', '')
     raw_phone = payload.get('agenteTelefono') or payload.get('agente_telefono') or default_phone or ''
     agent_phone = _normalize_phone_e164(raw_phone)
+    agent_contact_html = _build_agent_contact_html(agent_phone, agent_email)
 
     agency_name = (
         payload.get('agenciaNombre')
@@ -921,6 +975,7 @@ def _resolve_branding_payload(data, user):
         'agencia_nombre': str(agency_name).strip(),
         'logo_url': str(logo_url or '').strip(),
         'agente_foto_url': str(agent_photo_url or '').strip(),
+        'agente_contacto_html': agent_contact_html,
         'agente_foto_asset': active_asset.as_cloudinary_ref() if active_asset else None,
         'default_agent_profile': default_profile,
     }
@@ -1440,6 +1495,30 @@ def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio=
     except Exception as e:
         print(f"[QR] Error: {e}")
         return ''
+
+
+def _sanitize_generated_email_html(raw_html):
+    html_text = str(raw_html or '').strip()
+    if not html_text:
+        return ''
+
+    html_text = re.sub(r'(?is)<(script|style|iframe|object|embed)[^>]*>.*?</\1>', '', html_text)
+    html_text = re.sub(r'(?is)<a\b[^>]*>(.*?)</a>', r'\1', html_text)
+    html_text = re.sub(r'(?is)</?(html|head|body)[^>]*>', '', html_text)
+    html_text = re.sub(r'(?i)\b(?:mailto:|tel:|https?://|www\.)\S+', '', html_text)
+    html_text = re.sub(r'(?i)href\s*=\s*["\']?(?:mailto:|tel:|https?://|www\.)[^"\'>\s]+["\']?', '', html_text)
+    html_text = re.sub(r'(?i)\b[\w.+-]+@[\w-]+\.[\w.-]+\b', '', html_text)
+    html_text = re.sub(r'>\s+<', '><', html_text)
+    html_text = re.sub(r'\s{2,}', ' ', html_text)
+    return html_text.strip()
+
+
+def _sanitize_generated_email_text(raw_text):
+    text = re.sub(r'(?is)<[^>]+>', ' ', str(raw_text or ''))
+    text = re.sub(r'(?i)\b(?:mailto:|tel:|https?://|www\.)\S+', '', text)
+    text = re.sub(r'(?i)\b[\w.+-]+@[\w-]+\.[\w.-]+\b', '', text)
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text.strip()
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -2615,8 +2694,13 @@ def generar_carrusel(request):
 </html>"""
 
         def render_contact_slide(context):
-            logo_html = f'<img class="logo" src="{context.get("logo_url", "")}" alt="{context.get("agencia_nombre", "")}">' if context.get('logo_url') else f'<div class="agency">{context.get("agencia_nombre", "")}</div>'
-            agent_photo = f'<img class="agent-photo" src="{context.get("agente_foto_url", "")}" alt="{context.get("agente_nombre", "")}">' if context.get('agente_foto_url') else ''
+            safe_agency = html_lib.escape(str(context.get("agencia_nombre", "") or '').strip()) or 'Agencia'
+            safe_agent = html_lib.escape(str(context.get("agente_nombre", "") or '').strip()) or 'Asesor'
+            safe_role = html_lib.escape(str(context.get("agente_rol", "") or 'Asesor Comercial').strip())
+            logo_html = f'<img class="logo" src="{context.get("logo_url", "")}" alt="{safe_agency}">' if context.get('logo_url') else f'<div class="agency">{safe_agency}</div>'
+            agent_photo = f'<img class="agent-photo" src="{context.get("agente_foto_url", "")}" alt="{safe_agent}">' if context.get('agente_foto_url') else ''
+            contact_html = str(context.get('agente_contacto_html') or '').strip()
+            contact_line = f'<div class="meta">{contact_html}</div>' if contact_html else ''
             qr_html = f'<img class="qr" src="{context.get("qr_url", "")}" alt="QR WhatsApp">' if context.get('qr_url') else ''
             return f"""<!DOCTYPE html>
 <html lang="es">
@@ -2652,9 +2736,9 @@ def generar_carrusel(request):
       <div class="agent">
         {agent_photo}
         <div>
-          <div class="name">{context.get('agente_nombre') or 'Asesor'}</div>
-          <div class="role">{context.get('agente_rol') or 'Asesor Comercial'} · {context.get('agencia_nombre') or ''}</div>
-          <div class="meta">{context.get('agente_telefono') or ''} · {context.get('agente_email') or ''}</div>
+          <div class="name">{safe_agent}</div>
+          <div class="role">{safe_role} · {safe_agency}</div>
+          {contact_line}
         </div>
       </div>
       {qr_html}
@@ -2694,6 +2778,7 @@ def generar_carrusel(request):
                 "agente_rol": branding.get('agente_rol', 'Asesor Comercial'),
                 "agencia_nombre": branding.get('agencia_nombre', ''),
                 "agente_foto_url": branding.get('agente_foto_url', ''),
+                "agente_contacto_html": branding.get('agente_contacto_html', ''),
                 "qr_url": generar_qr_url(
                     telefono=branding.get('agente_telefono', ''),
                     tipo_propiedad=data.get('tipoPropiedad', ''),
@@ -3256,6 +3341,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         'portada_url':        portada_url or '',
         'fotos_recorrido':    fotos_recorrido_urls,
         'logo_url':           logo_url or '',
+        'agencia_logo_url':   logo_url or '',
         'portada_url_raw':    portada_url or '',
         'fotos_recorrido_raw': fotos_recorrido_urls,
         'logo_url_raw':       logo_url or '',
@@ -3265,6 +3351,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         'agente_rol':         agente_rol,
         'agente_foto_url':    agente_foto_url,
         'agencia_nombre':     agencia_nombre,
+        'agente_contacto_html': _build_agent_contact_html(agente_telefono, agente_email),
         'qr_code':            qr_base64_,
         'whatsapp_url':       generar_whatsapp_url(
             telefono=agente_telefono,
@@ -3471,6 +3558,7 @@ def generar_imagen_post(request):
             "agente_rol": branding.get('agente_rol', 'Asesor Comercial'),
             "agencia_nombre": branding.get('agencia_nombre', ''),
             "agente_foto_url": branding.get('agente_foto_url', ''),
+            "agente_contacto_html": branding.get('agente_contacto_html', ''),
             "leadbook_logo_url": _get_leadbook_logo_data_url(),
             "qr_url": generar_qr_url(
                 telefono=branding.get('agente_telefono', ''),
@@ -3650,6 +3738,7 @@ def generar_imagen_story(request):
             "agente_email": branding.get('agente_email', ''),
             "agencia_nombre": branding.get('agencia_nombre', ''),
             "agente_foto_url": branding.get('agente_foto_url', ''),
+            "agente_contacto_html": branding.get('agente_contacto_html', ''),
             "qr_url": generar_qr_url(
                 telefono=branding.get('agente_telefono', ''),
                 tipo_propiedad=data.get('tipoPropiedad', ''),
@@ -3831,7 +3920,8 @@ Agente: {branding.get('agente_nombre', '')}
 Agencia: {branding.get('agencia_nombre', '')}
 Preferencias de copy: {_caption_preference_prompt(content_prefs)}
 
-Debe incluir: introducción, galería/recorrido, amenities, precio, posibles planes de pago/condiciones a consultar, datos de contacto y CTA.
+Debe incluir: introducción, galería/recorrido, amenities, precio y una invitación general a responder el correo.
+No incluyas teléfonos, emails, WhatsApp, links, botones ni etiquetas <a>; la plantilla se encarga de los contactos reales.
 
 Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, sin ````json) con la siguiente estructura y nada más:
 {{
@@ -3862,6 +3952,16 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'ai')
 
+        parsed_html = _sanitize_generated_email_html(parsed.get('html', ''))
+        parsed_text = _sanitize_generated_email_text(parsed.get('texto_plano', '') or parsed.get('html', ''))
+        if not parsed_html:
+            fallback_body = parsed_text or 'Propiedad disponible'
+            parsed_html = f'<div>{html_lib.escape(fallback_body).replace("\n", "<br>")}</div>'
+
+        parsed['asunto'] = str(parsed.get('asunto', 'Propiedad destacada')).strip() or 'Propiedad destacada'
+        parsed['html'] = parsed_html
+        parsed['texto_plano'] = parsed_text or 'Propiedad disponible'
+
         # Inyectar en plantilla premium para consistencia visual total
         context = {
             "asunto": parsed.get("asunto", "Propiedad destacada"),
@@ -3876,9 +3976,19 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             "agenteRol": branding.get('agente_rol', 'Asesor Comercial'),
             "agenciaNombre": branding.get('agencia_nombre', ''),
             "agenteFotoUrl": branding.get('agente_foto_url', ''),
+            "agente_contacto_html": branding.get('agente_contacto_html', ''),
             "portada_url": email_cover,
             "galeria_urls": email_gallery,
             "logo_url": branding.get('logo_url', ''),
+            "whatsapp_url": generar_whatsapp_url(
+                telefono=branding.get('agente_telefono', ''),
+                tipo_propiedad=data.get('tipoPropiedad', ''),
+                ciudad=data.get('ciudad', ''),
+                operacion=data.get('operacion', ''),
+                precio=data.get('precio', ''),
+                moneda=data.get('moneda', ''),
+            ),
+            "agenteTelefonoDisplay": _format_phone_display(branding.get('agente_telefono', '')),
             "qr_url": generar_qr_url(
                 telefono=branding.get('agente_telefono', ''),
                 tipo_propiedad=data.get('tipoPropiedad', ''),
