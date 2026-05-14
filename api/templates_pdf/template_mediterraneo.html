@@ -6,7 +6,7 @@
 <title>{{TITULO}} - {{AGENCIA_NOMBRE}}</title>
 <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
 <style>
-@page { size: A4; margin: 10mm; }
+@page { size: A4; margin: 0; }
 :root {
   --primario: {{COLOR_PRIMARIO}};
   --secundario: {{COLOR_SECUNDARIO}};
@@ -20,6 +20,7 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; pri
 .topbar { display: flex; justify-content: space-between; align-items: center; padding: 22px 44px; background: var(--primario); }
 .topbar .logo { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .topbar .agent-avatar { width: 64px; height: 64px; border-radius: 999px; object-fit: cover; border: 2px solid rgba(255,255,255,0.75); }
+.topbar .agency-logo { max-width: 180px; max-height: 58px; object-fit: contain; }
 .topbar .logo-text { font-family: 'Libre Baskerville', serif; font-size: 20px; color: #fff; letter-spacing: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .badge-operacion { border: 2px solid rgba(255,255,255,0.6); color: #fff; font-size: 11px; font-weight: 700; letter-spacing: 3px; padding: 7px 18px; text-transform: uppercase; }
 
@@ -62,17 +63,19 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; pri
 .agente-agencia { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 10px; }
 .agente-contacto { font-size: 14px; color: rgba(255,255,255,0.8); }
 .agente-contacto a { color: var(--acento); text-decoration: none; }
+.contact-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+.whatsapp-cta { display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border-radius: 999px; background: var(--acento); color: #fff !important; text-decoration: none; font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; }
 .qr-container img { width: 80px; height: 80px; }
 .qr-label { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-top: 6px; text-align: center; }
-.footer-watermark { display: flex; justify-content: center; }
+.footer-watermark { display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid rgba(255,255,255,0.14); padding-top: 12px; }
 .footer-watermark img { width: 126px; opacity: 0.13; }
+.footer-watermark span { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.34); }
 </style>
 </head>
 <body>
 <div class="topbar">
   <div class="logo">
-    {{#if AGENTE_FOTO}}<img class="agent-avatar" src="{{AGENTE_FOTO}}" alt="{{AGENTE_NOMBRE}}">{{/if}}
-    <span class="logo-text">{{AGENCIA_NOMBRE}}</span>
+    {{#if LOGO_AGENCIA}}<img class="agency-logo" src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">{{else}}<span class="logo-text">{{AGENCIA_NOMBRE}}</span>{{/if}}
   </div>
   <span class="badge-operacion">{{OPERACION}}</span>
 </div>
@@ -120,12 +123,14 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; pri
           <a href="tel:{{AGENTE_TELEFONO_HREF}}">{{AGENTE_TELEFONO_DISPLAY}}</a> &nbsp;·&nbsp;
           <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
         </div>
+        {{#if WHATSAPP_URL}}<div class="contact-actions"><a class="whatsapp-cta" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener">Contactar agente</a></div>{{/if}}
       </div>
     </div>
     {{#if QR_CODE}}<div class="qr-container"><img src="{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
   </div>
   <div class="footer-watermark">
     <img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+    <span>Generado por LeadBook</span>
   </div>
 </div>
 </body>

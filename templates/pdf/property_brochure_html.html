@@ -37,6 +37,8 @@
             font-family: 'Inter', sans-serif;
         }
 
+        @page { size: A4; margin: 0; }
+
         body {
             background-color: #f8fafc;
             color: var(--black);
@@ -442,6 +444,38 @@
             object-fit: contain;
         }
 
+        .contact-cta {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 12px;
+            padding: 10px 18px;
+            border-radius: 999px;
+            background: var(--primary);
+            color: var(--white);
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 1.2px;
+            text-transform: uppercase;
+        }
+
+        .leadbook-strip {
+            background: #080f1c;
+            color: rgba(255,255,255,0.45);
+            text-align: center;
+            padding: 12px 24px;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+        }
+
+        @media print {
+            body { padding: 0; background: var(--white); }
+            .document-container { width: 100%; max-width: none; margin: 0; border-radius: 0; box-shadow: none; }
+        }
+
         @media (max-width: 768px) {
             body { padding: 16px 8px; }
             .hero-section { height: 360px; }
@@ -618,8 +652,8 @@
     <div class="footer-contact">
         <div class="contact-left">
             <div class="agent-avatar-container">
-                {% if agente_foto %}
-                    <img src="{{ agente_foto }}" alt="Agente" class="agent-avatar" />
+                {% if agente_foto_url %}
+                    <img src="{{ agente_foto_url }}" alt="Agente" class="agent-avatar" />
                 {% elif logo_url %}
                     <img src="{{ logo_url }}" alt="Agencia" class="agent-avatar-logo" />
                 {% else %}
@@ -637,6 +671,9 @@
                         <i class="fa-solid fa-envelope"></i> {{ agente_email }}
                     </div>
                 </div>
+                {% if whatsapp_url %}
+                    <a class="contact-cta" href="{{ whatsapp_url }}" target="_blank" rel="noopener">Contactar agente</a>
+                {% endif %}
             </div>
         </div>
         {% if qr_code %}
@@ -645,6 +682,8 @@
             </div>
         {% endif %}
     </div>
+
+    <div class="leadbook-strip">Generado por LeadBook</div>
 
 </div>
 

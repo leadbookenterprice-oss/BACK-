@@ -26,7 +26,7 @@ from .models import (
     GeneratedAsset, Listado, OTPCode, ComercialAgentProfile,
     AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision, default_template_tokens,
-    AgentAssociation,
+    AgentAssociation, CRMClient,
     TerminosCondiciones, PoliticaPrivacidad
 )
 from .serializers import (
@@ -34,7 +34,7 @@ from .serializers import (
     TerminosCondicionesSerializer, PoliticaPrivacidadSerializer,
     ComercialAgentProfileSerializer, BrandTemplateSerializer,
     BrandTemplateRevisionSerializer, AgentMediaAssetSerializer,
-    UserContentPreferenceSerializer,
+    UserContentPreferenceSerializer, CRMClientSerializer,
 )
 from .tasks import run_asset_generation
 from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError
@@ -981,6 +981,7 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
 
     intro_patterns = [
         r'^\s*[!¡]*\s*absolutamente[!¡\s\-,:.]*',
+        r'^\s*(opci[oó]n|option)\s*\d+\s*(?:\([^\)]*\))?\s*[:\-–.]*\s*',
         r'^\s*(aqui|aquí)\s+tienes\s+un\s+caption[^:\n]{0,180}:\s*',
         r'^\s*(aqui|aquí)\s+tienes[^:\n]{0,180}:\s*',
         r'^\s*te\s+comparto\s+un\s+caption[^:\n]{0,180}:\s*',
@@ -1007,6 +1008,12 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
             'te comparto el caption',
             'este caption',
             'copia optimizada',
+            'i can process',
+            'i cannot process',
+            "i can't process",
+            'as an ai',
+            'como modelo de ia',
+            'no puedo procesar',
         )
         return any(signal in p for signal in meta_signals)
 
@@ -1038,6 +1045,38 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
         text = text[:max_chars].rstrip()
 
     return text
+
+
+def _caption_needs_fallback(text):
+    lowered = str(text or '').strip().lower()
+    if not lowered:
+        return True
+    bad_signals = (
+        'i can process',
+        'i cannot process',
+        "i can't process",
+        'i am unable',
+        "i'm unable",
+        'as an ai',
+        'cannot access',
+        'no puedo procesar',
+        'no puedo acceder',
+        'como modelo de ia',
+        'opcion 1',
+        'opción 1',
+        'option 1',
+    )
+    return any(signal in lowered for signal in bad_signals)
+
+
+def _finalize_caption_text(raw_text, data, formato='post', prefs=None, max_chars=2200):
+    caption = _sanitize_caption_text(raw_text, max_chars=max_chars)
+    if _caption_needs_fallback(caption):
+        caption = ''
+    caption = _ensure_caption_length(caption, data, formato=formato)
+    if prefs:
+        caption = _apply_caption_preferences(caption, prefs, max_chars=max_chars)
+    return caption
 
 
 def _fallback_caption_text(data, formato='post'):
@@ -1218,20 +1257,30 @@ import uuid
 import os
 import time
 
-def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio='', moneda=''):
-    import urllib.parse, urllib.request, base64
+def generar_whatsapp_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio='', moneda=''):
+    import urllib.parse
     # Limpiar teléfono: solo dígitos
-    tel_limpio = ''.join(filter(str.isdigit, str(telefono)))
-    # Si no empieza con código de país, asumir Argentina (+54)
-    if tel_limpio and not tel_limpio.startswith('54'):
+    raw_phone = str(telefono or '').strip()
+    tel_limpio = ''.join(filter(str.isdigit, raw_phone))
+    # Si no viene en E.164, asumir Argentina (+54) por compatibilidad histórica.
+    if tel_limpio and not raw_phone.startswith('+') and not tel_limpio.startswith('54'):
         tel_limpio = '54' + tel_limpio
+    if not tel_limpio:
+        return ''
     # Armar mensaje profesional
     detalle = f"{tipo_propiedad} en {ciudad}".strip(' en') if tipo_propiedad or ciudad else "propiedad"
     precio_str = f" por {moneda} {precio}" if precio else ""
     op_str = f" en {operacion.lower()}" if operacion else ""
     mensaje = f"Hola! Me interesa {detalle}{op_str}{precio_str}. ¿Podés darme más información?"
     # Armar URL de WhatsApp
-    wa_url = f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(mensaje)}"
+    return f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(mensaje)}"
+
+
+def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio='', moneda=''):
+    import urllib.parse, urllib.request, base64
+    wa_url = generar_whatsapp_url(telefono, tipo_propiedad, ciudad, operacion, precio, moneda)
+    if not wa_url:
+        return ''
     # Generar QR de la URL de WhatsApp
     qr_api = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(wa_url)}"
     try:
@@ -2011,6 +2060,41 @@ def content_preferences_detail(request):
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
+def crm_clients_collection(request):
+    if request.method == 'GET':
+        clients = CRMClient.objects.filter(owner=request.user).order_by('-updated_at')
+        estado = request.query_params.get('estado')
+        if estado:
+            clients = clients.filter(estado=estado)
+        serializer = CRMClientSerializer(clients, many=True)
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+    serializer = CRMClientSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    created = serializer.save(owner=request.user)
+    return Response(CRMClientSerializer(created).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def crm_client_detail(request, client_id):
+    client = get_object_or_404(CRMClient, id=client_id, owner=request.user)
+
+    if request.method == 'GET':
+        return Response(CRMClientSerializer(client).data, status=status.HTTP_200_OK)
+
+    if request.method == 'DELETE':
+        client.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    serializer = CRMClientSerializer(client, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    updated = serializer.save(owner=request.user)
+    return Response(CRMClientSerializer(updated).data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def brand_templates_collection(request):
     if request.method == 'GET':
         templates = BrandTemplate.objects.filter(owner=request.user, is_active=True).order_by('-is_default', '-updated_at')
@@ -2317,7 +2401,7 @@ def publicar_redes_sociales(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def generar_carrusel(request):
-    """Genera un carrusel narrativo de 12 slides y un caption con Gemini."""
+    """Genera carrusel narrativo con secciones editadas y galeria limpia."""
     try:
         user = request.user
         # TODO: re-habilitar cuando el sistema de planes esté estable
@@ -2348,37 +2432,107 @@ def generar_carrusel(request):
             _persist_template_selection(listado_obj, selection, source='carrusel')
 
         images_pool = _collect_property_images(data)
-        if not images_pool:
-            images_to_use = [None] * 12
-        else:
-            images_to_use = [images_pool[i % len(images_pool)] for i in range(12)]
-
         recamaras = data.get('recamaras') or 'N/D'
         banos = data.get('banos') or 'N/D'
         superficie = data.get('superficieCubierta') or data.get('superficieTotal') or 'N/D'
         amenidades = data.get('amenidades') if isinstance(data.get('amenidades'), list) else []
         amenities_text = ', '.join(amenidades[:5]) if amenidades else 'amenidades seleccionadas para vivir mejor'
         precio_text = f"{data.get('moneda', 'USD')} {data.get('precio', '')}".strip()
+        descripcion = str(data.get('descripcion') or data.get('descripcionGenerada') or '').strip()
+        descripcion_corta = descripcion[:180].rstrip() if descripcion else 'Una propuesta pensada para vivir, invertir y decidir con informacion clara.'
+        ubicacion_text = str(data.get('ciudad') or '').strip()
+        tipo_propiedad = data.get('tipoPropiedad', 'Propiedad')
+        operacion_text = data.get('operacion', 'Venta')
+
+        def pick_image(index=0):
+            if not images_pool:
+                return None
+            return images_pool[index % len(images_pool)]
+
+        def render_clean_gallery_slide(image_url):
+            return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ width: 1080px; height: 1350px; background: #050505; overflow: hidden; }}
+  .photo {{ width: 100%; height: 100%; object-fit: contain; display: block; background: #050505; }}
+</style>
+</head>
+<body>
+  <img class="photo" src="{image_url}" alt="Galeria propiedad">
+</body>
+</html>"""
+
+        def render_contact_slide(context):
+            logo_html = f'<img class="logo" src="{context.get("logo_url", "")}" alt="{context.get("agencia_nombre", "")}">' if context.get('logo_url') else f'<div class="agency">{context.get("agencia_nombre", "")}</div>'
+            agent_photo = f'<img class="agent-photo" src="{context.get("agente_foto_url", "")}" alt="{context.get("agente_nombre", "")}">' if context.get('agente_foto_url') else ''
+            qr_html = f'<img class="qr" src="{context.get("qr_url", "")}" alt="QR WhatsApp">' if context.get('qr_url') else ''
+            return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;700;900&display=swap');
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ width: 1080px; height: 1350px; background: radial-gradient(circle at top right, rgba(201,168,76,.28), transparent 34%), #070707; color: #f7f3e8; overflow: hidden; font-family: 'DM Sans', sans-serif; }}
+  .wrap {{ width: 100%; height: 100%; padding: 88px 82px; display: flex; flex-direction: column; justify-content: space-between; }}
+  .top {{ display: flex; justify-content: flex-end; align-items: center; min-height: 90px; }}
+  .logo {{ max-width: 250px; max-height: 88px; object-fit: contain; filter: brightness(0) invert(1); }}
+  .agency {{ font-size: 22px; letter-spacing: 5px; text-transform: uppercase; color: #c9a84c; font-weight: 900; }}
+  .headline {{ font-family: 'Bebas Neue', sans-serif; font-size: 168px; line-height: .86; letter-spacing: 3px; color: #c9a84c; text-transform: uppercase; }}
+  .sub {{ margin-top: 28px; max-width: 820px; font-size: 38px; line-height: 1.2; color: rgba(255,255,255,.82); }}
+  .contact {{ border: 1px solid rgba(201,168,76,.42); border-radius: 28px; padding: 34px; background: rgba(255,255,255,.045); display: flex; justify-content: space-between; gap: 36px; align-items: center; }}
+  .agent {{ display: flex; align-items: center; gap: 22px; min-width: 0; }}
+  .agent-photo {{ width: 116px; height: 116px; border-radius: 999px; object-fit: cover; border: 3px solid #c9a84c; }}
+  .name {{ font-size: 44px; line-height: 1; font-weight: 900; color: #fff; }}
+  .role {{ margin-top: 10px; font-size: 17px; letter-spacing: 3px; color: rgba(255,255,255,.48); text-transform: uppercase; }}
+  .meta {{ margin-top: 12px; font-size: 24px; color: #c9a84c; }}
+  .qr {{ width: 190px; height: 190px; padding: 10px; background: #fff; border-radius: 18px; }}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">{logo_html}</div>
+    <main>
+      <div class="headline">Contacto<br>Directo</div>
+      <div class="sub">Pedí la ficha completa, disponibilidad y condiciones comerciales actualizadas.</div>
+    </main>
+    <section class="contact">
+      <div class="agent">
+        {agent_photo}
+        <div>
+          <div class="name">{context.get('agente_nombre') or 'Asesor'}</div>
+          <div class="role">{context.get('agente_rol') or 'Asesor Comercial'} · {context.get('agencia_nombre') or ''}</div>
+          <div class="meta">{context.get('agente_telefono') or ''} · {context.get('agente_email') or ''}</div>
+        </div>
+      </div>
+      {qr_html}
+    </section>
+  </div>
+</body>
+</html>"""
 
         slides_urls = []
         slides_content = [
-            {"headline": data.get('tipoPropiedad', 'Propiedad'), "subheadline": f"Una historia inmobiliaria en {data.get('ciudad', '')}."},
-            {"headline": "Ubicacion", "subheadline": f"{data.get('ciudad', '')}: conectividad, entorno y valor de reventa."},
-            {"headline": "Primera impresion", "subheadline": "La portada visual marca el tono: luz, amplitud y presencia."},
-            {"headline": "Distribucion", "subheadline": f"{recamaras} hab | {banos} banos | espacios para vivir con comodidad."},
-            {"headline": "Superficie", "subheadline": f"{superficie} m2 pensados para uso real, renta o crecimiento patrimonial."},
-            {"headline": "Galeria", "subheadline": "Recorre ambientes clave y detalles que diferencian esta propiedad."},
-            {"headline": "Estilo de vida", "subheadline": "Una propuesta para vivir mejor, recibir, trabajar y descansar."},
-            {"headline": "Amenities", "subheadline": amenities_text},
-            {"headline": "Valor", "subheadline": f"{data.get('operacion', 'Venta')} por {precio_text}."},
-            {"headline": "Plan", "subheadline": "Consultanos por disponibilidad, condiciones y opciones de pago."},
-            {"headline": "Decision", "subheadline": "Comparala con el mercado y vas a entender su oportunidad."},
-            {"headline": "Contacto", "subheadline": "Escanea el QR o escribinos para recibir ficha completa y coordinar visita."},
+            {"kind": "template", "image": pick_image(0), "headline": tipo_propiedad, "subheadline": f"{ubicacion_text} | {operacion_text} por {precio_text}. {superficie} m2, {recamaras} hab, {banos} banos."},
+            {"kind": "template", "image": pick_image(1), "headline": "Beneficios", "subheadline": f"{amenities_text}. Una propiedad pensada para destacar frente al mercado."},
+            {"kind": "template", "image": pick_image(2), "headline": "Diferencial", "subheadline": descripcion_corta},
+            {"kind": "template", "image": pick_image(3), "headline": "Galeria", "subheadline": "Desliza para ver las fotos reales de la propiedad, sin textos ni distracciones."},
         ]
+
+        for image_url in images_pool:
+            slides_content.append({"kind": "gallery", "image": image_url})
+
+        slides_content.extend([
+            {"kind": "template", "image": pick_image(4), "headline": "Oportunidad", "subheadline": f"{operacion_text} por {precio_text}. Consultanos por disponibilidad, condiciones y posibles planes de pago."},
+            {"kind": "contact", "image": None, "headline": "Contacto", "subheadline": ""},
+        ])
 
         for i in range(len(slides_content)):
             context = {
-                "portada_url": images_to_use[i],
+                "portada_url": slides_content[i].get("image"),
                 "headline": slides_content[i]["headline"],
                 "subheadline": slides_content[i]["subheadline"],
                 "slide_number": i + 1,
@@ -2402,9 +2556,14 @@ def generar_carrusel(request):
                 "template_id": template_id,
             }
 
-            html_content = render_to_string(template_carousel, context)
-            html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
-            html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
+            if slides_content[i].get('kind') == 'gallery':
+                html_content = render_clean_gallery_slide(slides_content[i].get('image'))
+            elif slides_content[i].get('kind') == 'contact':
+                html_content = render_contact_slide(context)
+            else:
+                html_content = render_to_string(template_carousel, context)
+                html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
+                html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
             image_stream = render_html_to_image(html_content, 1080, 1350)
 
             try:
@@ -2422,11 +2581,14 @@ def generar_carrusel(request):
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
-        prompt_text = f"Escribí un caption para un carrusel de 12 slides de una propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Enfocado en vender estilo de vida, galería, amenities, precio, plan de pago y llamada a la acción. {_caption_preference_prompt(content_prefs)}"
-        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario digital.", agente=user)
-        caption = _sanitize_caption_text(caption)
-        caption = _ensure_caption_length(caption, data, formato='carrusel')
-        caption = _apply_caption_preferences(caption, content_prefs, max_chars=2200)
+        prompt_text = f"""Escribí UN SOLO caption final para Instagram Carrusel.
+Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}.
+Operación y precio: {data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+Incluí gancho fuerte, por qué comprar/invertir, amenities o diferenciales, plan de pago/consulta comercial, CTA a WhatsApp, emojis medidos y hashtags.
+No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
+{_caption_preference_prompt(content_prefs)}"""
+        caption = smart_call(prompt_text, system_prompt="Sos un director de marketing inmobiliario digital. Devolvés solo copy final listo para publicar.", agente=user)
+        caption = _finalize_caption_text(caption, data, formato='carrusel', prefs=content_prefs, max_chars=2200)
 
         if listado_obj:
             actualizar_resultados_listado(
@@ -2947,6 +3109,14 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         'agente_foto_url':    agente_foto_url,
         'agencia_nombre':     agencia_nombre,
         'qr_code':            qr_base64_,
+        'whatsapp_url':       generar_whatsapp_url(
+            telefono=agente_telefono,
+            tipo_propiedad=tipo_propiedad,
+            ciudad=ciudad,
+            operacion=operacion,
+            precio=precio,
+            moneda=moneda,
+        ),
     }
 
 
@@ -3189,11 +3359,14 @@ def generar_imagen_post(request):
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
-        prompt_text = f"Escribí un caption para Instagram sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"
-        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
-        caption = _sanitize_caption_text(caption)
-        caption = _ensure_caption_length(caption, data, formato='post')
-        caption = _apply_caption_preferences(caption, content_prefs, max_chars=2200)
+        prompt_text = f"""Escribí UN SOLO caption final para Instagram Feed.
+Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}.
+Operación y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+Debe tener gancho, valor comercial, detalles clave, CTA a WhatsApp y hashtags.
+No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
+Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
+        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales. Devolvés solo copy final listo para publicar.", agente=request.user)
+        caption = _finalize_caption_text(caption, data, formato='post', prefs=content_prefs, max_chars=2200)
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
@@ -3332,11 +3505,7 @@ def generar_imagen_story(request):
         html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
         image_stream = render_html_to_image(html_content, 1080, 1920)
 
-        prompt_text = f"Escribí un texto para Instagram Story sobre esta propiedad en {data.get('operacion', 'venta')}: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')} por {data.get('precio', '')}. Máximo 500 caracteres, enfocado en llamar la atención rápido. {_caption_preference_prompt(content_prefs)}"
-        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales.", agente=request.user)
-        caption = _sanitize_caption_text(caption, max_chars=500)
-        caption = _ensure_caption_length(caption, data, formato='story')
-        caption = _apply_caption_preferences(caption, content_prefs, max_chars=500)
+        caption = ''
 
         # Intentar subir a Cloudinary via Almacenamiento
         try:
@@ -3383,6 +3552,59 @@ def generar_imagen_story(request):
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
+    except GeminiQuotaExhaustedError as e:
+        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"error": str(e), "detalle": traceback.format_exc()}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generar_caption_story(request):
+    """Genera caption para Story solo cuando el usuario lo solicita."""
+    try:
+        data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        listado_id_val = data.get('listado_id') or data.get('listadoId')
+        listado_obj = None
+        if listado_id_val:
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+
+        selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
+        content_prefs = _attach_template_instructions_to_prefs(
+            _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
+            selection,
+        )
+
+        prompt_text = f"""Escribí UN SOLO caption opcional para Instagram Story.
+Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}.
+Operación y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+Máximo 500 caracteres. Debe ser directo, premium, con CTA a responder o escribir por WhatsApp.
+No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
+{_caption_preference_prompt(content_prefs)}"""
+        raw_caption = smart_call(
+            prompt_text,
+            system_prompt="Sos un experto en marketing inmobiliario para stories. Devolvés solo copy final listo para publicar.",
+            agente=request.user,
+        )
+        caption = _finalize_caption_text(raw_caption, data, formato='story', prefs=content_prefs, max_chars=500)
+
+        if listado_obj:
+            datos = listado_obj.datos_extra if isinstance(listado_obj.datos_extra, dict) else {}
+            story_result = (((datos.get('resultados') or {}).get('story')) or {})
+            if not isinstance(story_result, dict):
+                story_result = {}
+            story_result['caption'] = caption
+            story_result['texto'] = caption
+            actualizar_resultados_listado(listado_obj, 'story', story_result)
+
+        if request.user.is_authenticated:
+            incrementar_uso(request.user, 'ai')
+            from .plan_utils import registrar_uso
+            registrar_uso(request.user, 'ai')
+
+        return Response({"caption": caption, "texto": caption}, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:

@@ -243,6 +243,7 @@ def generar_html_desde_template(context, agente):
     html = html.replace('{{AGENTE_TELEFONO_HREF}}', phone_href)
     html = html.replace('{{AGENTE_EMAIL}}', str(context.get('agente_email', '')))
     html = html.replace('{{AGENCIA_NOMBRE}}', str(context.get('agencia_nombre', '')))
+    html = html.replace('{{WHATSAPP_URL}}', str(context.get('whatsapp_url', '')))
     
     # 5. Logo de agencia
     logo_url = context.get('logo_url_raw', '')
@@ -282,6 +283,14 @@ def generar_html_desde_template(context, agente):
         'QR_CODE',
         bool(qr_code),
         replacements={'{{QR_CODE}}': str(qr_code or '')},
+    )
+
+    whatsapp_url = str(context.get('whatsapp_url', '') or '')
+    html = _render_conditional_block(
+        html,
+        'WHATSAPP_URL',
+        bool(whatsapp_url),
+        replacements={'{{WHATSAPP_URL}}': whatsapp_url},
     )
     
     # 8. Foto de portada — siempre galeria_0 del listado

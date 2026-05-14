@@ -386,6 +386,41 @@ class BrandTemplateRevision(models.Model):
         return f"{self.template_id} r{self.revision}"
 
 
+class CRMClient(models.Model):
+    """Cliente/lead básico para el CRM de cada inmobiliaria."""
+
+    ESTADOS = [
+        ('nuevo', 'Nuevo'),
+        ('contactado', 'Contactado'),
+        ('interesado', 'Interesado'),
+        ('visita', 'Visita agendada'),
+        ('cerrado', 'Cerrado'),
+        ('descartado', 'Descartado'),
+    ]
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='crm_clients')
+    nombre = models.CharField(max_length=180)
+    email = models.EmailField(blank=True, null=True)
+    telefono = models.CharField(max_length=40, blank=True, null=True)
+    estado = models.CharField(max_length=24, choices=ESTADOS, default='nuevo')
+    origen = models.CharField(max_length=80, blank=True, null=True)
+    presupuesto = models.CharField(max_length=80, blank=True, null=True)
+    ciudad_interes = models.CharField(max_length=120, blank=True, null=True)
+    notas = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['owner', 'estado']),
+            models.Index(fields=['owner', 'updated_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.nombre} ({self.owner_id})"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PLANES Y SUSCRIPCIONES
 # ══════════════════════════════════════════════════════════════════════════════

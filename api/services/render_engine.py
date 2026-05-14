@@ -65,6 +65,7 @@ def render_html_to_pdf(html_content: str) -> bytes:
         pdf_bytes = page.pdf(
             format="A4", 
             print_background=True,
+            prefer_css_page_size=True,
             margin={'top': '0mm', 'right': '0mm', 'bottom': '0mm', 'left': '0mm'}
         )
         

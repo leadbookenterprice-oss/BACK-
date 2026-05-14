@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     GeneratedAsset, Agent, ComercialAgentProfile,
     AgentMediaAsset, UserContentPreference,
-    BrandTemplate, BrandTemplateRevision,
+    BrandTemplate, BrandTemplateRevision, CRMClient,
     TerminosCondiciones, PoliticaPrivacidad
 )
 import re
@@ -225,6 +225,22 @@ class BrandTemplateRevisionSerializer(serializers.ModelSerializer):
         value['emoji'] = emoji
         value['copy'] = copy
         value['layout'] = layout
+        return value
+
+
+class CRMClientSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CRMClient
+        fields = [
+            'id', 'owner', 'nombre', 'email', 'telefono', 'estado', 'origen',
+            'presupuesto', 'ciudad_interes', 'notas', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'owner', 'created_at', 'updated_at']
+
+    def validate_estado(self, value):
+        allowed = {choice[0] for choice in CRMClient.ESTADOS}
+        if value not in allowed:
+            raise serializers.ValidationError('estado invalido.')
         return value
 
 
