@@ -4239,6 +4239,11 @@ def _mp_assign_paid_extra(agent, tipo, pago):
 
         assignment = APIPoolService.add_extra_key(agent, service_name, pago=pago)
         if assignment:
+            print(
+                f"[MP] extra assigned user={agent.email} service={service_name} "
+                f"payment={pago.mp_payment_id} key_id={assignment.apikey_id}",
+                flush=True,
+            )
             assigned.append(service_name)
         else:
             missing.append(service_name)
@@ -4273,6 +4278,11 @@ def _mp_process_payment(payment_data):
     from .models import Agent, Pago
 
     external_ref = str(payment_data.get('external_reference') or '')
+    print(
+        f"[MP] processing payment id={payment_data.get('id')} "
+        f"status={payment_data.get('status')} external_reference={external_ref}",
+        flush=True,
+    )
     if '|' not in external_ref:
         return {'status': 'ignored', 'reason': 'external_reference_missing'}
 
@@ -4319,10 +4329,16 @@ def _mp_process_payment(payment_data):
         ])
 
         if pago_status != 'approved':
+            print(f"[MP] payment recorded id={mp_payment_id} status={pago_status}", flush=True)
             return {'status': 'recorded', 'mp_status': pago_status}
 
         if tipo.startswith('extra_'):
             assigned, missing = _mp_assign_paid_extra(agent, tipo, pago)
+            print(
+                f"[MP] extra payment processed id={mp_payment_id} tipo={tipo} "
+                f"assigned={assigned} missing={missing}",
+                flush=True,
+            )
             return {'status': 'processed', 'assigned': assigned, 'missing': missing}
 
         plan = tipo.replace('plan_', '', 1)
@@ -4331,6 +4347,7 @@ def _mp_process_payment(payment_data):
         agent.plan_seleccionado = True
         agent.save(update_fields=['plan_nombre', 'plan_activo', 'plan_seleccionado'])
         _mp_notify(agent, 'pago_aprobado', 'Plan activado', f'Tu plan {plan} ya está activo.')
+        print(f"[MP] plan payment processed id={mp_payment_id} user={agent.email} plan={plan}", flush=True)
         return {'status': 'processed', 'plan': plan}
 
 @api_view(['POST'])
@@ -4444,18 +4461,51 @@ def mp_checkout_api_extra(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def mp_webhook(request):
+    from .models import WebhookLog
+
     topic, action, data_id = _mp_webhook_event(request)
+    body_payload = request.data
+    if hasattr(body_payload, 'dict'):
+        body_payload = body_payload.dict()
+    elif isinstance(body_payload, dict):
+        body_payload = dict(body_payload)
+    else:
+        body_payload = {}
+    payload = {
+        'body': body_payload,
+        'query': request.query_params.dict(),
+    }
+    webhook_log = WebhookLog.objects.create(
+        fuente='mercadopago',
+        event_id=data_id or None,
+        event_type=topic or action or None,
+        payload=payload,
+    )
+    print(f"[MP] webhook received topic={topic} action={action} data_id={data_id}", flush=True)
 
     is_payment_event = topic == 'payment' or action.startswith('payment')
     if not data_id or not is_payment_event:
+        webhook_log.status = 'ignored'
+        webhook_log.procesado_en = timezone.now()
+        webhook_log.save(update_fields=['status', 'procesado_en'])
+        print(f"[MP] webhook ignored topic={topic} action={action} data_id={data_id}", flush=True)
         return Response({"status": "ok"})
 
     try:
         payment_data = _mp_fetch_payment(data_id)
         result = _mp_process_payment(payment_data)
+        webhook_log.status = 'processed' if result.get('status') != 'ignored' else 'ignored'
+        webhook_log.procesado_en = timezone.now()
+        webhook_log.save(update_fields=['status', 'procesado_en'])
+        print(f"[MP] webhook processed data_id={data_id} result={result}", flush=True)
         return Response({"status": "ok", "result": result})
     except Exception as e:
+        webhook_log.status = 'error'
+        webhook_log.error = str(e)
+        webhook_log.procesado_en = timezone.now()
+        webhook_log.save(update_fields=['status', 'error', 'procesado_en'])
         logger.exception(f"[MP] Error webhook: {e}")
+        print(f"[MP] webhook error data_id={data_id} error={e}", flush=True)
         return Response({"status": "error"}, status=500)
 
 @api_view(['GET'])
@@ -5007,23 +5057,59 @@ def admin_assets(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def admin_pagos(request):
-    """Historial de pagos/planes"""
+    """Historial de pagos, planes y recursos extra."""
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
-    from .models import Agent
-    agentes_pagos = Agent.objects.exclude(
-        plan_nombre='free'
-    ).order_by('-fecha_registro')
-    data = [{
-        "email": a.email,
-        "nombre": a.nombre,
-        "plan": a.plan_nombre,
-        "plan_activo": a.plan_activo,
-        "mp_customer_id": a.mp_customer_id or '',
-        "mp_subscription_id": a.mp_subscription_id or '',
-        "fecha_registro": a.fecha_registro.strftime('%Y-%m-%d') if a.fecha_registro else ''
-    } for a in agentes_pagos]
-    return Response({"pagos": data, "total_pagos": len(data)})
+    from django.db.models import Count, Sum
+    from .models import Pago, UserAPIAssignment, WebhookLog
+
+    pagos = Pago.objects.select_related('user').order_by('-creado_en')[:200]
+    data = []
+    for pago in pagos:
+        asignaciones = UserAPIAssignment.objects.filter(
+            pago=pago,
+            activo=True,
+        ).select_related('servicio', 'apikey')
+        servicios = [a.servicio.nombre for a in asignaciones]
+        data.append({
+            "id": pago.id,
+            "email": pago.user.email if pago.user else '',
+            "nombre": pago.user.nombre if pago.user else '',
+            "plan": pago.user.plan_nombre if pago.user else '',
+            "plan_activo": pago.user.plan_activo if pago.user else False,
+            "tipo": pago.tipo,
+            "tipo_label": pago.get_tipo_display(),
+            "es_extra": pago.tipo.startswith('extra_'),
+            "mp_status": pago.mp_status,
+            "monto": str(pago.monto),
+            "moneda": pago.moneda,
+            "mp_payment_id": pago.mp_payment_id,
+            "external_reference": pago.external_reference or '',
+            "servicios_asignados": servicios,
+            "keys_asignadas": asignaciones.count(),
+            "fecha_registro": pago.creado_en.strftime('%Y-%m-%d %H:%M') if pago.creado_en else '',
+            "procesado_en": pago.procesado_en.strftime('%Y-%m-%d %H:%M') if pago.procesado_en else '',
+        })
+
+    resumen_tipo = dict(Pago.objects.values_list('tipo').annotate(total=Count('id')))
+    total_aprobado = Pago.objects.filter(mp_status='approved').aggregate(total=Sum('monto'))['total'] or 0
+    webhooks = WebhookLog.objects.filter(fuente='mercadopago').order_by('-recibido_en')[:25]
+
+    return Response({
+        "pagos": data,
+        "total_pagos": Pago.objects.count(),
+        "total_aprobado": str(total_aprobado),
+        "resumen_tipo": resumen_tipo,
+        "webhooks": [{
+            "id": w.id,
+            "event_id": w.event_id or '',
+            "event_type": w.event_type or '',
+            "status": w.status,
+            "error": w.error or '',
+            "recibido_en": w.recibido_en.strftime('%Y-%m-%d %H:%M') if w.recibido_en else '',
+            "procesado_en": w.procesado_en.strftime('%Y-%m-%d %H:%M') if w.procesado_en else '',
+        } for w in webhooks],
+    })
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
