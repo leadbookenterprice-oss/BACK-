@@ -697,8 +697,8 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                     
                     # Si no hay agente o no hay más llaves, lanzar error definitivo
                     raise GeminiQuotaExhaustedError(
-                        "Alcanzaste el límite de tu cuota de IA (incluyendo adicionales). "
-                        "Tu cuota se renueva el próximo mes."
+                        "La API free respondió que su cuota real está agotada. "
+                        "Probá de nuevo cuando el proveedor resetee la cuota."
                     )
                 
                 if is_minute or '429' in error_msg:

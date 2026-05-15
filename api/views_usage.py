@@ -60,6 +60,7 @@ def mi_uso_apis(request):
             q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
 
         svc_name = q.servicio.nombre
+        soft_exhaustion = svc_name in {'gemini', 'elevenlabs', 'uploadpost'}
         info = SERVICIO_MAP.get(svc_name, {
             'nombre': svc_name.capitalize(),
             'unidad': "unidades",
@@ -68,22 +69,31 @@ def mi_uso_apis(request):
         
         limite = q.user_daily_limit or 1500
         consumido = q.requests_today
+        usable_statuses = ['assigned', 'available', 'exhausted'] if soft_exhaustion else ['assigned', 'available']
         active_assignments = UserAPIAssignment.objects.filter(
             user=user,
             servicio=q.servicio,
             activo=True,
-            apikey__status__in=['assigned', 'available'],
+            apikey__status__in=usable_statuses,
         ).select_related('apikey')
-        has_usable_key = any(
-            not (a.apikey.google_daily_limit and a.apikey.requests_today >= a.apikey.google_daily_limit)
-            for a in active_assignments
-        )
-        exhausted_by_key = not has_usable_key and UserAPIAssignment.objects.filter(
-            user=user,
-            servicio=q.servicio,
-            activo=True,
-            apikey__status='exhausted',
-        ).exists()
+        if soft_exhaustion:
+            has_usable_key = active_assignments.exists()
+            exhausted_by_key = False
+            if q.is_blocked:
+                q.is_blocked = False
+                q.blocked_reason = None
+                q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
+        else:
+            has_usable_key = any(
+                not (a.apikey.google_daily_limit and a.apikey.requests_today >= a.apikey.google_daily_limit)
+                for a in active_assignments
+            )
+            exhausted_by_key = not has_usable_key and UserAPIAssignment.objects.filter(
+                user=user,
+                servicio=q.servicio,
+                activo=True,
+                apikey__status='exhausted',
+            ).exists()
         extras_activos = UserAPIAssignment.objects.filter(
             user=user,
             servicio=q.servicio,
@@ -122,7 +132,7 @@ def mi_uso_apis(request):
             "extras_activos": extras_activos,
             "unidad": info['unidad'],
             "porcentaje": porcentaje,
-            "status": "exhausted" if q.is_blocked or exhausted_by_key else "ok"
+            "status": "ok" if soft_exhaustion else ("exhausted" if q.is_blocked or exhausted_by_key else "ok")
         })
 
     return Response({

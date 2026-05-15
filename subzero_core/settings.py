@@ -187,6 +187,7 @@ REST_FRAMEWORK = {
 }
 
 from datetime import timedelta
+from celery.schedules import crontab
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
@@ -220,6 +221,16 @@ CELERY_RESULT_BACKEND = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
 # En local sin Redis, las tasks se ejecutan en línea (síncrono)
 CELERY_TASK_ALWAYS_EAGER = config('CELERY_TASK_ALWAYS_EAGER', default=True, cast=bool)
 CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_BEAT_SCHEDULE = {
+    'reset-free-pool-counters-every-12-hours': {
+        'task': 'api.tasks.reset_free_pool_counters',
+        'schedule': timedelta(hours=12),
+    },
+    'reset-daily-counters-midnight': {
+        'task': 'api.tasks.reset_daily_counters',
+        'schedule': crontab(hour=0, minute=0),
+    },
+}
 
 # Cache Configuration — usa Redis si está disponible, sino memoria local
 _REDIS_URL = config('REDIS_URL', default='')

@@ -9,6 +9,13 @@ from api.models import APIKey, APIRequestLog, AdminAlert, Servicio, UserAPIAssig
 from api.services.pool_service import APIPoolService
 
 
+FREE_POOL_SERVICES = {'gemini', 'elevenlabs', 'uploadpost'}
+
+
+def _uses_soft_exhaustion(servicio):
+    return str(getattr(servicio, 'nombre', servicio) or '').strip().lower() in FREE_POOL_SERVICES
+
+
 def _emit_service_exhausted_event(agente, servicio):
     emit_ws_event({
         'type': 'api_service_exhausted',
@@ -77,6 +84,7 @@ def track_api_call(service, action=''):
             if not servicio:
                 # Si el servicio no existe en catálogo, no bloquear ejecución.
                 return func(*args, **kwargs)
+            soft_exhaustion = _uses_soft_exhaustion(servicio)
 
             quota, _ = UserAPIQuota.objects.get_or_create(
                 user=agente,
@@ -89,27 +97,32 @@ def track_api_call(service, action=''):
             quota.maybe_reset_daily()
             quota.recalcular_limite(plan=agente.plan_nombre)
 
-            if quota.is_blocked and quota.requests_today < quota.user_daily_limit:
+            if soft_exhaustion and quota.is_blocked:
+                quota.is_blocked = False
+                quota.blocked_reason = None
+                quota.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
+            elif quota.is_blocked and quota.requests_today < quota.user_daily_limit:
                 quota.is_blocked = False
                 quota.blocked_reason = None
                 quota.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
 
-            if quota.is_blocked:
+            if not soft_exhaustion and quota.is_blocked:
                 _mark_service_exhausted(agente, servicio, quota, reason=quota.blocked_reason or 'límite alcanzado')
                 _raise_service_exhausted(service, f"Servicio {service} agotado: {quota.blocked_reason or 'límite alcanzado'}")
 
-            if quota.requests_today >= quota.user_daily_limit:
+            if not soft_exhaustion and quota.requests_today >= quota.user_daily_limit:
                 _mark_service_exhausted(agente, servicio, quota, reason='Límite diario alcanzado')
                 _raise_service_exhausted(service, f"Servicio {service} agotado: límite diario alcanzado")
 
+            usable_statuses = ['assigned', 'available', 'exhausted'] if soft_exhaustion else ['assigned', 'available']
             usable_assignment = UserAPIAssignment.objects.filter(
                 user=agente,
                 servicio=servicio,
                 activo=True,
-                apikey__status__in=['assigned', 'available'],
+                apikey__status__in=usable_statuses,
             ).select_related('apikey').order_by('-is_primary', 'assigned_at').first()
 
-            if not usable_assignment:
+            if not usable_assignment and not soft_exhaustion:
                 exhausted_assignment = UserAPIAssignment.objects.filter(
                     user=agente,
                     servicio=servicio,
@@ -154,7 +167,9 @@ def track_api_call(service, action=''):
                 error_msg = str(e)
                 status_code = 500
 
-                if e.__class__.__name__ == 'GeminiQuotaExhaustedError':
+                is_quota_exception = e.__class__.__name__ == 'GeminiQuotaExhaustedError'
+
+                if is_quota_exception and not soft_exhaustion:
                     _mark_service_exhausted(
                         agente,
                         servicio,
@@ -162,8 +177,11 @@ def track_api_call(service, action=''):
                         key_obj,
                         reason='Gemini devolvió cuota agotada',
                     )
+                elif is_quota_exception and key_obj:
+                    key_obj.status = 'exhausted'
+                    key_obj.save(update_fields=['status', 'updated_at'])
 
-                if key_obj:
+                if key_obj and not is_quota_exception:
                     key_obj.error_count += 1
                     if key_obj.error_count >= 10:
                         APIPoolService.mark_key_dead(key_obj)

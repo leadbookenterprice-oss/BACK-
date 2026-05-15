@@ -2861,7 +2861,7 @@ Requisitos obligatorios:
             request.user,
             'quota_agotada',
             'Alcanzaste el 100% de tu uso de IA',
-            'Tus créditos de generación de contenido se agotaron. Se resetean automáticamente a medianoche.'
+            'La API free respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
         )
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
@@ -3483,25 +3483,11 @@ def generar_pdf(request):
         }, status=status.HTTP_200_OK)
 
     except GeminiQuotaExhaustedError as e:
-        try:
-            from .models import UserAPIQuota, Servicio
-            servicio_obj = Servicio.objects.filter(nombre='gemini').first()
-            if servicio_obj:
-                quota, _ = UserAPIQuota.objects.get_or_create(
-                    user=request.user,
-                    servicio=servicio_obj,
-                    defaults={'user_daily_limit': 1500, 'user_monthly_limit': 1500}
-                )
-                quota.is_blocked = True
-                quota.requests_today = quota.user_daily_limit
-                quota.save()
-        except Exception as quota_err:
-            logger.warning(f"[PDF] No se pudo actualizar UserAPIQuota: {quota_err}")
         crear_notificacion(
             request.user,
             'quota_agotada',
             'Alcanzaste el 100% de tu uso de IA',
-            'Tus créditos de generación de contenido se agotaron. Se resetean automáticamente a medianoche.'
+            'La API free respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
         )
         return Response({
             "error": "cuota_ia_agotada",
@@ -3667,20 +3653,6 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
-        try:
-            from .models import UserAPIQuota, Servicio
-            servicio_obj = Servicio.objects.filter(nombre='gemini').first()
-            if servicio_obj:
-                quota, _ = UserAPIQuota.objects.get_or_create(
-                    user=request.user,
-                    servicio=servicio_obj,
-                    defaults={'user_daily_limit': 1500, 'user_monthly_limit': 1500}
-                )
-                quota.is_blocked = True
-                quota.requests_today = quota.user_daily_limit
-                quota.save()
-        except Exception as quota_err:
-            logger.warning(f"[POST] No se pudo actualizar UserAPIQuota: {quota_err}")
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         import traceback
@@ -6201,11 +6173,11 @@ def estado_cuota_ia(request):
         quota = UserAPIQuota.objects.get(user=request.user, servicio__nombre='gemini')
         quota.maybe_reset_daily()
         quota.recalcular_limite(plan=request.user.plan_nombre)
-        if quota.is_blocked and quota.requests_today < quota.user_daily_limit:
+        if quota.is_blocked:
             quota.is_blocked = False
             quota.blocked_reason = None
             quota.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
-        agotada = quota.is_blocked
+        agotada = False
         usado = quota.requests_today
         limite = quota.user_daily_limit
     except UserAPIQuota.DoesNotExist:

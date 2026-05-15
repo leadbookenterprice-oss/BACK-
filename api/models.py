@@ -9,6 +9,7 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.utils import timezone
 from django.utils.text import slugify
+from datetime import timedelta
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -727,20 +728,50 @@ class UserAPIQuota(models.Model):
 
     def maybe_reset_daily(self):
         """
-        Reset lazy: si el último reset fue antes de hoy, resetear ahora.
+        Reset lazy: las APIs free se resetean cada 12 horas; el resto, diario.
         Es el fallback para cuando Celery está caído.
         Se llama al inicio de cada request antes de verificar la cuota.
         """
-        today = timezone.now().date()
-        if self.last_reset_daily is None or self.last_reset_daily.date() < today:
+        now = timezone.now()
+        servicio_nombre = str(getattr(self.servicio, 'nombre', '') or '').lower()
+        uses_twelve_hour_reset = servicio_nombre in {'gemini', 'elevenlabs', 'uploadpost'}
+
+        if uses_twelve_hour_reset:
+            should_reset = self.last_reset_daily is None or now - self.last_reset_daily >= timedelta(hours=12)
+        else:
+            should_reset = self.last_reset_daily is None or self.last_reset_daily.date() < now.date()
+
+        if should_reset:
+            should_notify = (
+                uses_twelve_hour_reset
+                and self.last_reset_daily is not None
+                and (self.is_blocked or self.requests_today >= (self.user_daily_limit or 0))
+            )
             self.requests_today = 0
             self.is_blocked     = False
             self.blocked_reason = None
-            self.last_reset_daily = timezone.now()
+            self.last_reset_daily = now
             self.save(update_fields=[
                 'requests_today', 'is_blocked', 'blocked_reason',
                 'last_reset_daily', 'updated_at'
             ])
+
+            if should_notify:
+                notificacion_model = globals().get('Notificacion')
+                if notificacion_model:
+                    cutoff = now - timedelta(hours=11, minutes=30)
+                    exists = notificacion_model.objects.filter(
+                        usuario=self.user,
+                        tipo='reset_creditos',
+                        creada_en__gte=cutoff,
+                    ).exists()
+                    if not exists:
+                        notificacion_model.objects.create(
+                            usuario=self.user,
+                            tipo='reset_creditos',
+                            titulo='Ya podés generar contenido de nuevo',
+                            mensaje='Las APIs free fueron reintentadas/resetadas. Si el proveedor ya renovó la cuota, podés generar contenido otra vez.',
+                        )
 
     def recalcular_limite(self, plan=None):
         """

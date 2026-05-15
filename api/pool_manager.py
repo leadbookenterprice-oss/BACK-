@@ -23,7 +23,7 @@ def get_api_key(agente, servicio):
             user=agente,
             servicio__nombre__iexact=servicio_nombre,
             activo=True,
-            apikey__status__in=['assigned', 'available']
+            apikey__status__in=['assigned', 'available', 'exhausted']
         ).select_related('apikey').order_by('assigned_at')
 
         candidates = []
@@ -36,7 +36,6 @@ def get_api_key(agente, servicio):
             if limit and key.requests_today >= limit:
                 key.status = 'exhausted'
                 key.save(update_fields=['status', 'updated_at'])
-                continue
 
             candidates.append(asig)
 
