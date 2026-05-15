@@ -9,6 +9,7 @@ from api.tracking import track_api_call
 
 
 UPLOAD_POST_BASE_URL = "https://api.upload-post.com/api"
+MAX_INSTAGRAM_CAROUSEL_ITEMS = 10
 
 def publicar_post(imagen_url: str, caption: str, access_token: str, account_id: str) -> dict:
     try:
@@ -259,6 +260,15 @@ def publicar_media_upload_api(
     uploadpost_media_type = 'STORIES' if media_type == 'story' else 'IMAGE'
     media_urls = [image_url] if media_type in ('image', 'story') else (images if isinstance(images, list) else [images])
     media_urls = [str(url).strip() for url in media_urls if str(url or '').strip()]
+    original_media_count = len(media_urls)
+    truncated_media_count = 0
+
+    if not media_urls:
+        return {"success": False, "error": "No hay URLs públicas válidas para publicar."}
+
+    if media_type == 'carousel' and original_media_count > MAX_INSTAGRAM_CAROUSEL_ITEMS:
+        media_urls = media_urls[:MAX_INSTAGRAM_CAROUSEL_ITEMS]
+        truncated_media_count = original_media_count - len(media_urls)
 
     form_data = [
         ('user', username or ''),
@@ -305,9 +315,12 @@ def publicar_media_upload_api(
                     "upload_response": data,
                     "media_type": media_type,
                     "uploadpost_media_type": uploadpost_media_type,
+                    "media_count": len(media_urls),
+                    "original_media_count": original_media_count,
+                    "truncated_media_count": truncated_media_count,
                 }
 
-            return {
+            result = {
                 "success": True,
                 "request_id": data.get('request_id') or request_id,
                 "job_id": data.get('job_id'),
@@ -318,8 +331,17 @@ def publicar_media_upload_api(
                 "scheduled_at": scheduled_at,
                 "media_type": media_type,
                 "uploadpost_media_type": uploadpost_media_type,
+                "media_count": len(media_urls),
+                "original_media_count": original_media_count,
+                "truncated_media_count": truncated_media_count,
                 "upload_response": data,
             }
+            if truncated_media_count:
+                result["warning"] = (
+                    f"Instagram permite hasta {MAX_INSTAGRAM_CAROUSEL_ITEMS} imágenes por carrusel; "
+                    f"se enviaron las primeras {MAX_INSTAGRAM_CAROUSEL_ITEMS} de {original_media_count}."
+                )
+            return result
         else:
             error_text = _response_error_text(response, data)
             print(f"[UploadPost] Error HTTP {response.status_code}: {error_text}")

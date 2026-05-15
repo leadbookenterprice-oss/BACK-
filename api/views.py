@@ -2530,6 +2530,7 @@ from .services.instagram_service import (
     publicar_post,
     publicar_story,
     publicar_carrusel,
+    MAX_INSTAGRAM_CAROUSEL_ITEMS,
     publicar_media_upload_api,
     consultar_uploadpost_status,
     get_upload_post_accounts,
@@ -2675,6 +2676,7 @@ def publicar_redes_todo(request):
         post_image = _extract_publish_image_url(post_payload)
         story_image = _extract_publish_image_url(story_payload)
         carousel_images = _extract_publish_images(carousel_payload)
+        carousel_original_count = len(carousel_images)
 
         missing = []
         if not post_image:
@@ -2689,16 +2691,22 @@ def publicar_redes_todo(request):
                 "error": f"Faltan piezas para publicar: {', '.join(missing)}. Regenerá el contenido antes de publicar todo."
             }, status=status.HTTP_400_BAD_REQUEST)
 
+        results = {}
+        warnings = []
+        if story_payload.get('caption') or story_payload.get('texto'):
+            warnings.append('Instagram Stories no acepta caption por API; se publica solo la imagen de la story.')
+        if carousel_original_count > MAX_INSTAGRAM_CAROUSEL_ITEMS:
+            carousel_images = carousel_images[:MAX_INSTAGRAM_CAROUSEL_ITEMS]
+            warnings.append(
+                f"Instagram permite hasta {MAX_INSTAGRAM_CAROUSEL_ITEMS} imágenes por carrusel; "
+                f"se publicarán las primeras {MAX_INSTAGRAM_CAROUSEL_ITEMS} de {carousel_original_count}."
+            )
+
         publish_jobs = [
             ('post', 'image', post_payload.get('caption') or post_payload.get('texto') or '', post_image, None),
             ('story', 'story', story_payload.get('caption') or story_payload.get('texto') or '', story_image, None),
             ('carousel', 'carousel', carousel_payload.get('caption') or carousel_payload.get('texto') or '', None, carousel_images),
         ]
-
-        results = {}
-        warnings = []
-        if publish_jobs[1][2]:
-            warnings.append('Instagram Stories no acepta caption por API; se publica solo la imagen de la story.')
 
         for key, media_type, caption, image_url, images in publish_jobs:
             request_id = f"leadbook-{user.id}-{batch_id}-{key}"
