@@ -2526,7 +2526,14 @@ def brand_template_preview(request, template_id):
         'gemini_instructions': instructions,
     }, status=status.HTTP_200_OK)
 
-from .services.instagram_service import publicar_post, publicar_story, publicar_carrusel, publicar_media_upload_api
+from .services.instagram_service import (
+    publicar_post,
+    publicar_story,
+    publicar_carrusel,
+    publicar_media_upload_api,
+    consultar_uploadpost_status,
+    get_upload_post_accounts,
+)
 from django.conf import settings
 
 @api_view(['POST'])
@@ -2583,6 +2590,7 @@ def publicar_redes_sociales(request):
         # Opciones extra
         platforms = data.get('platforms') # ej: ['instagram', 'facebook', 'youtube']
         scheduled_at = data.get('scheduled_at') # string ISO 8601
+        request_id = data.get('request_id')
         
         user = request.user
         
@@ -2596,28 +2604,11 @@ def publicar_redes_sociales(request):
             document_url=document_url,
             platforms=platforms,
             scheduled_at=scheduled_at,
+            request_id=request_id,
             agente=user
         )
         
         if result.get('success'):
-            # --- Añadir tracking manual de uso para UploadPost ---
-            try:
-                from api.pool_manager import get_api_key
-                from api.models import APIKey
-                from django.utils import timezone
-                key_str = get_api_key(user, 'uploadpost')
-                if key_str:
-                    k = APIKey.objects.filter(api_key=key_str).first()
-                    if k:
-                        k.requests_today += 1
-                        k.requests_this_month += 1
-                        k.total_requests += 1
-                        k.last_used_at = timezone.now()
-                        k.save()
-            except Exception as trk_e:
-                print(f"[UploadPost Tracking Error]: {trk_e}")
-            # -----------------------------------------------------
-            
             return Response(result, status=status.HTTP_200_OK)
         else:
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
@@ -2626,6 +2617,127 @@ def publicar_redes_sociales(request):
         import traceback
         traceback.print_exc()
         return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _extract_publish_image_url(payload):
+    if not isinstance(payload, dict):
+        return None
+    return payload.get('image_url') or payload.get('url') or payload.get('imageUrl')
+
+
+def _extract_publish_images(payload):
+    if not isinstance(payload, dict):
+        return []
+    images = payload.get('images') or payload.get('imagenes_urls') or payload.get('imagenesUrls') or []
+    if not images and payload.get('slides'):
+        images = payload.get('slides')
+    if isinstance(images, str):
+        images = [images]
+
+    normalized = []
+    for item in images or []:
+        if isinstance(item, str):
+            url = item
+        elif isinstance(item, dict):
+            url = item.get('url') or item.get('image_url') or item.get('imageUrl')
+        else:
+            url = None
+        if url:
+            normalized.append(url)
+    return normalized
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def publicar_redes_todo(request):
+    """
+    Publica automáticamente en Instagram las tres piezas principales:
+    post de feed, story y carrusel. Cada pieza genera un request_id separado.
+    """
+    try:
+        import uuid
+
+        user = request.user
+        data = request.data or {}
+        batch_id = str(data.get('batch_id') or uuid.uuid4().hex[:12]).replace(' ', '-')[:64]
+
+        accounts = get_upload_post_accounts(user)
+        if accounts.get('success') and not any(str(red.get('platform')).lower() == 'instagram' for red in accounts.get('redes', [])):
+            return Response({
+                "success": False,
+                "error": "No hay una cuenta de Instagram conectada. Conectala desde Conexiones antes de publicar."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        post_payload = data.get('post') or {}
+        story_payload = data.get('story') or {}
+        carousel_payload = data.get('carousel') or data.get('carrusel') or {}
+
+        post_image = _extract_publish_image_url(post_payload)
+        story_image = _extract_publish_image_url(story_payload)
+        carousel_images = _extract_publish_images(carousel_payload)
+
+        missing = []
+        if not post_image:
+            missing.append('post')
+        if not story_image:
+            missing.append('story')
+        if not carousel_images:
+            missing.append('carousel')
+        if missing:
+            return Response({
+                "success": False,
+                "error": f"Faltan piezas para publicar: {', '.join(missing)}. Regenerá el contenido antes de publicar todo."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        publish_jobs = [
+            ('post', 'image', post_payload.get('caption') or post_payload.get('texto') or '', post_image, None),
+            ('story', 'story', story_payload.get('caption') or story_payload.get('texto') or '', story_image, None),
+            ('carousel', 'carousel', carousel_payload.get('caption') or carousel_payload.get('texto') or '', None, carousel_images),
+        ]
+
+        results = {}
+        warnings = []
+        if publish_jobs[1][2]:
+            warnings.append('Instagram Stories no acepta caption por API; se publica solo la imagen de la story.')
+
+        for key, media_type, caption, image_url, images in publish_jobs:
+            request_id = f"leadbook-{user.id}-{batch_id}-{key}"
+            results[key] = publicar_media_upload_api(
+                media_type=media_type,
+                caption=caption,
+                image_url=image_url,
+                images=images,
+                platforms=['instagram'],
+                request_id=request_id,
+                agente=user,
+            )
+
+        any_success = any(result.get('success') for result in results.values())
+        all_success = all(result.get('success') for result in results.values())
+
+        response_data = {
+            "success": all_success,
+            "partial_success": any_success and not all_success,
+            "batch_id": batch_id,
+            "results": results,
+            "warnings": warnings,
+        }
+        return Response(response_data, status=status.HTTP_200_OK if any_success else status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return Response({"success": False, "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def publicar_redes_status(request):
+    result = consultar_uploadpost_status(
+        request_id=request.query_params.get('request_id'),
+        job_id=request.query_params.get('job_id'),
+        agente=request.user,
+    )
+    return Response(result, status=status.HTTP_200_OK if result.get('success') else status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
