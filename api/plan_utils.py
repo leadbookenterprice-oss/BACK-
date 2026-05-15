@@ -13,16 +13,18 @@ def get_limites(agente):
     return LIMITES.get(plan, LIMITES['free'])
 
 def puede_generar(agente, tipo):
-    from api.models import Listado, UsageLog
+    from api.models import UsageLog
     limites = get_limites(agente)
     from django.utils import timezone
-    from datetime import timedelta
     ahora = timezone.now()
-    inicio_mes = ahora.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     
     if tipo == 'property':
-        usado = Listado.objects.filter(
-            agente=agente, creado_en__gte=inicio_mes).count()
+        usado = UsageLog.objects.filter(
+            agent=agente,
+            tipo='property',
+            fecha__year=ahora.year,
+            fecha__month=ahora.month
+        ).count()
         return usado < limites['properties']
     
     if tipo in ['ai', 'image', 'video']:

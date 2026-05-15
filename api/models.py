@@ -1046,7 +1046,13 @@ class UsageLog(models.Model):
     Log de uso de features.
     Campo archivado=True para cleanup periódico — no crece infinito.
     """
-    TIPOS = [('ai','IA / Guion'),('image','Imagen'),('video','Video'),('pdf','PDF')]
+    TIPOS = [
+        ('property', 'Listado'),
+        ('ai', 'IA / Guion'),
+        ('image', 'Imagen'),
+        ('video', 'Video'),
+        ('pdf', 'PDF'),
+    ]
 
     agent     = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='usage_logs')
     tipo      = models.CharField(max_length=10, choices=TIPOS)

@@ -29,7 +29,7 @@ from .models import (
     AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision, default_template_tokens,
     AgentAssociation, CRMClient,
-    TerminosCondiciones, PoliticaPrivacidad
+    TerminosCondiciones, PoliticaPrivacidad, UsageLog
 )
 from .serializers import (
     RegisterSerializer, GeneratedAssetSerializer,
@@ -43,7 +43,7 @@ from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuota
 from .utils import crear_notificacion
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
-from .plan_utils import puede_generar, incrementar_uso
+from .plan_utils import puede_generar, incrementar_uso, registrar_uso
 
 def actualizar_resultados_listado(listado, tipo, resultado):
     """
@@ -2011,8 +2011,9 @@ class DashboardView(APIView):
         start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         
         listados = Listado.objects.filter(agente=user)
-        listados_este_mes = listados.filter(creado_en__gte=start_of_month).count()
-        total_generados = listados.count()
+        property_usage = UsageLog.objects.filter(agent=user, tipo='property')
+        listados_este_mes = property_usage.filter(fecha__gte=start_of_month).count()
+        total_generados = property_usage.count()
         
         videos_creados = listados.aggregate(total_videos=Sum('videos_creados'))['total_videos'] or 0
 
@@ -3022,7 +3023,7 @@ class ListadosView(APIView):
             datos_extra=payload
         )
         
-        incrementar_uso(user, 'property')
+        registrar_uso(user, 'property')
         
         return Response({
             "mensaje": "Listado guardado", 
@@ -4936,8 +4937,9 @@ def dashboard(request):
     from .plan_utils import LIMITES
 
     listados = Listado.objects.filter(agente=agent)
-    listados_este_mes = listados.filter(creado_en__gte=start_of_month).count()
-    total_generados = listados.count()
+    property_usage = UsageLog.objects.filter(agent=agent, tipo='property')
+    listados_este_mes = property_usage.filter(fecha__gte=start_of_month).count()
+    total_generados = property_usage.count()
     videos_creados = listados.aggregate(total=Sum('videos_creados'))['total'] or 0
 
     listados_recientes = list(listados.order_by('-creado_en')[:5].values(
