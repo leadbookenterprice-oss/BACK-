@@ -91,7 +91,14 @@ def admin_api_keys_list(request):
     for k in keys:
         asig = UserAPIAssignment.objects.filter(
             apikey=k, activo=True
-        ).select_related('user').first()
+        ).select_related('user', 'servicio', 'pago').first()
+        quota = None
+        comprada_en = None
+        if asig:
+            quota = UserAPIQuota.objects.filter(user=asig.user, servicio=asig.servicio).first()
+            if asig.pago:
+                comprada_en = asig.pago.procesado_en or asig.pago.creado_en
+            comprada_en = comprada_en or asig.assigned_at
         data.append({
             'id': k.id, 'servicio': k.servicio.nombre, 'service': k.servicio.nombre,
             'status': k.status, 'api_key': k.api_key,
@@ -106,6 +113,13 @@ def admin_api_keys_list(request):
             'assigned_to_nombre': asig.user.nombre if asig else None,
             'daily_limit': k.google_daily_limit,
             'requests_today': k.requests_today,
+            'quota_requests_today': quota.requests_today if quota else 0,
+            'user_daily_limit': quota.user_daily_limit if quota else None,
+            'is_blocked': quota.is_blocked if quota else False,
+            'assigned_at': asig.assigned_at.isoformat() if asig and asig.assigned_at else None,
+            'comprada_en': comprada_en.isoformat() if comprada_en else None,
+            'pago_id': asig.pago.id if asig and asig.pago else None,
+            'mp_payment_id': asig.pago.mp_payment_id if asig and asig.pago else None,
             'last_health_status': k.last_health_status,
             'error_count': k.error_count,
             'creado_en': k.creado_en.isoformat() if k.creado_en else None,
@@ -175,6 +189,19 @@ def admin_api_keys_detail(request, pk):
         return Response({'error': 'Forbidden'}, status=403)
     try: key = APIKey.objects.select_related('servicio').get(pk=pk)
     except APIKey.DoesNotExist: return Response(status=404)
+
+    def reset_related_quotas():
+        assignments = UserAPIAssignment.objects.filter(
+            apikey=key, activo=True
+        ).select_related('user', 'servicio')
+        for asig in assignments:
+            quota = UserAPIQuota.objects.filter(user=asig.user, servicio=asig.servicio).first()
+            if quota:
+                quota.requests_today = 0
+                quota.is_blocked = False
+                quota.blocked_reason = None
+                quota.save(update_fields=['requests_today', 'is_blocked', 'blocked_reason', 'updated_at'])
+
     if request.method == 'POST':
         path = request.path
         if path.endswith('/liberar/'):
@@ -182,13 +209,18 @@ def admin_api_keys_detail(request, pk):
             key.status = 'available'; key.save(update_fields=['status', 'updated_at'])
             return Response({'status': 'released'})
         elif path.endswith('/reactivar/'):
-            key.status = 'available'; key.save(update_fields=['status', 'updated_at'])
+            key.requests_today = 0; key.requests_this_month = 0; key.error_count = 0
+            key.status = 'assigned' if UserAPIAssignment.objects.filter(apikey=key, activo=True).exists() else 'available'
+            key.save(update_fields=['status', 'requests_today', 'requests_this_month', 'error_count', 'updated_at'])
+            reset_related_quotas()
             return Response({'status': 'reactivated'})
         elif path.endswith('/reset/'):
             key.requests_today = 0; key.requests_this_month = 0; key.error_count = 0
             if key.status == 'exhausted':
                 key.status = 'assigned' if UserAPIAssignment.objects.filter(apikey=key, activo=True).exists() else 'available'
-            key.save(); return Response({'status': 'reset'})
+            key.save()
+            reset_related_quotas()
+            return Response({'status': 'reset'})
         return Response({'error': 'Accion desconocida'}, status=400)
     if request.method == 'DELETE':
         UserAPIAssignment.objects.filter(apikey=key).update(activo=False)
