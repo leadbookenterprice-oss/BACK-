@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from django.db.models import Sum
+from django.db import transaction
 import requests
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
@@ -267,11 +268,16 @@ def _template_options_payload():
                 'description': meta.get('description', ''),
                 'colors': meta.get('colors', {}),
                 'fonts': meta.get('fonts', {}),
+                'default_tokens': _default_tokens_for_base_template(template_id),
             }
             for template_id, meta in TEMPLATE_CATALOG.items()
         ],
         'token_options': TEMPLATE_TOKEN_OPTIONS,
         'default_tokens': default_template_tokens(),
+        'default_tokens_by_base': {
+            template_id: _default_tokens_for_base_template(template_id)
+            for template_id in TEMPLATE_IDS
+        },
     }
 
 
@@ -423,6 +429,69 @@ def _deep_merge_dict(base, override):
         else:
             result[key] = value
     return result
+
+
+def _pick_template_font(value, fallback):
+    candidates = []
+    if isinstance(value, str):
+        candidates = [part.strip() for part in value.split('/')]
+    elif isinstance(value, (list, tuple)):
+        candidates = [str(part).strip() for part in value]
+    for candidate in candidates:
+        if candidate in SYSTEM_FONT_IMPORT_MAP:
+            return candidate
+    return fallback if fallback in SYSTEM_FONT_IMPORT_MAP else 'DM Sans'
+
+
+def _default_tokens_for_base_template(base_template_id):
+    template_id = _normalize_template_id(base_template_id) or 'tech_modern'
+    tokens = default_template_tokens()
+    meta = TEMPLATE_CATALOG.get(template_id, TEMPLATE_CATALOG['tech_modern'])
+    colors = meta.get('colors') if isinstance(meta.get('colors'), dict) else {}
+    fonts = meta.get('fonts') if isinstance(meta.get('fonts'), dict) else {}
+
+    palette = tokens.get('palette', {}).copy()
+    for key in ('primary', 'secondary', 'accent', 'background', 'text'):
+        if colors.get(key):
+            palette[key] = colors[key]
+    palette['surface'] = colors.get('secondary') or palette.get('surface') or palette.get('background')
+    palette['muted_text'] = '#b8b0a0' if template_id == 'dubai_night' else palette.get('muted_text', '#8fb1d1')
+    palette['border'] = colors.get('accent') or colors.get('secondary') or palette.get('border', '#1d3e5d')
+    palette['overlay'] = 'rgba(0,0,0,0.72)' if template_id in {'dubai_night', 'manhattan'} else palette.get('overlay', 'rgba(0,0,0,0.65)')
+
+    display_font = _pick_template_font(fonts.get('display'), tokens['typography']['display'])
+    body_font = _pick_template_font(fonts.get('body'), tokens['typography']['body'])
+    mono_font = _pick_template_font(fonts.get('mono'), tokens['typography']['mono'])
+
+    style_map = {
+        'dubai_night': 'dark_luxury',
+        'beverly_hills': 'editorial',
+        'manhattan': 'urban_strong',
+        'mediterraneo': 'mediterranean_warm',
+        'tech_modern': 'tech_modern',
+    }
+    image_map = {
+        'dubai_night': 'dark',
+        'beverly_hills': 'normal',
+        'manhattan': 'high_contrast',
+        'mediterraneo': 'warm',
+        'tech_modern': 'normal',
+    }
+
+    tokens['palette'] = palette
+    tokens['typography'] = {
+        **tokens.get('typography', {}),
+        'display': display_font,
+        'body': body_font,
+        'mono': mono_font,
+        'google_fonts': list(dict.fromkeys([display_font, body_font, mono_font])),
+    }
+    tokens['layout'] = {
+        **tokens.get('layout', {}),
+        'style': style_map.get(template_id, 'tech_modern'),
+        'image_treatment': image_map.get(template_id, 'normal'),
+    }
+    return _resolve_brand_template_tokens(tokens)
 
 
 def _resolve_brand_template_tokens(tokens):
@@ -2446,30 +2515,33 @@ def brand_templates_collection(request):
 
     serializer = BrandTemplateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    created = serializer.save(owner=request.user)
+    with transaction.atomic():
+        created = serializer.save(owner=request.user)
 
-    initial_tokens = request.data.get('tokens_json') if isinstance(request.data, dict) else None
-    if not isinstance(initial_tokens, dict):
-        initial_tokens = default_template_tokens()
-    initial_instructions = str(request.data.get('gemini_instructions') or '').strip()
-    if not initial_instructions:
-        initial_instructions = _build_template_gemini_instructions(created.name, created.base_template_id, initial_tokens)
+        initial_tokens = request.data.get('tokens_json') if isinstance(request.data, dict) else None
+        if bool(request.data.get('use_base_tokens', False)) or not isinstance(initial_tokens, dict):
+            initial_tokens = _default_tokens_for_base_template(created.base_template_id)
+        else:
+            initial_tokens = _resolve_brand_template_tokens(initial_tokens)
+        initial_instructions = str(request.data.get('gemini_instructions') or '').strip()
+        if not initial_instructions:
+            initial_instructions = _build_template_gemini_instructions(created.name, created.base_template_id, initial_tokens)
 
-    revision_serializer = BrandTemplateRevisionSerializer(data={
-        'template': created.id,
-        'tokens_json': initial_tokens,
-        'gemini_instructions': initial_instructions,
-        'status': 'published',
-        'notes': 'Revision inicial',
-    })
-    revision_serializer.is_valid(raise_exception=True)
-    revision_serializer.save(template=created, created_by=request.user)
+        revision_serializer = BrandTemplateRevisionSerializer(data={
+            'template': created.id,
+            'tokens_json': initial_tokens,
+            'gemini_instructions': initial_instructions,
+            'status': 'published',
+            'notes': 'Revision inicial',
+        })
+        revision_serializer.is_valid(raise_exception=True)
+        revision_serializer.save(template=created, created_by=request.user)
 
-    if created.is_default:
-        BrandTemplate.objects.filter(owner=request.user, is_active=True).exclude(id=created.id).update(is_default=False)
-    elif not BrandTemplate.objects.filter(owner=request.user, is_active=True, is_default=True).exclude(id=created.id).exists():
-        created.is_default = True
-        created.save(update_fields=['is_default'])
+        if created.is_default:
+            BrandTemplate.objects.filter(owner=request.user, is_active=True).exclude(id=created.id).update(is_default=False)
+        elif not BrandTemplate.objects.filter(owner=request.user, is_active=True, is_default=True).exclude(id=created.id).exists():
+            created.is_default = True
+            created.save(update_fields=['is_default'])
 
     return Response(BrandTemplateSerializer(created).data, status=status.HTTP_201_CREATED)
 
@@ -2490,7 +2562,7 @@ def brand_template_clone(request):
             tokens = published.tokens_json if published else None
             base_template_id = source_template.base_template_id
     if not isinstance(tokens, dict):
-        tokens = default_template_tokens()
+        tokens = _default_tokens_for_base_template(base_template_id)
     instructions = str(request.data.get('gemini_instructions') or '').strip()
 
     created = BrandTemplate.objects.create(
@@ -2616,6 +2688,219 @@ def _brand_template_demo_context():
     }
 
 
+def _preview_dimensions(preview_format):
+    if preview_format == 'story':
+        return {'width': 1080, 'height': 1920}
+    if preview_format == 'email':
+        return {'width': 600, 'height': 900}
+    return {'width': 1080, 'height': 1350}
+
+
+def _render_brand_template_preview_html(base_template_id, tokens, preview_format='post'):
+    template_id = _normalize_template_id(base_template_id) or 'tech_modern'
+    resolved_tokens = _resolve_brand_template_tokens(tokens or _default_tokens_for_base_template(template_id))
+    preview_format = str(preview_format or 'post').strip().lower()
+    demo_context = _brand_template_demo_context()
+
+    if preview_format == 'story':
+        template_file = TEMPLATE_STORY_MAP.get(template_id, TEMPLATE_STORY_MAP['tech_modern'])
+        html = render_to_string(template_file, demo_context)
+    elif preview_format in ('carousel', 'carrusel'):
+        preview_format = 'carousel'
+        template_file = TEMPLATE_CAROUSEL_MAP.get(template_id, TEMPLATE_CAROUSEL_MAP['tech_modern'])
+        carousel_context = {
+            **demo_context,
+            'headline': 'Residencia premium',
+            'subheadline': 'Venta por USD 850.000. 320 m2, 4 hab, 3 banos. Desliza para ver la galeria.',
+            'slide_number': 1,
+            'total_slides': 6,
+        }
+        html = render_to_string(template_file, carousel_context)
+    elif preview_format == 'email':
+        template_file = TEMPLATE_EMAIL_MAP.get(template_id, TEMPLATE_EMAIL_MAP['tech_modern'])
+        email_context = {
+            'asunto': 'Residencia premium disponible',
+            'logo_url': demo_context.get('logo_url', ''),
+            'agenciaNombre': demo_context.get('agencia_nombre', ''),
+            'tipoPropiedad': demo_context.get('tipoPropiedad', ''),
+            'ciudad': demo_context.get('ciudad', ''),
+            'portada_url': demo_context.get('portada_url', ''),
+            'html_content': '<strong>Oportunidad destacada.</strong><br>Una propiedad pensada para vivir o invertir con alto valor percibido.',
+            'moneda': demo_context.get('moneda', ''),
+            'precio': demo_context.get('precio', ''),
+            'operacion': demo_context.get('operacion', ''),
+            'agenteNombre': demo_context.get('agente_nombre', ''),
+            'agenteRol': 'Asesor Comercial',
+            'agenteTelefono': demo_context.get('agente_telefono', ''),
+            'agenteTelefonoDisplay': demo_context.get('agente_telefono', ''),
+            'agenteEmail': 'agente@leadbook.com',
+            'whatsapp_url': '',
+        }
+        html = render_to_string(template_file, email_context)
+    else:
+        preview_format = 'post'
+        template_file = TEMPLATE_POST_MAP.get(template_id, TEMPLATE_POST_MAP['tech_modern'])
+        html = render_to_string(template_file, demo_context)
+
+    html = _apply_template_tokens_to_html(html, template_id, resolved_tokens)
+    html = _inject_agency_brand_lockup(html, demo_context.get('logo_url', ''), demo_context.get('agencia_nombre', ''))
+    return html, preview_format, resolved_tokens, _preview_dimensions(preview_format)
+
+
+def _parse_json_object(text):
+    source = str(text or '').strip()
+    candidates = [source]
+    cleaned = re.sub(r'^\s*```(?:json)?\s*', '', source, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s*```\s*$', '', cleaned, flags=re.IGNORECASE).strip()
+    if cleaned and cleaned != source:
+        candidates.append(cleaned)
+    start = source.find('{')
+    while start != -1:
+        depth = 0
+        for idx in range(start, len(source)):
+            if source[idx] == '{':
+                depth += 1
+            elif source[idx] == '}':
+                depth -= 1
+                if depth == 0:
+                    candidates.append(source[start:idx + 1])
+                    break
+        start = source.find('{', start + 1)
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            continue
+    return None
+
+
+def _is_hex_color(value):
+    return isinstance(value, str) and bool(re.match(r'^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$', value.strip()))
+
+
+def _sanitize_template_patch(patch):
+    if not isinstance(patch, dict):
+        return {}
+    clean = {}
+    palette = patch.get('palette') if isinstance(patch.get('palette'), dict) else {}
+    clean_palette = {
+        key: value.strip()
+        for key, value in palette.items()
+        if key in {'primary', 'secondary', 'accent', 'background', 'surface', 'text', 'muted_text', 'border'} and _is_hex_color(value)
+    }
+    overlay = palette.get('overlay')
+    if isinstance(overlay, str) and re.match(r'^(rgba?\([^)]+\)|transparent)$', overlay.strip(), flags=re.IGNORECASE):
+        clean_palette['overlay'] = overlay.strip()
+    if clean_palette:
+        clean['palette'] = clean_palette
+
+    typography = patch.get('typography') if isinstance(patch.get('typography'), dict) else {}
+    clean_typography = {}
+    for key in ('display', 'body', 'mono'):
+        if typography.get(key) in SYSTEM_FONT_IMPORT_MAP:
+            clean_typography[key] = typography.get(key)
+    if typography.get('title_transform') in {'uppercase', 'none'}:
+        clean_typography['title_transform'] = typography.get('title_transform')
+    if typography.get('letter_spacing') in {'tight', 'normal', 'wide'}:
+        clean_typography['letter_spacing'] = typography.get('letter_spacing')
+    if clean_typography:
+        fonts = [clean_typography.get(k) for k in ('display', 'body', 'mono') if clean_typography.get(k)]
+        if fonts:
+            clean_typography['google_fonts'] = list(dict.fromkeys(fonts))
+        clean['typography'] = clean_typography
+
+    layout = patch.get('layout') if isinstance(patch.get('layout'), dict) else {}
+    layout_allowed = {
+        'logo_position': {'top_left', 'top_right'},
+        'agent_block_position': {'bottom_left', 'bottom_right'},
+        'qr_position': {'bottom_left', 'bottom_right'},
+        'style': {item['id'] for item in TEMPLATE_TOKEN_OPTIONS['layout_styles']},
+        'density': {item['id'] for item in TEMPLATE_TOKEN_OPTIONS['density']},
+        'border_radius': {item['id'] for item in TEMPLATE_TOKEN_OPTIONS['border_radius']},
+        'image_treatment': {item['id'] for item in TEMPLATE_TOKEN_OPTIONS['image_treatment']},
+    }
+    clean_layout = {key: value for key, value in layout.items() if key in layout_allowed and value in layout_allowed[key]}
+    if clean_layout:
+        clean['layout'] = clean_layout
+
+    copy = patch.get('copy') if isinstance(patch.get('copy'), dict) else {}
+    clean_copy = {}
+    if copy.get('tone') in {'premium', 'profesional', 'lujo', 'minimal'}:
+        clean_copy['tone'] = copy.get('tone')
+    if copy.get('emoji_density') in {'none', 'low', 'medium', 'high'}:
+        clean_copy['emoji_density'] = copy.get('emoji_density')
+    if copy.get('cta_style') in {'whatsapp_direct', 'soft', 'strong'}:
+        clean_copy['cta_style'] = copy.get('cta_style')
+    if isinstance(copy.get('hashtags'), list):
+        clean_copy['hashtags'] = [str(tag)[:50] for tag in copy.get('hashtags')[:20] if str(tag or '').strip()]
+    if clean_copy:
+        clean['copy'] = clean_copy
+
+    components = patch.get('components') if isinstance(patch.get('components'), dict) else {}
+    clean_components = {}
+    hero = components.get('hero') if isinstance(components.get('hero'), dict) else {}
+    clean_hero = {}
+    if hero.get('overlay_strength') in {'none', 'soft', 'medium', 'strong'}:
+        clean_hero['overlay_strength'] = hero.get('overlay_strength')
+    if isinstance(hero.get('show_badge'), bool):
+        clean_hero['show_badge'] = hero.get('show_badge')
+    if clean_hero:
+        clean_components['hero'] = clean_hero
+    price = components.get('price') if isinstance(components.get('price'), dict) else {}
+    if price.get('size') in {'small', 'medium', 'large', 'xlarge'}:
+        clean_components['price'] = {'size': price.get('size')}
+    stats = components.get('stats') if isinstance(components.get('stats'), dict) else {}
+    if isinstance(stats.get('show_icons'), bool):
+        clean_components['stats'] = {'show_icons': stats.get('show_icons')}
+    contact = components.get('contact') if isinstance(components.get('contact'), dict) else {}
+    clean_contact = {}
+    for key in ('show_agent_photo', 'show_qr'):
+        if isinstance(contact.get(key), bool):
+            clean_contact[key] = contact.get(key)
+    if clean_contact:
+        clean_components['contact'] = clean_contact
+    if clean_components:
+        clean['components'] = clean_components
+    return clean
+
+
+def _template_ai_patch_from_message(message, current_tokens, base_template_id, user=None):
+    prompt = f"""
+Actua como disenador senior de templates inmobiliarios. Convierte el pedido del usuario en un JSON seguro de tokens visuales.
+No generes HTML. No inventes campos fuera del schema. Responde SOLO JSON valido.
+
+Template base: {base_template_id}
+Tokens actuales:
+{json.dumps(current_tokens, ensure_ascii=False)}
+
+Pedido del usuario:
+{message}
+
+Formato exacto:
+{{
+  "reply": "respuesta breve para el usuario",
+  "token_patch": {{}}
+}}
+
+Campos permitidos en token_patch: palette, typography, layout, components, copy.
+Fuentes permitidas: {', '.join(SYSTEM_FONT_IMPORT_MAP.keys())}.
+Colores solo HEX. No uses HTML ni CSS libre.
+"""
+    try:
+        raw = smart_call(prompt, retries=1, agente=user)
+        parsed = _parse_json_object(raw)
+        if not isinstance(parsed, dict):
+            return None
+        patch = _sanitize_template_patch(parsed.get('token_patch') or {})
+        reply = str(parsed.get('reply') or '').strip()
+        if patch:
+            return {'reply': reply, 'token_patch': patch}
+    except Exception as exc:
+        logger.warning("Template Studio AI patch failed: %s", exc)
+    return None
+
+
 def _template_patch_from_message(message):
     text = unicodedata.normalize('NFKD', str(message or '').lower())
     text = ''.join(ch for ch in text if not unicodedata.combining(ch))
@@ -2727,49 +3012,8 @@ def brand_template_preview(request, template_id):
         published = template.revisions.filter(status='published').order_by('-revision').first()
         tokens = published.tokens_json if published and isinstance(published.tokens_json, dict) else default_template_tokens()
 
-    resolved_tokens = _resolve_brand_template_tokens(tokens)
     preview_format = str(request.data.get('format') or request.data.get('preview_format') or 'post').strip().lower()
-    demo_context = _brand_template_demo_context()
-    if preview_format == 'story':
-        template_file = TEMPLATE_STORY_MAP.get(template.base_template_id, TEMPLATE_STORY_MAP['tech_modern'])
-        html = render_to_string(template_file, demo_context)
-    elif preview_format in ('carousel', 'carrusel'):
-        template_file = TEMPLATE_CAROUSEL_MAP.get(template.base_template_id, TEMPLATE_CAROUSEL_MAP['tech_modern'])
-        carousel_context = {
-            **demo_context,
-            'headline': 'Residencia premium',
-            'subheadline': 'Venta por USD 850.000. 320 m2, 4 hab, 3 banos. Desliza para ver la galeria.',
-            'slide_number': 1,
-            'total_slides': 6,
-        }
-        html = render_to_string(template_file, carousel_context)
-    elif preview_format == 'email':
-        template_file = TEMPLATE_EMAIL_MAP.get(template.base_template_id, TEMPLATE_EMAIL_MAP['tech_modern'])
-        email_context = {
-            'asunto': 'Residencia premium disponible',
-            'logo_url': demo_context.get('logo_url', ''),
-            'agenciaNombre': demo_context.get('agencia_nombre', ''),
-            'tipoPropiedad': demo_context.get('tipoPropiedad', ''),
-            'ciudad': demo_context.get('ciudad', ''),
-            'portada_url': demo_context.get('portada_url', ''),
-            'html_content': '<strong>Oportunidad destacada.</strong><br>Una propiedad pensada para vivir o invertir con alto valor percibido.',
-            'moneda': demo_context.get('moneda', ''),
-            'precio': demo_context.get('precio', ''),
-            'operacion': demo_context.get('operacion', ''),
-            'agenteNombre': demo_context.get('agente_nombre', ''),
-            'agenteRol': 'Asesor Comercial',
-            'agenteTelefono': demo_context.get('agente_telefono', ''),
-            'agenteTelefonoDisplay': demo_context.get('agente_telefono', ''),
-            'agenteEmail': 'agente@leadbook.com',
-            'whatsapp_url': '',
-        }
-        html = render_to_string(template_file, email_context)
-    else:
-        preview_format = 'post'
-        template_file = TEMPLATE_POST_MAP.get(template.base_template_id, TEMPLATE_POST_MAP['tech_modern'])
-        html = render_to_string(template_file, demo_context)
-    html = _apply_template_tokens_to_html(html, template.base_template_id, resolved_tokens)
-    html = _inject_agency_brand_lockup(html, demo_context.get('logo_url', ''), demo_context.get('agencia_nombre', ''))
+    html, preview_format, resolved_tokens, dimensions = _render_brand_template_preview_html(template.base_template_id, tokens, preview_format)
     instructions = str(request.data.get('gemini_instructions') or '').strip() or _build_template_gemini_instructions(
         template.name,
         template.base_template_id,
@@ -2778,8 +3022,67 @@ def brand_template_preview(request, template_id):
     return Response({
         'html': html,
         'format': preview_format,
+        'dimensions': dimensions,
         'tokens_json': resolved_tokens,
         'gemini_instructions': instructions,
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def brand_template_draft_preview(request):
+    base_template_id = _normalize_template_id(request.data.get('base_template_id') or request.data.get('baseTemplateId')) or 'tech_modern'
+    tokens = request.data.get('tokens_json') if isinstance(request.data, dict) else None
+    if not isinstance(tokens, dict):
+        tokens = _default_tokens_for_base_template(base_template_id)
+    preview_format = str(request.data.get('format') or request.data.get('preview_format') or 'post').strip().lower()
+    html, preview_format, resolved_tokens, dimensions = _render_brand_template_preview_html(base_template_id, tokens, preview_format)
+    return Response({
+        'html': html,
+        'format': preview_format,
+        'dimensions': dimensions,
+        'base_template_id': base_template_id,
+        'tokens_json': resolved_tokens,
+        'gemini_instructions': _build_template_gemini_instructions('Borrador de template', base_template_id, resolved_tokens),
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def brand_template_draft_chat(request):
+    base_template_id = _normalize_template_id(request.data.get('base_template_id') or request.data.get('baseTemplateId')) or 'tech_modern'
+    message = str(request.data.get('message') or '').strip()
+    current_tokens = request.data.get('tokens_json') if isinstance(request.data, dict) else None
+    if not isinstance(current_tokens, dict):
+        current_tokens = _default_tokens_for_base_template(base_template_id)
+    preview_format = str(request.data.get('format') or request.data.get('preview_format') or 'post').strip().lower()
+
+    ai_result = _template_ai_patch_from_message(message, current_tokens, base_template_id, request.user) if message else None
+    if ai_result:
+        token_patch = ai_result.get('token_patch') or {}
+        reply = ai_result.get('reply') or 'Apliqué los cambios al borrador. Revisá la preview y guardá cuando te guste.'
+    else:
+        token_patch = _template_patch_from_message(message)
+        reply = 'Apliqué los cambios al borrador. Revisá la preview y guardá cuando te guste.' if message else 'Decime qué querés cambiar: colores, tipografías, logo, QR, precio, bordes o estilo visual.'
+
+    merged_tokens = _resolve_brand_template_tokens(_deep_merge_dict(current_tokens, token_patch))
+    html, preview_format, merged_tokens, dimensions = _render_brand_template_preview_html(base_template_id, merged_tokens, preview_format)
+    estimated_tokens = max(120, int((len(message) + len(json.dumps(current_tokens, ensure_ascii=False))) / 4)) if message else 0
+
+    return Response({
+        'reply': reply,
+        'token_patch': token_patch,
+        'tokens_json': merged_tokens,
+        'html': html,
+        'format': preview_format,
+        'dimensions': dimensions,
+        'base_template_id': base_template_id,
+        'gemini_instructions': _build_template_gemini_instructions('Borrador de template', base_template_id, merged_tokens),
+        'usage': {
+            'ai_tokens_consumed': bool(message),
+            'estimated_tokens': estimated_tokens,
+            'note': 'Cada mensaje del chat consume tokens/creditos de IA.',
+        },
     }, status=status.HTTP_200_OK)
 
 
@@ -2793,9 +3096,10 @@ def brand_template_chat(request, template_id):
         published = template.revisions.filter(status='published').order_by('-revision').first()
         current_tokens = published.tokens_json if published and isinstance(published.tokens_json, dict) else default_template_tokens()
 
-    token_patch = _template_patch_from_message(message)
+    ai_result = _template_ai_patch_from_message(message, current_tokens, template.base_template_id, request.user) if message else None
+    token_patch = (ai_result or {}).get('token_patch') or _template_patch_from_message(message)
     merged_tokens = _resolve_brand_template_tokens(_deep_merge_dict(current_tokens, token_patch))
-    reply = 'Apliqué los cambios al borrador. Revisá la preview y guardá la revisión si te gusta.'
+    reply = (ai_result or {}).get('reply') or 'Apliqué los cambios al borrador. Revisá la preview y guardá la revisión si te gusta.'
     if not message:
         reply = 'Decime qué querés cambiar: colores, tipografías, logo, QR, precio, bordes o estilo visual.'
 

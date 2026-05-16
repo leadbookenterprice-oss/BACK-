@@ -24,6 +24,7 @@ from .views import (
     brand_template_clone, brand_templates_options,
     brand_template_set_default, brand_template_revisions_collection,
     brand_template_publish_revision, brand_template_preview, brand_template_chat,
+    brand_template_draft_preview, brand_template_draft_chat,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -59,6 +60,8 @@ urlpatterns = [
     path('auth/templates/', brand_templates_collection, name='brand_templates_collection'),
     path('auth/templates/options/', brand_templates_options, name='brand_templates_options'),
     path('auth/templates/clone/', brand_template_clone, name='brand_template_clone'),
+    path('auth/templates/draft-preview/', brand_template_draft_preview, name='brand_template_draft_preview'),
+    path('auth/templates/draft-chat/', brand_template_draft_chat, name='brand_template_draft_chat'),
     path('auth/templates/<int:template_id>/', brand_template_detail, name='brand_template_detail'),
     path('auth/templates/<int:template_id>/set-default/', brand_template_set_default, name='brand_template_set_default'),
     path('auth/templates/<int:template_id>/preview/', brand_template_preview, name='brand_template_preview'),
