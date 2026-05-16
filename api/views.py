@@ -719,6 +719,17 @@ def _resolve_cloudinary_asset_url(value):
     return ''
 
 
+def _resolve_primary_property_image(data):
+    if not isinstance(data, dict):
+        return ''
+
+    for key in ('portadaUrl', 'portada_url', 'fotoPortada', 'fotoportada'):
+        resolved = _resolve_cloudinary_asset_url(data.get(key))
+        if resolved:
+            return resolved
+    return ''
+
+
 def _looks_like_property_image(value):
     """Evita que portada/galeria del listado se usen como logo o avatar."""
     if isinstance(value, dict):
@@ -829,7 +840,7 @@ def _inject_agency_brand_lockup(html, logo_url, agency_name):
 
 
 def _collect_property_images(data):
-    portada = data.get('portadaUrl') if isinstance(data, dict) else None
+    portada = _resolve_primary_property_image(data)
     fotos = data.get('fotosRecorrido', []) if isinstance(data, dict) else []
     if not isinstance(fotos, list):
         fotos = []
@@ -3882,8 +3893,10 @@ def generar_imagen_story(request):
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='story')
 
+        story_cover = _resolve_primary_property_image(data)
         images_pool = _collect_property_images(data)
-        story_cover = images_pool[0] if images_pool else _resolve_cloudinary_asset_url(data.get('portadaUrl'))
+        if not story_cover:
+            story_cover = images_pool[0] if images_pool else ''
 
         # Preparar contexto para la plantilla premium
         context = {

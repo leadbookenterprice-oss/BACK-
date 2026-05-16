@@ -39,6 +39,7 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; pri
 .stats { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--secundario); }
 .stat-item { padding: 26px 16px; text-align: center; border-right: 1px solid rgba(255,255,255,0.15); }
 .stat-item:last-child { border-right: none; }
+.stat-icon { color: var(--acento); font-size: 22px; margin-bottom: 8px; }
 .stat-valor { font-family: 'Libre Baskerville', serif; font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 6px; }
 .stat-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.55); }
 
@@ -93,11 +94,11 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; pri
   <span class="operacion-badge">{{OPERACION}}</span>
 </div>
 <div class="stats">
-  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
-  <div class="stat-item"><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
-  <div class="stat-item"><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
-  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
-  <div class="stat-item"><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_TOTAL}}</div><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_RECAMARAS}}</div><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_BANOS}}</div><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_CUBIERTA}}</div><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_ESTACIONAMIENTOS}}</div><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
 </div>
 <div class="descripcion">
   <div class="section-title">Descripción</div>

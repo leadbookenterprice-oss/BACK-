@@ -129,6 +129,56 @@ def _render_conditional_block(html_text, key, enabled, replacements=None):
     return rendered
 
 
+def _pdf_inline_icon(name='check'):
+    paths = {
+        'bed': '<path d="M4 11V6"/><path d="M20 18v-5a4 4 0 0 0-4-4H9a5 5 0 0 0-5 5v4"/><path d="M4 14h16"/><path d="M4 18h16"/>',
+        'bath': '<path d="M4 12h16v2a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6v-2Z"/><path d="M7 12V6a3 3 0 0 1 6 0"/>',
+        'ruler': '<path d="M4 18 18 4l2 2L6 20l-2-2Z"/><path d="m8 14 2 2"/><path d="m11 11 2 2"/><path d="m14 8 2 2"/>',
+        'car': '<path d="M5 12 7 7h10l2 5"/><path d="M4 12h16v5H4z"/><circle cx="7" cy="17" r="1.5"/><circle cx="17" cy="17" r="1.5"/>',
+        'location': '<path d="M12 21s7-5.2 7-11a7 7 0 0 0-14 0c0 5.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/>',
+        'check': '<path d="m5 13 4 4L19 7"/>',
+    }
+    return (
+        '<svg class="pdf-inline-icon" viewBox="0 0 24 24" aria-hidden="true" '
+        'style="display:inline-block;width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;'
+        'stroke-linecap:round;stroke-linejoin:round;vertical-align:-0.12em;flex-shrink:0">'
+        f'{paths.get(name, paths["check"])}</svg>'
+    )
+
+
+def _replace_fontawesome_icons(html_text):
+    if not isinstance(html_text, str):
+        return html_text
+
+    cleaned = re.sub(
+        r'<link[^>]+(?:font-awesome|cdnjs\.cloudflare\.com/ajax/libs/font-awesome)[^>]*>\s*',
+        '',
+        html_text,
+        flags=re.IGNORECASE,
+    )
+
+    def icon_for_class(match):
+        class_attr = match.group(1).lower()
+        if 'fa-bed' in class_attr:
+            return _pdf_inline_icon('bed')
+        if 'fa-bath' in class_attr:
+            return _pdf_inline_icon('bath')
+        if 'fa-ruler' in class_attr:
+            return _pdf_inline_icon('ruler')
+        if 'fa-car' in class_attr:
+            return _pdf_inline_icon('car')
+        if 'fa-location' in class_attr:
+            return _pdf_inline_icon('location')
+        return _pdf_inline_icon('check')
+
+    return re.sub(
+        r'<i\s+class=["\']([^"\']*\bfa-[^"\']*)["\']\s*>\s*</i>',
+        icon_for_class,
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+
 def _format_phone_display(value):
     raw = str(value or '').strip()
     digits = ''.join(ch for ch in raw if ch.isdigit())
@@ -218,6 +268,11 @@ def generar_html_desde_template(context, agente):
     html = html.replace('{{COLOR_PRIMARIO}}', theme['primario'])
     html = html.replace('{{COLOR_SECUNDARIO}}', theme['secundario'])
     html = html.replace('{{COLOR_ACENTO}}', theme['acento'])
+    html = html.replace('{{ICON_TOTAL}}', _pdf_inline_icon('ruler'))
+    html = html.replace('{{ICON_RECAMARAS}}', _pdf_inline_icon('bed'))
+    html = html.replace('{{ICON_BANOS}}', _pdf_inline_icon('bath'))
+    html = html.replace('{{ICON_CUBIERTA}}', _pdf_inline_icon('ruler'))
+    html = html.replace('{{ICON_ESTACIONAMIENTOS}}', _pdf_inline_icon('car'))
     
     # 4. Reemplazar datos de la propiedad
     html = html.replace('{{TITULO}}', str(context.get('tipo_propiedad', '') + ' en ' + context.get('ciudad', '')))
@@ -330,7 +385,8 @@ def generar_html_desde_template(context, agente):
     # 10. Amenidades — generar chips HTML (ANTES DE LIMPIAR)
     amenidades = context.get('amenidades', [])
     print(f"[Template] Amenidades: {amenidades}")
-    chips_html = ''.join([f'<span class="amenidad-chip">{a}</span>' for a in amenidades])
+    amenity_icon = _pdf_inline_icon('check')
+    chips_html = ''.join([f'<span class="amenidad-chip">{amenity_icon}{a}</span>' for a in amenidades])
     html = html.replace('{{AMENIDADES}}', chips_html)
 
     # Limpiar cualquier placeholder restante
@@ -351,6 +407,7 @@ def generar_html_desde_template(context, agente):
         html = html.replace('</head>', f'{font_link}{override}</head>', 1)
     
     
+    html = _replace_fontawesome_icons(html)
     logger.info(f"[HTML Template] Template elegido: {template_elegido}. HTML generado: {len(html)} chars.")
     return html
 
@@ -999,6 +1056,7 @@ REGLAS DE DISEÑO PREMIUM:
         if html_output.endswith('```'):
             html_output = html_output[:-3]
 
+        html_output = _replace_fontawesome_icons(html_output)
         logger.info(f"[HTML Gen] Paso 2 completado. HTML generado ({len(html_output)} chars).")
         return html_output.strip()
 
