@@ -60,15 +60,22 @@ def mi_uso_apis(request):
             q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
 
         svc_name = q.servicio.nombre
-        soft_exhaustion = svc_name in {'gemini', 'elevenlabs', 'uploadpost'}
+        soft_exhaustion = svc_name in {'gemini', 'elevenlabs'}
         info = SERVICIO_MAP.get(svc_name, {
             'nombre': svc_name.capitalize(),
             'unidad': "unidades",
             'icono': "api"
         })
         
-        limite = q.user_daily_limit or 1500
-        consumido = q.requests_today
+        if svc_name == 'uploadpost':
+            q.maybe_reset_monthly()
+            q.recalcular_limite(plan=user.plan_nombre)
+            limite = q.user_monthly_limit
+            consumido = q.requests_this_month
+        else:
+            limite = q.user_daily_limit or 1500
+            consumido = q.requests_today
+        unlimited = svc_name == 'uploadpost' and limite is None
         usable_statuses = ['assigned', 'available', 'exhausted'] if soft_exhaustion else ['assigned', 'available']
         active_assignments = UserAPIAssignment.objects.filter(
             user=user,
@@ -113,10 +120,11 @@ def mi_uso_apis(request):
                 except Exception:
                     pass
 
-        porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
+        porcentaje = 0 if unlimited else (min(100, int((consumido / limite) * 100)) if limite else 0)
         if q.is_blocked or exhausted_by_key:
             porcentaje = 100
-            consumido = max(consumido, limite)
+            if limite:
+                consumido = max(consumido, limite)
             if not q.is_blocked:
                 q.is_blocked = True
                 q.blocked_reason = 'API key obligatoria agotada'
@@ -129,6 +137,8 @@ def mi_uso_apis(request):
             "icono": info['icono'],
             "consumido": consumido,
             "limite": limite,
+            "ilimitado": unlimited,
+            "limite_label": "∞" if unlimited else limite,
             "extras_activos": extras_activos,
             "unidad": info['unidad'],
             "porcentaje": porcentaje,

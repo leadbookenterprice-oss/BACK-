@@ -3331,8 +3331,10 @@ def publicar_instagram(request):
             result = publicar_carrusel(imagenes_urls, caption, access_token, account_id)
         else:
             return Response({"success": False, "error": "Tipo invalido (post/story/carrusel)"}, status=status.HTTP_400_BAD_REQUEST)
-            
+
         if result.get('success'):
+            from .tracking import record_uploadpost_publication
+            record_uploadpost_publication(user)
             return Response(result, status=status.HTTP_200_OK)
         else:
             return Response(result, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -5422,8 +5424,8 @@ def mp_webhook(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def plan_status(request):
-    from .models import Servicio, UserAPIQuota
     from .plan_utils import LIMITES
+    from .tracking import get_uploadpost_quota
 
     user = request.user
     plan = user.plan_nombre or 'free'
@@ -5431,10 +5433,7 @@ def plan_status(request):
     now = timezone.now()
     listados_mes = UsageLog.objects.filter(agent=user, tipo='property', fecha__year=now.year, fecha__month=now.month).count()
     videos_used = UsageLog.objects.filter(agent=user, tipo='video', fecha__year=now.year, fecha__month=now.month).count()
-    uploadpost_quota = None
-    uploadpost = Servicio.objects.filter(nombre='uploadpost').first()
-    if uploadpost:
-        uploadpost_quota = UserAPIQuota.objects.filter(user=user, servicio=uploadpost).first()
+    uploadpost_quota = get_uploadpost_quota(user)
 
     return Response({
         "plan_nombre": plan,
@@ -6001,12 +6000,18 @@ def dashboard(request):
 
     from .models import Listado, UsageLog
     from .plan_utils import LIMITES
+    from .tracking import get_uploadpost_quota
 
     listados = Listado.objects.filter(agente=agent)
     property_usage = UsageLog.objects.filter(agent=agent, tipo='property')
     listados_este_mes = property_usage.filter(fecha__gte=start_of_month).count()
     total_generados = property_usage.count()
-    videos_creados = listados.aggregate(total=Sum('videos_creados'))['total'] or 0
+    videos_creados = UsageLog.objects.filter(
+        agent=agent, tipo='video',
+        fecha__year=now.year, fecha__month=now.month
+    ).count()
+    uploadpost_quota = get_uploadpost_quota(agent)
+    auto_posts_used = uploadpost_quota.requests_this_month if uploadpost_quota else 0
 
     listados_recientes = [
         _serialize_listing_summary(listado)
@@ -6025,10 +6030,7 @@ def dashboard(request):
         agent=agent, tipo='image',
         fecha__year=now.year, fecha__month=now.month
     ).count()
-    videos_used = UsageLog.objects.filter(
-        agent=agent, tipo='video',
-        fecha__year=now.year, fecha__month=now.month
-    ).count()
+    videos_used = videos_creados
 
     return Response({
         'nombre_inmobiliaria': getattr(agent, 'nombre_inmobiliaria', None),
@@ -6036,7 +6038,8 @@ def dashboard(request):
         'listados_este_mes': listados_este_mes,
         'total_generados': total_generados,
         'videos_creados': videos_creados,
-        'conexiones_activas': 0,
+        'conexiones_activas': auto_posts_used,
+        'auto_posts_used': auto_posts_used,
         'listados_recientes': listados_recientes,
         'plan': plan,
         'plan_limites': {
@@ -6053,6 +6056,7 @@ def dashboard(request):
             'ai_used': ai_used,
             'images_used': images_used,
             'videos_used': videos_used,
+            'auto_posts_used': auto_posts_used,
         }
     })
 

@@ -14,6 +14,35 @@ LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más c
 UPLOADPOST_LIMIT_REACHED_MESSAGE = "Límite de publicaciones automáticas alcanzado. Podés actualizar tu plan para publicar más."
 
 
+def get_uploadpost_quota(agente):
+    servicio = Servicio.objects.filter(nombre__iexact='uploadpost').first()
+    if not servicio:
+        return None
+    quota, _ = UserAPIQuota.objects.get_or_create(
+        user=agente,
+        servicio=servicio,
+        defaults={
+            'user_daily_limit': servicio.default_daily_limit,
+            'user_monthly_limit': servicio.default_monthly_limit,
+        },
+    )
+    quota.maybe_reset_daily()
+    quota.maybe_reset_monthly()
+    quota.recalcular_limite(plan=agente.plan_nombre)
+    return quota
+
+
+def record_uploadpost_publication(agente, count=1):
+    quota = get_uploadpost_quota(agente)
+    if not quota:
+        return None
+    increment = max(int(count or 1), 1)
+    quota.requests_today += increment
+    quota.requests_this_month += increment
+    quota.save(update_fields=['requests_today', 'requests_this_month', 'updated_at'])
+    return quota
+
+
 def _uses_soft_exhaustion(servicio):
     return str(getattr(servicio, 'nombre', servicio) or '').strip().lower() in FREE_POOL_SERVICES
 
@@ -193,8 +222,10 @@ def track_api_call(service, action=''):
 
             try:
                 response = func(*args, **kwargs)
-                success = True
-                status_code = 200
+                success = not (isinstance(response, dict) and response.get('success') is False)
+                status_code = 200 if success else 400
+                if not success and isinstance(response, dict):
+                    error_msg = str(response.get('error') or response.get('message') or '')[:500]
                 return response
             except Exception as e:
                 error_msg = str(e)
@@ -223,32 +254,35 @@ def track_api_call(service, action=''):
                 raise
             finally:
                 elapsed_ms = int((time.time() - start_time) * 1000)
+                should_count_usage = success or str(service).strip().lower() != 'uploadpost'
 
-                quota.requests_today += 1
-                quota.requests_this_month += 1
-                quota.save(update_fields=['requests_today', 'requests_this_month', 'updated_at'])
+                if should_count_usage:
+                    quota.requests_today += 1
+                    quota.requests_this_month += 1
+                    quota.save(update_fields=['requests_today', 'requests_this_month', 'updated_at'])
 
                 if key_obj:
-                    key_obj.requests_today += 1
-                    key_obj.requests_this_month += 1
-                    key_obj.total_requests += 1
-                    key_obj.last_used_at = timezone.now()
-                    key_obj.save(
-                        update_fields=[
-                            'requests_today',
-                            'requests_this_month',
-                            'total_requests',
-                            'last_used_at',
-                            'updated_at',
-                        ]
-                    )
+                    if should_count_usage:
+                        key_obj.requests_today += 1
+                        key_obj.requests_this_month += 1
+                        key_obj.total_requests += 1
+                        key_obj.last_used_at = timezone.now()
+                        key_obj.save(
+                            update_fields=[
+                                'requests_today',
+                                'requests_this_month',
+                                'total_requests',
+                                'last_used_at',
+                                'updated_at',
+                            ]
+                        )
 
                     limit = key_obj.google_daily_limit or 0
-                    if limit and key_obj.requests_today >= limit:
+                    if should_count_usage and limit and key_obj.requests_today >= limit:
                         key_obj.status = 'exhausted'
                         key_obj.save(update_fields=['status', 'updated_at'])
 
-                    if limit and key_obj.requests_today >= int(limit * 0.8):
+                    if should_count_usage and limit and key_obj.requests_today >= int(limit * 0.8):
                         AdminAlert.objects.get_or_create(
                             tipo='quota_warning',
                             severidad='warning',
