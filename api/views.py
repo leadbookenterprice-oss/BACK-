@@ -947,6 +947,39 @@ def _ensure_listing_cover_frame(listado):
     return cover_url
 
 
+def _resolve_pdf_cover_from_data(data):
+    if not isinstance(data, dict):
+        return ''
+    resultados = data.get('resultados') if isinstance(data.get('resultados'), dict) else {}
+    pdf_result = resultados.get('pdf') if isinstance(resultados.get('pdf'), dict) else {}
+    for key in ('cover_frame_url', 'cover_url', 'thumbnail_url', 'image_url'):
+        resolved = _resolve_cloudinary_asset_url(pdf_result.get(key))
+        if resolved:
+            return resolved
+    return ''
+
+
+def _merge_listing_extra_preserving_covers(existing, incoming):
+    existing = existing if isinstance(existing, dict) else {}
+    merged = incoming.copy() if isinstance(incoming, dict) else {}
+
+    existing_pdf_cover = _resolve_pdf_cover_from_data(existing)
+    incoming_pdf_cover = _resolve_pdf_cover_from_data(merged)
+    if existing_pdf_cover and not incoming_pdf_cover:
+        resultados = merged.get('resultados') if isinstance(merged.get('resultados'), dict) else {}
+        pdf_result = resultados.get('pdf') if isinstance(resultados.get('pdf'), dict) else {}
+        pdf_result['cover_frame_url'] = existing_pdf_cover
+        pdf_result['cover_url'] = pdf_result.get('cover_url') or existing_pdf_cover
+        resultados['pdf'] = pdf_result
+        merged['resultados'] = resultados
+
+    cover_url = _resolve_listing_cover_frame(merged) or _resolve_listing_cover_frame(existing)
+    if cover_url:
+        merged['dashboard_image_url'] = cover_url
+        merged['cover_frame_url'] = cover_url
+    return merged
+
+
 def _serialize_listing_summary(listado):
     cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
     datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
@@ -3905,7 +3938,7 @@ class ListadoDetalleView(APIView):
     def get(self, request, pk):
         try:
             listado = Listado.objects.get(pk=pk, agente=request.user)
-            cover_url = _ensure_listing_cover_frame(listado)
+            cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
             return Response({
                 "id": listado.id,
                 "titulo": listado.titulo,
@@ -3916,6 +3949,7 @@ class ListadoDetalleView(APIView):
                 "moneda": listado.moneda,
                 "video_url": listado.video_url,
                 "video_status": listado.video_status,
+                "dashboard_image_url": cover_url,
                 "cover_frame_url": cover_url,
                 "fotoportada": cover_url,
                 "datos": listado.datos_extra
@@ -4016,10 +4050,7 @@ class ListadoDetalleView(APIView):
             
         data = request.data
         if 'datos' in data:
-            datos = data['datos'] if isinstance(data['datos'], dict) else {}
-            cover_frame_url = _resolve_listing_cover_frame(datos)
-            if cover_frame_url:
-                datos['cover_frame_url'] = cover_frame_url
+            datos = _merge_listing_extra_preserving_covers(listado.datos_extra, data['datos'])
             listado.datos_extra = datos
         if 'video_url' in data:
             listado.video_url = data['video_url']
@@ -5977,9 +6008,10 @@ def dashboard(request):
     total_generados = property_usage.count()
     videos_creados = listados.aggregate(total=Sum('videos_creados'))['total'] or 0
 
-    listados_recientes = list(listados.order_by('-creado_en')[:5].values(
-        'id', 'titulo', 'tipo_propiedad', 'ciudad', 'precio', 'creado_en'
-    ))
+    listados_recientes = [
+        _serialize_listing_summary(listado)
+        for listado in listados.order_by('-creado_en')[:8]
+    ]
 
     plan = agent.plan_nombre or 'free'
     limites = LIMITES.get(plan, LIMITES['free'])
