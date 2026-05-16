@@ -84,6 +84,21 @@
             object-fit: contain;
         }
 
+        .agency-logo-container {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .agency-logo-container img {
+            width: 52px;
+            height: 52px;
+            border-radius: 999px;
+            object-fit: contain;
+            padding: 6px;
+            background: var(--gray-100);
+        }
+
         .agency-name {
             color: var(--primary);
             font-weight: 900;
@@ -500,6 +515,7 @@
         <div class="agency-logo-container">
             {% if logo_url %}
                 <img src="{{ logo_url }}" alt="Logo agencia" />
+                <span class="agency-name">{{ agencia_nombre }}</span>
             {% else %}
                 <span class="agency-name">{{ agencia_nombre }}</span>
             {% endif %}

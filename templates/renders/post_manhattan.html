@@ -43,7 +43,7 @@ body { width: 1080px; height: 1350px; background: #f5f5f3; font-family: 'Oswald'
 <div class="content">
   <div class="top">
     <div class="badge">{{ operacion }}</div>
-    {% if logo_url %}<img src="{{ logo_url }}" class="logo">{% else %}<div></div>{% endif %}
+    {% if logo_url %}<div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% else %}<div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% endif %}
   </div>
   <div class="bottom">
     <div class="text-block">

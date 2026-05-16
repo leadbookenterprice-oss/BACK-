@@ -172,6 +172,8 @@ TEMPLATE_EMAIL_MAP = {
     for template_id in TEMPLATE_IDS
 }
 
+MAX_CAROUSEL_GALLERY_IMAGES = 8
+
 
 SYSTEM_FONT_IMPORT_MAP = {
     'Playfair Display': 'Playfair Display',
@@ -778,6 +780,52 @@ def _inject_agency_logo_fallback(html, logo_url, agency_name):
     )
     out = html.replace('</head>', f'{css}</head>', 1) if '</head>' in html else f'{css}{html}'
     return out.replace('<div></div>', f'<div class="agency-logo-text">{safe_agency}</div>', 1)
+
+
+def _inject_agency_brand_lockup(html, logo_url, agency_name):
+    if not html:
+        return html
+
+    safe_agency = html_lib.escape(str(agency_name or '').strip())
+    if not safe_agency:
+        return html
+
+    has_lockup = 'class="lb-brand-lockup"' in html or "class='lb-brand-lockup'" in html
+
+    css = (
+        '<style id="agency-brand-lockup">'
+        '.lb-brand-lockup{display:flex!important;align-items:center!important;gap:14px!important;'
+        'max-width:420px!important;min-height:62px!important;padding:8px 14px!important;'
+        'border-radius:999px!important;background:rgba(0,0,0,.28)!important;'
+        'border:1px solid rgba(255,255,255,.14)!important;backdrop-filter:blur(10px)!important;}'
+        '.lb-brand-lockup .logo,.lb-brand-logo{width:58px!important;height:58px!important;'
+        'max-width:58px!important;max-height:58px!important;border-radius:999px!important;'
+        'object-fit:contain!important;padding:6px!important;background:rgba(255,255,255,.92)!important;'
+        'filter:none!important;flex:0 0 auto!important;}'
+        '.lb-brand-name{display:block!important;max-width:300px!important;color:var(--accent,var(--acento,#c9a84c))!important;'
+        'font-family:Inter,DM Sans,Arial,sans-serif!important;font-size:22px!important;font-weight:900!important;'
+        'line-height:1.05!important;letter-spacing:.6px!important;text-transform:uppercase!important;'
+        'text-align:left!important;text-shadow:0 2px 14px rgba(0,0,0,.35)!important;}'
+        '</style>'
+    )
+    out = html
+    if 'id="agency-brand-lockup"' not in out:
+        out = out.replace('</head>', f'{css}</head>', 1) if '</head>' in out else f'{css}{out}'
+
+    if has_lockup:
+        return out
+
+    logo_pattern = re.compile(r'(<img\b(?=[^>]*class=["\'][^"\']*\blogo\b[^"\']*["\'])(?=[^>]*src=["\'][^"\']+["\'])[^>]*>)', re.IGNORECASE)
+    match = logo_pattern.search(out)
+    if match:
+        logo_img = match.group(1)
+        lockup = f'<div class="lb-brand-lockup">{logo_img}<span class="lb-brand-name">{safe_agency}</span></div>'
+        return out[:match.start()] + lockup + out[match.end():]
+
+    if '<div></div>' in out:
+        return out.replace('<div></div>', f'<div class="lb-brand-lockup"><span class="lb-brand-name">{safe_agency}</span></div>', 1)
+
+    return out
 
 
 def _collect_property_images(data):
@@ -2513,8 +2561,10 @@ def brand_template_preview(request, template_id):
 
     resolved_tokens = _resolve_brand_template_tokens(tokens)
     template_file = TEMPLATE_POST_MAP.get(template.base_template_id, TEMPLATE_POST_MAP['tech_modern'])
-    html = render_to_string(template_file, _brand_template_demo_context())
+    demo_context = _brand_template_demo_context()
+    html = render_to_string(template_file, demo_context)
     html = _apply_template_tokens_to_html(html, template.base_template_id, resolved_tokens)
+    html = _inject_agency_brand_lockup(html, demo_context.get('logo_url', ''), demo_context.get('agencia_nombre', ''))
     instructions = str(request.data.get('gemini_instructions') or '').strip() or _build_template_gemini_instructions(
         template.name,
         template.base_template_id,
@@ -2781,6 +2831,8 @@ def generar_carrusel(request):
             _persist_template_selection(listado_obj, selection, source='carrusel')
 
         images_pool = _collect_property_images(data)
+        gallery_images = images_pool[:MAX_CAROUSEL_GALLERY_IMAGES]
+        gallery_omitted = max(0, len(images_pool) - len(gallery_images))
         recamaras = data.get('recamaras') or 'N/D'
         banos = data.get('banos') or 'N/D'
         superficie = data.get('superficieCubierta') or data.get('superficieTotal') or 'N/D'
@@ -2818,7 +2870,13 @@ def generar_carrusel(request):
             safe_agency = html_lib.escape(str(context.get("agencia_nombre", "") or '').strip()) or 'Agencia'
             safe_agent = html_lib.escape(str(context.get("agente_nombre", "") or '').strip()) or 'Asesor'
             safe_role = html_lib.escape(str(context.get("agente_rol", "") or 'Asesor Comercial').strip())
-            logo_html = f'<img class="logo" src="{context.get("logo_url", "")}" alt="{safe_agency}">' if context.get('logo_url') else f'<div class="agency">{safe_agency}</div>'
+            if context.get('logo_url'):
+                logo_html = (
+                    f'<div class="brand-lockup"><img class="logo" src="{context.get("logo_url", "")}" alt="{safe_agency}">'
+                    f'<span class="agency">{safe_agency}</span></div>'
+                )
+            else:
+                logo_html = f'<div class="brand-lockup"><span class="agency">{safe_agency}</span></div>'
             agent_photo = f'<img class="agent-photo" src="{context.get("agente_foto_url", "")}" alt="{safe_agent}">' if context.get('agente_foto_url') else ''
             contact_html = str(context.get('agente_contacto_html') or '').strip()
             contact_line = f'<div class="meta">{contact_html}</div>' if contact_html else ''
@@ -2833,8 +2891,9 @@ def generar_carrusel(request):
   body {{ width: 1080px; height: 1350px; background: radial-gradient(circle at top right, rgba(201,168,76,.28), transparent 34%), #070707; color: #f7f3e8; overflow: hidden; font-family: 'DM Sans', sans-serif; }}
   .wrap {{ width: 100%; height: 100%; padding: 88px 82px; display: flex; flex-direction: column; justify-content: space-between; }}
   .top {{ display: flex; justify-content: flex-end; align-items: center; min-height: 90px; }}
-  .logo {{ max-width: 250px; max-height: 88px; object-fit: contain; filter: brightness(0) invert(1); }}
-  .agency {{ font-size: 22px; letter-spacing: 5px; text-transform: uppercase; color: #c9a84c; font-weight: 900; }}
+  .brand-lockup {{ display: flex; align-items: center; gap: 16px; max-width: 520px; padding: 10px 16px; border: 1px solid rgba(255,255,255,.14); border-radius: 999px; background: rgba(0,0,0,.28); }}
+  .logo {{ width: 66px; height: 66px; border-radius: 999px; object-fit: contain; padding: 7px; background: rgba(255,255,255,.94); }}
+  .agency {{ font-size: 22px; letter-spacing: 3px; text-transform: uppercase; color: #c9a84c; font-weight: 900; line-height: 1.05; }}
   .headline {{ font-family: 'Bebas Neue', sans-serif; font-size: 168px; line-height: .86; letter-spacing: 3px; color: #c9a84c; text-transform: uppercase; }}
   .sub {{ margin-top: 28px; max-width: 820px; font-size: 38px; line-height: 1.2; color: rgba(255,255,255,.82); }}
   .contact {{ border: 1px solid rgba(201,168,76,.42); border-radius: 28px; padding: 34px; background: rgba(255,255,255,.045); display: flex; justify-content: space-between; gap: 36px; align-items: center; }}
@@ -2868,20 +2927,21 @@ def generar_carrusel(request):
 </body>
 </html>"""
 
+        hook_title = str(data.get('titulo') or f"{tipo_propiedad} en {ubicacion_text}" or tipo_propiedad).strip()
+        hook_subheadline = (
+            f"{operacion_text} por {precio_text}. {superficie} m2, {recamaras} hab, {banos} banos. "
+            "Deslizá para ver la galería y guardá esta oportunidad."
+        )
+
         slides_urls = []
         slides_content = [
-            {"kind": "template", "image": pick_image(0), "headline": tipo_propiedad, "subheadline": f"{ubicacion_text} | {operacion_text} por {precio_text}. {superficie} m2, {recamaras} hab, {banos} banos."},
-            {"kind": "template", "image": pick_image(1), "headline": "Beneficios", "subheadline": f"{amenities_text}. Una propiedad pensada para destacar frente al mercado."},
-            {"kind": "template", "image": pick_image(2), "headline": "Diferencial", "subheadline": descripcion_corta},
+            {"kind": "template", "image": pick_image(0), "headline": hook_title, "subheadline": hook_subheadline},
         ]
 
-        for image_url in images_pool:
+        for image_url in gallery_images:
             slides_content.append({"kind": "gallery", "image": image_url})
 
-        slides_content.extend([
-            {"kind": "template", "image": pick_image(4), "headline": "Oportunidad", "subheadline": f"{operacion_text} por {precio_text}. Consultanos por disponibilidad, condiciones y posibles planes de pago."},
-            {"kind": "contact", "image": None, "headline": "Contacto", "subheadline": ""},
-        ])
+        slides_content.append({"kind": "contact", "image": None, "headline": "Contacto", "subheadline": ""})
 
         for i in range(len(slides_content)):
             slide = slides_content[i]
@@ -2919,6 +2979,7 @@ def generar_carrusel(request):
                 html_content = render_to_string(template_carousel, context)
                 html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
                 html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
+                html_content = _inject_agency_brand_lockup(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
                 html_content = _inject_agency_logo_fallback(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
             image_stream = render_html_to_image(html_content, 1080, 1350)
 
@@ -2964,6 +3025,9 @@ Requisitos obligatorios:
                     "template_id": template_id,
                     "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
                     "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
+                    "total_slides": len(slides_urls),
+                    "gallery_used": len(gallery_images),
+                    "gallery_omitted": gallery_omitted,
                 },
             )
 
@@ -2976,6 +3040,9 @@ Requisitos obligatorios:
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
+            "total_slides": len(slides_urls),
+            "gallery_used": len(gallery_images),
+            "gallery_omitted": gallery_omitted,
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         crear_notificacion(
@@ -3550,6 +3617,8 @@ def generar_pdf(request):
             print("[PDF] Fallback: Gemini falló, usando render_to_string estático")
             html_string = render_to_string('pdf/property_brochure_html.html', context)
 
+        html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
+
         # ─── Conversión a PDF Real con Playwright ────────────────────────────
         pdf_url = None
         try:
@@ -3708,6 +3777,7 @@ def generar_imagen_post(request):
         html_content = render_to_string(template_post, context)
         html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
         html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
+        html_content = _inject_agency_brand_lockup(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
         html_content = _inject_agency_logo_fallback(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
@@ -3852,6 +3922,7 @@ def generar_imagen_story(request):
         html_content = render_to_string(template_story, context)
         html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
         html_content = _inject_agent_photo_html(html_content, branding.get('agente_foto_url', ''))
+        html_content = _inject_agency_brand_lockup(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
         html_content = _inject_agency_logo_fallback(html_content, branding.get('logo_url', ''), branding.get('agencia_nombre', ''))
         image_stream = render_html_to_image(html_content, 1080, 1920)
 

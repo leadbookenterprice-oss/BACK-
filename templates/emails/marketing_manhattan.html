@@ -16,7 +16,7 @@
                 <tr>
                   <td align="left" valign="middle">
                     {% if logo_url %}
-                      <img src="{{ logo_url }}" alt="{{ agenciaNombre|default:'Agencia' }}" width="150" style="display:block;max-width:150px;height:auto;filter:brightness(0) invert(1);">
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td valign="middle"><img src="{{ logo_url }}" alt="{{ agenciaNombre|default:'Agencia' }}" width="42" height="42" style="display:block;width:42px;height:42px;border-radius:50%;object-fit:contain;background:#fff;padding:4px;"></td><td valign="middle" style="padding-left:12px;font-family:Arial,sans-serif;font-size:18px;letter-spacing:1px;color:#e63946;text-transform:uppercase;font-weight:800;">{{ agenciaNombre|default:'Agencia' }}</td></tr></table>
                     {% else %}
                       <div style="font-family:'Oswald','Arial Narrow',Arial,sans-serif;font-size:23px;letter-spacing:4px;color:#ffffff;text-transform:uppercase;">{{ agenciaNombre|default:'Agencia' }}</div>
                     {% endif %}
