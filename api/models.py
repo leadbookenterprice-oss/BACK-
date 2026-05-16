@@ -306,6 +306,7 @@ def default_template_tokens():
             'density': 'comfortable',
             'border_radius': 'medium',
             'image_treatment': 'normal',
+            'custom_css': '',
         },
         'components': {
             'hero': {

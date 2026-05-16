@@ -8,6 +8,20 @@ from .models import (
 import re
 
 
+LAYOUT_POSITIONS = {'top_left', 'top_right', 'bottom_left', 'bottom_right'}
+BLOCKED_CUSTOM_CSS = ('<', '>', '@import', 'javascript:', 'expression(', '</style', '</')
+
+
+def _sanitize_custom_css(value):
+    if not isinstance(value, str):
+        return ''
+    css = value.strip()[:4000]
+    lowered = css.lower()
+    if any(token in lowered for token in BLOCKED_CUSTOM_CSS) or re.search(r'url\s*\(', lowered):
+        raise serializers.ValidationError('layout.custom_css contiene CSS no permitido.')
+    return css
+
+
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
 
@@ -207,17 +221,18 @@ class BrandTemplateRevisionSerializer(serializers.ModelSerializer):
         ][:20]
 
         layout = value.get('layout') or {}
-        if layout.get('logo_position') not in {'top_left', 'top_right'}:
+        if layout.get('logo_position') not in LAYOUT_POSITIONS:
             raise serializers.ValidationError('layout.logo_position invalido.')
-        if layout.get('agent_block_position') not in {'bottom_left', 'bottom_right'}:
+        if layout.get('agent_block_position') not in LAYOUT_POSITIONS:
             raise serializers.ValidationError('layout.agent_block_position invalido.')
-        if layout.get('qr_position') not in {'bottom_left', 'bottom_right'}:
+        if layout.get('qr_position') not in LAYOUT_POSITIONS:
             raise serializers.ValidationError('layout.qr_position invalido.')
 
         layout.setdefault('style', 'tech_modern')
         layout.setdefault('density', 'comfortable')
         layout.setdefault('border_radius', 'medium')
         layout.setdefault('image_treatment', 'normal')
+        layout['custom_css'] = _sanitize_custom_css(layout.get('custom_css', ''))
 
         value['schema_version'] = 2
         value['palette'] = palette

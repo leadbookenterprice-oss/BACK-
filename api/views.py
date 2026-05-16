@@ -228,6 +228,12 @@ TEMPLATE_TOKEN_OPTIONS = {
         {'id': 'black_white', 'label': 'Blanco y negro'},
         {'id': 'high_contrast', 'label': 'Alto contraste'},
     ],
+    'layout_positions': [
+        {'id': 'top_left', 'label': 'Arriba izquierda'},
+        {'id': 'top_right', 'label': 'Arriba derecha'},
+        {'id': 'bottom_left', 'label': 'Abajo izquierda'},
+        {'id': 'bottom_right', 'label': 'Abajo derecha'},
+    ],
     'copy_tones': [
         {'id': 'premium', 'label': 'Premium'},
         {'id': 'profesional', 'label': 'Profesional'},
@@ -235,6 +241,34 @@ TEMPLATE_TOKEN_OPTIONS = {
         {'id': 'minimal', 'label': 'Minimal'},
     ],
 }
+
+LAYOUT_POSITIONS = {'top_left', 'top_right', 'bottom_left', 'bottom_right'}
+BLOCKED_CUSTOM_CSS = ('<', '>', '@import', 'javascript:', 'expression(', '</style', '</')
+
+
+def _safe_layout_position(value, fallback):
+    return value if value in LAYOUT_POSITIONS else fallback
+
+
+def _sanitize_template_custom_css(value):
+    if not isinstance(value, str):
+        return ''
+    css = value.strip()[:4000]
+    lowered = css.lower()
+    if any(token in lowered for token in BLOCKED_CUSTOM_CSS) or re.search(r'url\s*\(', lowered):
+        return ''
+    return css
+
+
+def _corner_position_css(selector, position, z_index=24):
+    safe_position = _safe_layout_position(position, 'bottom_right')
+    vertical, horizontal = safe_position.split('_', 1)
+    vertical_prop = 'top' if vertical == 'top' else 'bottom'
+    horizontal_prop = 'left' if horizontal == 'left' else 'right'
+    return (
+        f"{selector}{{position:absolute!important;{vertical_prop}:var(--lb-pos-y,64px)!important;"
+        f"{horizontal_prop}:var(--lb-pos-x,64px)!important;z-index:{z_index}!important;margin:0!important;}}"
+    )
 
 
 def _build_template_gemini_instructions(template_name, base_template_id, tokens):
@@ -547,6 +581,7 @@ def _resolve_brand_template_tokens(tokens):
             'density': layout.get('density') or fallback['layout'].get('density', 'comfortable'),
             'border_radius': layout.get('border_radius') or fallback['layout'].get('border_radius', 'medium'),
             'image_treatment': layout.get('image_treatment') or fallback['layout'].get('image_treatment', 'normal'),
+            'custom_css': _sanitize_template_custom_css(layout.get('custom_css') or fallback['layout'].get('custom_css', '')),
         },
         'components': _deep_merge_dict(fallback.get('components', {}), components),
         'formats': _deep_merge_dict(fallback.get('formats', {}), formats),
@@ -719,17 +754,40 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         'normal': '0',
         'wide': '0.08em',
     }.get(typography.get('letter_spacing'), '0')
-    logo_order = (-1, 1) if layout.get('logo_position') == 'top_left' else (2, 1)
+    logo_position = _safe_layout_position(layout.get('logo_position'), 'top_right')
+    agent_position = _safe_layout_position(layout.get('agent_block_position'), 'bottom_left')
+    qr_position = _safe_layout_position(layout.get('qr_position'), 'bottom_right')
+    logo_order = (-1, 1) if logo_position == 'top_left' else (2, 1)
     layout_css = (
-        ".top{display:flex!important;}"
-        f".top .logo{{order:{logo_order[0]}!important;}}"
-        f".top .badge{{order:{logo_order[1]}!important;}}"
+        "body{--lb-pos-x:64px;--lb-pos-y:64px;}"
+        ".top,.top-section{display:flex!important;}"
+        f".top .lb-brand-lockup,.top-section .lb-brand-lockup{{order:{logo_order[0]}!important;}}"
+        f".top .badge,.top-section .badge{{order:{logo_order[1]}!important;}}"
     )
-    layout_css += (
-        ".agent-row,.footer,.contact-strip{flex-direction:row-reverse!important;}"
-        if layout.get('agent_block_position') == 'bottom_right' or layout.get('qr_position') == 'bottom_left'
-        else ".agent-row,.footer,.contact-strip{flex-direction:row!important;}"
-    )
+    if logo_position.startswith('bottom'):
+        layout_css += _corner_position_css('.lb-brand-lockup', logo_position, 28)
+    if qr_position.startswith('top'):
+        layout_css += _corner_position_css('.qr-box,.qr-block,.qr-container', qr_position, 26)
+    if agent_position.startswith('top'):
+        layout_css += _corner_position_css('.agent-info,.agent-box', agent_position, 25)
+    if agent_position.startswith('bottom') and qr_position.startswith('bottom'):
+        layout_css += (
+            ".agent-row,.footer,.contact-strip{flex-direction:row-reverse!important;}"
+            if agent_position == 'bottom_right' or qr_position == 'bottom_left'
+            else ".agent-row,.footer,.contact-strip{flex-direction:row!important;}"
+        )
+    elif agent_position.startswith('bottom'):
+        layout_css += (
+            ".agent-info,.agent-box{margin-left:auto!important;text-align:right!important;align-items:flex-end!important;}"
+            if agent_position == 'bottom_right'
+            else ".agent-info,.agent-box{margin-right:auto!important;text-align:left!important;align-items:flex-start!important;}"
+        )
+    elif qr_position.startswith('bottom'):
+        layout_css += (
+            ".qr-box,.qr-block,.qr-container{margin-left:auto!important;}"
+            if qr_position == 'bottom_right'
+            else ".qr-box,.qr-block,.qr-container{margin-right:auto!important;}"
+        )
     radius_map = {'none': '0', 'soft': '8px', 'medium': '16px', 'strong': '28px'}
     density_map = {'compact': '0.85', 'comfortable': '1', 'spacious': '1.15'}
     image_filter_map = {
@@ -766,6 +824,9 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         layout_css += ".qr-box,.qr-container,.qr-block{display:none!important;}"
     if contact_tokens.get('show_agent_photo') is False:
         layout_css += ".agent-avatar,.agent-photo,.lb-agent-photo{display:none!important;}"
+    custom_css = _sanitize_template_custom_css(layout.get('custom_css'))
+    if custom_css:
+        layout_css += custom_css
 
     style_block = (
         '<style id="brand-template-overrides">'
@@ -2985,9 +3046,9 @@ def _sanitize_template_patch(patch):
 
     layout = patch.get('layout') if isinstance(patch.get('layout'), dict) else {}
     layout_allowed = {
-        'logo_position': {'top_left', 'top_right'},
-        'agent_block_position': {'bottom_left', 'bottom_right'},
-        'qr_position': {'bottom_left', 'bottom_right'},
+        'logo_position': LAYOUT_POSITIONS,
+        'agent_block_position': LAYOUT_POSITIONS,
+        'qr_position': LAYOUT_POSITIONS,
         'style': {item['id'] for item in TEMPLATE_TOKEN_OPTIONS['layout_styles']},
         'density': {item['id'] for item in TEMPLATE_TOKEN_OPTIONS['density']},
         'border_radius': {item['id'] for item in TEMPLATE_TOKEN_OPTIONS['border_radius']},
@@ -3057,6 +3118,7 @@ Formato exacto:
 }}
 
 Campos permitidos en token_patch: palette, typography, layout, components, copy.
+Valores para layout.logo_position, layout.agent_block_position y layout.qr_position: top_left, top_right, bottom_left, bottom_right.
 Fuentes permitidas: {', '.join(SYSTEM_FONT_IMPORT_MAP.keys())}.
 Colores solo HEX. No uses HTML ni CSS libre.
 """
@@ -3084,6 +3146,21 @@ def _template_patch_from_message(message):
     def merge(fragment):
         nonlocal patch
         patch = _deep_merge_dict(patch, fragment)
+
+    def requested_position(keyword, default_vertical='bottom', default_horizontal='right'):
+        match = re.search(rf'{re.escape(keyword)}[^,.;&]*', text)
+        segment = match.group(0) if match else text
+        vertical = default_vertical
+        horizontal = default_horizontal
+        if any(word in segment for word in ('arriba', 'superior', 'top')):
+            vertical = 'top'
+        if any(word in segment for word in ('abajo', 'inferior', 'bottom')):
+            vertical = 'bottom'
+        if 'izquierda' in segment or 'left' in segment:
+            horizontal = 'left'
+        if 'derecha' in segment or 'right' in segment:
+            horizontal = 'right'
+        return f'{vertical}_{horizontal}'
 
     if any(word in text for word in ('todo negro', 'full black', 'black', 'oscuro', 'negro')):
         merge({
@@ -3144,20 +3221,11 @@ def _template_patch_from_message(message):
         merge({'components': {'stats': {'show_icons': True}}})
 
     if 'logo' in text:
-        if 'izquierda' in text or 'left' in text:
-            merge({'layout': {'logo_position': 'top_left'}})
-        if 'derecha' in text or 'right' in text:
-            merge({'layout': {'logo_position': 'top_right'}})
+        merge({'layout': {'logo_position': requested_position('logo', 'top', 'right')}})
     if 'agente' in text:
-        if 'derecha' in text or 'right' in text:
-            merge({'layout': {'agent_block_position': 'bottom_right'}})
-        if 'izquierda' in text or 'left' in text:
-            merge({'layout': {'agent_block_position': 'bottom_left'}})
+        merge({'layout': {'agent_block_position': requested_position('agente', 'bottom', 'left')}})
     if 'qr' in text:
-        if 'izquierda' in text or 'left' in text:
-            merge({'layout': {'qr_position': 'bottom_left'}})
-        if 'derecha' in text or 'right' in text:
-            merge({'layout': {'qr_position': 'bottom_right'}})
+        merge({'layout': {'qr_position': requested_position('qr', 'bottom', 'right')}})
 
     if any(word in text for word in ('redondo', 'rounded', 'bordes grandes')):
         merge({'layout': {'border_radius': 'strong'}})
