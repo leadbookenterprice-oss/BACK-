@@ -828,6 +828,8 @@ def _select_template_id(data, listado_obj=None, listado_id_hint=None, user=None)
 
 def _resolve_cloudinary_asset_url(value):
     if isinstance(value, dict):
+        if value.get('secure_url') and isinstance(value.get('secure_url'), str):
+            return value.get('secure_url').strip()
         if value.get('url') and isinstance(value.get('url'), str):
             return value.get('url').strip()
         if value.get('public_id'):
@@ -841,6 +843,64 @@ def _resolve_cloudinary_asset_url(value):
             return re.sub(r's--[^/]+--/', '', val)
 
     return ''
+
+
+def _resolve_listing_cover_frame(data):
+    if not isinstance(data, dict):
+        return ''
+
+    candidates = [
+        data.get('portadaUrl'),
+        data.get('portada_url'),
+        data.get('fotoPortada'),
+        data.get('fotoportada'),
+    ]
+
+    gallery = data.get('fotosRecorrido') or data.get('fotos_recorrido') or []
+    if isinstance(gallery, list) and gallery:
+        candidates.append(gallery[0])
+
+    candidates.extend([
+        data.get('cover_frame_url'),
+        data.get('coverFrameUrl'),
+    ])
+
+    for candidate in candidates:
+        resolved = _resolve_cloudinary_asset_url(candidate)
+        if resolved:
+            return resolved
+    return ''
+
+
+def _ensure_listing_cover_frame(listado):
+    datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    cover_url = _resolve_listing_cover_frame(datos)
+    if cover_url and datos.get('cover_frame_url') != cover_url:
+        datos['cover_frame_url'] = cover_url
+        listado.datos_extra = datos
+        listado.save(update_fields=['datos_extra'])
+    return cover_url
+
+
+def _serialize_listing_summary(listado):
+    cover_url = _ensure_listing_cover_frame(listado)
+    datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    return {
+        'id': listado.id,
+        'titulo': listado.titulo,
+        'tipo_propiedad': listado.tipo_propiedad,
+        'operacion': listado.operacion,
+        'ciudad': listado.ciudad,
+        'precio': listado.precio,
+        'moneda': listado.moneda,
+        'creado_en': listado.creado_en,
+        'videos_creados': listado.videos_creados,
+        'video_url': listado.video_url,
+        'video_status': listado.video_status,
+        'cover_frame_url': cover_url,
+        'fotoportada': cover_url,
+        'datos': datos,
+    }
 
 
 def _resolve_primary_property_image(data):
@@ -2190,12 +2250,6 @@ def generar_listado(request):
 class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def _cover_url(self, datos):
-        if not isinstance(datos, dict):
-            return ''
-        images = _collect_property_images(datos)
-        return images[0] if images else ''
-
     def get(self, request):
         user = request.user
         now = timezone.now()
@@ -2208,15 +2262,10 @@ class DashboardView(APIView):
         
         videos_creados = listados.aggregate(total_videos=Sum('videos_creados'))['total_videos'] or 0
 
-        listados_recientes_qs = listados.order_by('-creado_en')[:8].values(
-            'id', 'titulo', 'tipo_propiedad', 'operacion', 'ciudad', 'precio', 'moneda',
-            'creado_en', 'datos_extra', 'video_url', 'video_status'
-        )
-        listados_recientes = []
-        for item in listados_recientes_qs:
-            item['datos'] = item.pop('datos_extra', {})
-            item['fotoportada'] = self._cover_url(item['datos'])
-            listados_recientes.append(item)
+        listados_recientes = [
+            _serialize_listing_summary(listado)
+            for listado in listados.order_by('-creado_en')[:8]
+        ]
 
         susc = get_suscripcion(user)
         plan = susc.plan
@@ -3722,32 +3771,10 @@ def video_status(request, listado_id):
 class ListadosView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def _cover_url(self, datos):
-        if not isinstance(datos, dict):
-            return ''
-        images = _collect_property_images(datos)
-        return images[0] if images else ''
-
     def get(self, request):
         """Devuelve todos los listados del usuario logueado"""
         listados = Listado.objects.filter(agente=request.user)
-        data = []
-        for listado in listados:
-            data.append({
-                'id': listado.id,
-                'titulo': listado.titulo,
-                'tipo_propiedad': listado.tipo_propiedad,
-                'operacion': listado.operacion,
-                'ciudad': listado.ciudad,
-                'precio': listado.precio,
-                'moneda': listado.moneda,
-                'creado_en': listado.creado_en,
-                'videos_creados': listado.videos_creados,
-                'video_url': listado.video_url,
-                'video_status': listado.video_status,
-                'fotoportada': self._cover_url(listado.datos_extra),
-                'datos': listado.datos_extra
-            })
+        data = [_serialize_listing_summary(listado) for listado in listados]
         return Response(data)
 
     def post(self, request):
@@ -3777,16 +3804,24 @@ class ListadosView(APIView):
         
         titulo = payload.get('titulo') or f"Propiedad en {payload.get('ciudad', 'Desconocida')}"
         tipo_propiedad = payload.get('tipoPropiedad', payload.get('tipo_propiedad', ''))
+        operacion = payload.get('operacion', 'venta')
         ciudad = payload.get('ciudad', '')
         precio = str(payload.get('precio', ''))
+        moneda = payload.get('moneda', 'USD')
         
+        cover_frame_url = _resolve_listing_cover_frame(payload)
+        if cover_frame_url:
+            payload = {**payload, 'cover_frame_url': cover_frame_url}
+
         # Guardamos en datos_extra el payload limpio
         listado = Listado.objects.create(
             agente=user,
             titulo=titulo,
             tipo_propiedad=tipo_propiedad,
+            operacion=operacion,
             ciudad=ciudad,
             precio=precio,
+            moneda=moneda,
             datos_extra=payload
         )
         
@@ -3804,14 +3839,19 @@ class ListadoDetalleView(APIView):
     def get(self, request, pk):
         try:
             listado = Listado.objects.get(pk=pk, agente=request.user)
+            cover_url = _ensure_listing_cover_frame(listado)
             return Response({
                 "id": listado.id,
                 "titulo": listado.titulo,
                 "tipo_propiedad": listado.tipo_propiedad,
+                "operacion": listado.operacion,
                 "ciudad": listado.ciudad,
                 "precio": listado.precio,
+                "moneda": listado.moneda,
                 "video_url": listado.video_url,
                 "video_status": listado.video_status,
+                "cover_frame_url": cover_url,
+                "fotoportada": cover_url,
                 "datos": listado.datos_extra
             }, status=status.HTTP_200_OK)
         except Listado.DoesNotExist:
@@ -3910,7 +3950,11 @@ class ListadoDetalleView(APIView):
             
         data = request.data
         if 'datos' in data:
-            listado.datos_extra = data['datos']
+            datos = data['datos'] if isinstance(data['datos'], dict) else {}
+            cover_frame_url = _resolve_listing_cover_frame(datos)
+            if cover_frame_url:
+                datos['cover_frame_url'] = cover_frame_url
+            listado.datos_extra = datos
         if 'video_url' in data:
             listado.video_url = data['video_url']
         if 'video_status' in data:
