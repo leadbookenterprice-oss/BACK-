@@ -4078,9 +4078,11 @@ def generar_email(request):
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='email')
 
+        email_cover = _resolve_primary_property_image(data)
         images_pool = _collect_property_images(data)
-        email_cover = images_pool[0] if images_pool else _resolve_cloudinary_asset_url(data.get('portadaUrl'))
-        email_gallery = images_pool[1:7]
+        if not email_cover:
+            email_cover = images_pool[0] if images_pool else ''
+        email_gallery = [image_url for image_url in images_pool if image_url != email_cover][:6]
         template_meta = TEMPLATE_CATALOG.get(template_id, {})
         
         prompt_text = f"""
