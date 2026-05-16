@@ -5718,6 +5718,112 @@ def amenidades_presets(request):
             'created': created
         }, status=201 if created else 200)
 
+
+FIELD_PRESET_ALLOWED_FIELDS = {
+    'tipoPropiedad', 'operacion', 'pais', 'idioma', 'ciudad', 'direccion',
+    'moneda', 'precio', 'recamaras', 'banos', 'superficieConstruida',
+    'superficieTerreno', 'estacionamientos', 'pisosNiveles',
+    'superficieCubierta', 'superficieTotal', 'niveles',
+}
+
+
+def _serialize_field_preset(preset):
+    return {
+        'id': preset.id,
+        'field': preset.field,
+        'value': preset.value,
+        'label': preset.label or preset.value,
+        'metadata': preset.metadata or {},
+        'usage_count': preset.usage_count,
+        'last_used_at': preset.last_used_at.isoformat() if preset.last_used_at else None,
+    }
+
+
+def _upsert_field_preset(user, raw):
+    from .models import UserFieldPreset
+
+    field = str((raw or {}).get('field') or '').strip()
+    value = str((raw or {}).get('value') or '').strip()
+    if field not in FIELD_PRESET_ALLOWED_FIELDS or not value:
+        return None
+
+    label = str((raw or {}).get('label') or value).strip()[:255]
+    metadata = (raw or {}).get('metadata') if isinstance((raw or {}).get('metadata'), dict) else {}
+
+    preset, created = UserFieldPreset.objects.get_or_create(
+        user=user,
+        field=field,
+        value=value[:255],
+        defaults={
+            'label': label,
+            'metadata': metadata,
+            'last_used_at': timezone.now(),
+        },
+    )
+    if not created:
+        preset.label = label or preset.label
+        preset.metadata = {**(preset.metadata or {}), **metadata}
+        preset.usage_count += 1
+        preset.last_used_at = timezone.now()
+        preset.save(update_fields=['label', 'metadata', 'usage_count', 'last_used_at', 'updated_at'])
+    return preset
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def field_presets_collection(request):
+    from .models import UserFieldPreset
+
+    if request.method == 'GET':
+        raw_fields = request.query_params.get('fields', '')
+        fields = [f.strip() for f in raw_fields.split(',') if f.strip()]
+        fields = [f for f in fields if f in FIELD_PRESET_ALLOWED_FIELDS]
+        try:
+            limit = min(max(int(request.query_params.get('limit', 8) or 8), 1), 30)
+        except (TypeError, ValueError):
+            limit = 8
+
+        qs = UserFieldPreset.objects.filter(user=request.user)
+        if fields:
+            qs = qs.filter(field__in=fields)
+        qs = qs.order_by('field', '-usage_count', '-last_used_at')
+
+        grouped = {field: [] for field in fields}
+        items = []
+        counts = {}
+        for preset in qs:
+            count = counts.get(preset.field, 0)
+            if count >= limit:
+                continue
+            serialized = _serialize_field_preset(preset)
+            grouped.setdefault(preset.field, []).append(serialized)
+            items.append(serialized)
+            counts[preset.field] = count + 1
+
+        return Response({'presets': grouped, 'items': items})
+
+    payload_items = request.data.get('items') if isinstance(request.data, dict) else None
+    if not isinstance(payload_items, list):
+        payload_items = [request.data]
+
+    saved = []
+    for raw in payload_items:
+        preset = _upsert_field_preset(request.user, raw if isinstance(raw, dict) else {})
+        if preset:
+            saved.append(_serialize_field_preset(preset))
+    return Response({'presets': saved}, status=status.HTTP_201_CREATED if saved else status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def field_preset_detail(request, preset_id):
+    from .models import UserFieldPreset
+
+    deleted, _ = UserFieldPreset.objects.filter(id=preset_id, user=request.user).delete()
+    if not deleted:
+        return Response({'error': 'Preset no encontrado'}, status=404)
+    return Response({'ok': True})
+
 from django.utils import timezone
 from datetime import timedelta
 

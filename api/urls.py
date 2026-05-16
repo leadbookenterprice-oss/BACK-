@@ -11,7 +11,8 @@ from .views import (
     OnboardingView, video_status, publicar_instagram, send_otp, verify_otp,
     generar_video, obtener_terminos, obtener_politica_privacidad,
     plan_status, seleccionar_plan_free, test_upload_avatar, generar_carrusel,
-    amenidades_presets, recuperar_password, confirmar_recuperacion,
+    amenidades_presets, field_presets_collection, field_preset_detail,
+    recuperar_password, confirmar_recuperacion,
     publicar_redes_sociales, publicar_redes_todo, publicar_redes_status,
     proxy_pdf_view, proxy_pdf_thumbnail_view,
     generar_html, generar_escena, CustomTokenObtainPairView,
@@ -116,6 +117,8 @@ urlpatterns = [
     path('test-upload/', test_upload_avatar, name='test_upload_avatar'),
     path('generar-carrusel/', generar_carrusel, name='generar_carrusel'),
     path('amenidades-presets/', amenidades_presets, name='amenidades_presets'),
+    path('field-presets/', field_presets_collection, name='field_presets_collection'),
+    path('field-presets/<int:preset_id>/', field_preset_detail, name='field_preset_detail'),
 
     # Admin Dash
     path('admin/stats/', admin_metricas),

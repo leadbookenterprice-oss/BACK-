@@ -1220,6 +1220,26 @@ class AmenidadPreset(models.Model):
         unique_together = ['agente', 'nombre']
 
 
+class UserFieldPreset(models.Model):
+    user = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='field_presets')
+    field = models.CharField(max_length=60)
+    value = models.CharField(max_length=255)
+    label = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    usage_count = models.PositiveIntegerField(default=1)
+    last_used_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['field', '-usage_count', '-last_used_at']
+        unique_together = ['user', 'field', 'value']
+        indexes = [
+            models.Index(fields=['user', 'field', '-usage_count']),
+            models.Index(fields=['user', 'last_used_at']),
+        ]
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MEDIA / AUDIO
 # ══════════════════════════════════════════════════════════════════════════════
