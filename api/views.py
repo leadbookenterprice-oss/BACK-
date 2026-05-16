@@ -2190,6 +2190,12 @@ def generar_listado(request):
 class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _cover_url(self, datos):
+        if not isinstance(datos, dict):
+            return ''
+        images = _collect_property_images(datos)
+        return images[0] if images else ''
+
     def get(self, request):
         user = request.user
         now = timezone.now()
@@ -2202,12 +2208,14 @@ class DashboardView(APIView):
         
         videos_creados = listados.aggregate(total_videos=Sum('videos_creados'))['total_videos'] or 0
 
-        listados_recientes_qs = listados.order_by('-creado_en')[:5].values(
-            'id', 'titulo', 'tipo_propiedad', 'ciudad', 'precio', 'creado_en', 'datos_extra', 'video_url', 'video_status'
+        listados_recientes_qs = listados.order_by('-creado_en')[:8].values(
+            'id', 'titulo', 'tipo_propiedad', 'operacion', 'ciudad', 'precio', 'moneda',
+            'creado_en', 'datos_extra', 'video_url', 'video_status'
         )
         listados_recientes = []
         for item in listados_recientes_qs:
             item['datos'] = item.pop('datos_extra', {})
+            item['fotoportada'] = self._cover_url(item['datos'])
             listados_recientes.append(item)
 
         susc = get_suscripcion(user)
@@ -3714,6 +3722,12 @@ def video_status(request, listado_id):
 class ListadosView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _cover_url(self, datos):
+        if not isinstance(datos, dict):
+            return ''
+        images = _collect_property_images(datos)
+        return images[0] if images else ''
+
     def get(self, request):
         """Devuelve todos los listados del usuario logueado"""
         listados = Listado.objects.filter(agente=request.user)
@@ -3723,12 +3737,15 @@ class ListadosView(APIView):
                 'id': listado.id,
                 'titulo': listado.titulo,
                 'tipo_propiedad': listado.tipo_propiedad,
+                'operacion': listado.operacion,
                 'ciudad': listado.ciudad,
                 'precio': listado.precio,
+                'moneda': listado.moneda,
                 'creado_en': listado.creado_en,
                 'videos_creados': listado.videos_creados,
                 'video_url': listado.video_url,
                 'video_status': listado.video_status,
+                'fotoportada': self._cover_url(listado.datos_extra),
                 'datos': listado.datos_extra
             })
         return Response(data)
