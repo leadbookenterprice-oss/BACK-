@@ -2175,6 +2175,8 @@ def generar_listado(request):
         # Fallback: intentar con Gemini si Groq falla
         try:
             result = call_gemini_api(prompt_text, system_prompt=system_prompt, agente=request.user)
+        except GeminiQuotaExhaustedError as e_gem:
+            return Response({"error": "cuota_ia_agotada", "mensaje": str(e_gem)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         except Exception as e_gem:
             return Response({
                 "error": "IA no disponible",
@@ -2664,6 +2666,21 @@ def brand_template_publish_revision(request, template_id, revision_id):
     return Response({'ok': True, 'revision': BrandTemplateRevisionSerializer(revision).data}, status=status.HTTP_200_OK)
 
 
+def _demo_qr_image_url():
+    import urllib.parse
+    wa_url = generar_whatsapp_url(
+        '+541123456789',
+        tipo_propiedad='Casa',
+        ciudad='Miami Beach',
+        operacion='Venta',
+        precio='850.000',
+        moneda='USD',
+    )
+    if not wa_url:
+        return ''
+    return f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(wa_url)}"
+
+
 def _brand_template_demo_context():
     return {
         'portada_url': 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1400&q=80',
@@ -2683,7 +2700,7 @@ def _brand_template_demo_context():
         'agente_nombre': 'Agente LeadBook',
         'agente_telefono': '+54 11 2345 6789',
         'agencia_nombre': 'LeadBook Realty',
-        'qr_url': '',
+        'qr_url': _demo_qr_image_url(),
         'leadbook_logo_url': '',
     }
 
@@ -2896,6 +2913,8 @@ Colores solo HEX. No uses HTML ni CSS libre.
         reply = str(parsed.get('reply') or '').strip()
         if patch:
             return {'reply': reply, 'token_patch': patch}
+    except GeminiQuotaExhaustedError:
+        raise
     except Exception as exc:
         logger.warning("Template Studio AI patch failed: %s", exc)
     return None
@@ -2953,9 +2972,13 @@ def _template_patch_from_message(message):
         merge({'components': {'price': {'size': 'large'}}})
     if 'precio' in text and any(word in text for word in ('chico', 'pequeno', 'small')):
         merge({'components': {'price': {'size': 'small'}}})
-    if 'sin qr' in text or 'ocultar qr' in text or 'no qr' in text:
+    wants_no_qr = any(phrase in text for phrase in ('sin qr', 'ocultar qr', 'no qr', 'sin codigo qr', 'sin codigo', 'quitar qr'))
+    if wants_no_qr:
         merge({'components': {'contact': {'show_qr': False}}})
-    if 'mostrar qr' in text or 'con qr' in text:
+    wants_qr = any(phrase in text for phrase in (
+        'mostrar qr', 'con qr', 'codigo qr', 'qr visible', 'quiero qr', 'tenga qr', 'incluir qr', 'activar qr'
+    ))
+    if wants_qr and not wants_no_qr:
         merge({'components': {'contact': {'show_qr': True}}})
     if 'sin foto agente' in text or 'ocultar agente' in text:
         merge({'components': {'contact': {'show_agent_photo': False}}})
@@ -3057,7 +3080,10 @@ def brand_template_draft_chat(request):
         current_tokens = _default_tokens_for_base_template(base_template_id)
     preview_format = str(request.data.get('format') or request.data.get('preview_format') or 'post').strip().lower()
 
-    ai_result = _template_ai_patch_from_message(message, current_tokens, base_template_id, request.user) if message else None
+    try:
+        ai_result = _template_ai_patch_from_message(message, current_tokens, base_template_id, request.user) if message else None
+    except GeminiQuotaExhaustedError as exc:
+        return Response({'error': 'cuota_ia_agotada', 'mensaje': str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     if ai_result:
         token_patch = ai_result.get('token_patch') or {}
         reply = ai_result.get('reply') or 'Apliqué los cambios al borrador. Revisá la preview y guardá cuando te guste.'
@@ -3096,7 +3122,10 @@ def brand_template_chat(request, template_id):
         published = template.revisions.filter(status='published').order_by('-revision').first()
         current_tokens = published.tokens_json if published and isinstance(published.tokens_json, dict) else default_template_tokens()
 
-    ai_result = _template_ai_patch_from_message(message, current_tokens, template.base_template_id, request.user) if message else None
+    try:
+        ai_result = _template_ai_patch_from_message(message, current_tokens, template.base_template_id, request.user) if message else None
+    except GeminiQuotaExhaustedError as exc:
+        return Response({'error': 'cuota_ia_agotada', 'mensaje': str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     token_patch = (ai_result or {}).get('token_patch') or _template_patch_from_message(message)
     merged_tokens = _resolve_brand_template_tokens(_deep_merge_dict(current_tokens, token_patch))
     reply = (ai_result or {}).get('reply') or 'Apliqué los cambios al borrador. Revisá la preview y guardá la revisión si te gusta.'
@@ -5048,6 +5077,8 @@ def _mp_process_payment(payment_data):
         agent.plan_activo = True
         agent.plan_seleccionado = True
         agent.save(update_fields=['plan_nombre', 'plan_activo', 'plan_seleccionado'])
+        from .services.pool_service import assign_apis_to_agent
+        assign_apis_to_agent(agent)
         _mp_notify(agent, 'pago_aprobado', 'Plan activado', f'Tu plan {plan} ya está activo.')
         print(f"[MP] plan payment processed id={mp_payment_id} user={agent.email} plan={plan}", flush=True)
         return {'status': 'processed', 'plan': plan}
@@ -6808,6 +6839,8 @@ REQUISITOS:
         if not result:
             return Response({"error": "No se pudo generar texto"}, status=503)
         return Response({"texto": result.strip()})
+    except GeminiQuotaExhaustedError as e:
+        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         return Response({"error": str(e)}, status=500)
 

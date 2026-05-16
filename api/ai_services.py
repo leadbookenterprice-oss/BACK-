@@ -10,6 +10,7 @@ import re
 from api.tracking import track_api_call
 
 logger = logging.getLogger(__name__)
+LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates_pdf')
 
@@ -599,6 +600,8 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
             result = call_gemini_api(prompt, agente=agente, **kwargs)
             if result:
                 return result
+        except GeminiQuotaExhaustedError:
+            raise
         except Exception as e:
             print(f"Gemini attempt {attempt+1}/{retries} failed: {str(e)}")
             if attempt < retries - 1:
@@ -609,11 +612,11 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
 def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
     """Genera audio MP3 usando ElevenLabs y el Pool de APIs."""
     if agente is not None:
-        from api.pool_manager import get_api_key
-        key = get_api_key(agente, 'elevenlabs')
+        from api.pool_manager import get_next_available_api
+        key = get_next_available_api(agente, 'elevenlabs')
         if not key:
             print("[ERROR] No hay ElevenLabs API Key asignada para el usuario en el Pool.")
-            return None
+            raise Exception(LIMIT_REACHED_MESSAGE)
     else:
         key = getattr(settings, 'ELEVENLABS_API_KEY', '')
 
@@ -650,25 +653,21 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
         else:
             print(f"[ERROR] ElevenLabs API failed ({response.status_code}): {response.text}")
             if agente and response.status_code in [401, 429]:
-                 from api.pool_manager import marcar_agotada
-                 marcar_agotada(agente, 'elevenlabs')
-                 # Forzar cuota al maximo para que la UI marque 100% consumido
-                 try:
-                     from api.pool_manager import get_api_key
-                     from api.models import APIKey
-                     key_str = get_api_key(agente, 'elevenlabs')
-                     if key_str:
-                         k = APIKey.objects.filter(api_key=key_str).first()
-                         if k:
-                             k.status = 'exhausted'
-                             k.requests_this_month = k.google_monthly_limit or 10000
-                             k.save()
-                 except Exception as e:
-                     logger.error(f"Error marcando ElevenLabs como agotada: {e}")
-                 raise Exception("Llegaste al límite mensual de tu API de Audio (ElevenLabs).")
+                try:
+                    from api.models import APIKey
+                    k = APIKey.objects.filter(api_key=key, servicio__nombre__iexact='elevenlabs').first()
+                    if k:
+                        k.status = 'exhausted'
+                        k.requests_this_month = k.google_monthly_limit or max(k.requests_this_month, k.google_daily_limit)
+                        k.save(update_fields=['status', 'requests_this_month', 'updated_at'])
+                except Exception as e:
+                    logger.error(f"Error marcando ElevenLabs como agotada: {e}")
+                raise Exception(LIMIT_REACHED_MESSAGE)
             return None
     except Exception as e:
         print(f"[ERROR] Exception in ElevenLabs call: {str(e)}")
+        if str(e) == LIMIT_REACHED_MESSAGE:
+            raise
         return None
 
 
@@ -706,19 +705,19 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
     operation_func debe recibir un objeto 'client' como argumento.
     """
     from google import genai
-    from api.pool_manager import get_api_key
+    from api.pool_manager import get_next_available_api
 
     last_key = None
     
     for attempt in range(max_retries + 5): # Damos margen para rotar llaves
         # 1. Obtener llave actual
         if agente:
-            current_key = get_api_key(agente, 'gemini')
+            current_key = get_next_available_api(agente, 'gemini')
         else:
             current_key = settings.GEMINI_API_KEY
-            
+
         if not current_key:
-            raise GeminiQuotaExhaustedError("No hay API Keys disponibles.")
+            raise GeminiQuotaExhaustedError(LIMIT_REACHED_MESSAGE)
 
         # 2. Crear cliente y ejecutar
         try:
@@ -747,15 +746,14 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                     if agente:
                         _mark_gemini_exhausted(agente, current_key, is_monthly=True)
                         # Intentar rotar: buscar si get_api_key ahora nos da otra llave
-                        new_key = get_api_key(agente, 'gemini')
+                        new_key = get_next_available_api(agente, 'gemini')
                         if new_key and new_key != current_key:
                             print(f"[Pool] 🔄 Rotando llave de Gemini: {current_key[:8]} -> {new_key[:8]}")
                             continue # Reintentar con la nueva llave
                     
                     # Si no hay agente o no hay más llaves, lanzar error definitivo
                     raise GeminiQuotaExhaustedError(
-                        "La API free respondió que su cuota real está agotada. "
-                        "Probá de nuevo cuando el proveedor resetee la cuota."
+                        LIMIT_REACHED_MESSAGE
                     )
                 
                 if is_minute or '429' in error_msg:

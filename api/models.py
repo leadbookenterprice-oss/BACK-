@@ -106,6 +106,12 @@ class Agent(AbstractBaseUser, PermissionsMixin):
         Anonimiza al usuario en vez de borrarlo físicamente.
         Cumple Ley 25326 (derecho al olvido) sin romper registros contables.
         """
+        try:
+            from api.services.pool_service import APIPoolService
+            APIPoolService.release_keys_from_user(self)
+        except Exception:
+            pass
+
         self.email    = f"deleted_{self.id}@leadbook.com"
         self.nombre   = "Usuario eliminado"
         self.telefono = None
@@ -1218,11 +1224,11 @@ def setup_nuevo_usuario(sender, instance, created, **kwargs):
     TODO dentro de transaction.atomic() — si falla cualquier paso, se revierte todo.
     Si falla, el admin ve una AdminAlert crítica y puede reparar manualmente.
     """
-    if created:
-        from api.services.pool_service import APIPoolService
+    if created and instance.is_active and not instance.eliminado_en:
+        from api.services.pool_service import assign_apis_to_agent
         try:
             with transaction.atomic():
-                APIPoolService.assign_keys_to_user(instance)
+                assign_apis_to_agent(instance)
         except Exception as e:
             AdminAlert.objects.create(
                 tipo='assign_failed',
@@ -1258,3 +1264,16 @@ def recalcular_quotas_al_cambiar_plan(sender, instance, created, **kwargs):
     if not created:
         for quota in instance.api_quotas.all():
             quota.recalcular_limite(plan=instance.plan_nombre)
+        if not instance.is_active or instance.eliminado_en:
+            return
+        try:
+            from api.services.pool_service import assign_apis_to_agent
+            assign_apis_to_agent(instance)
+        except Exception as e:
+            AdminAlert.objects.create(
+                tipo='assign_failed',
+                severidad='warning',
+                titulo=f'Fallo reasignación por plan — {instance.email}',
+                mensaje=f'No se pudieron completar APIs del plan {instance.plan_nombre}: {str(e)}',
+                related_user=instance,
+            )

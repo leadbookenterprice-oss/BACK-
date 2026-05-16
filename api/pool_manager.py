@@ -2,6 +2,9 @@ from api.models import APIKey, UserAPIAssignment
 from api.services.pool_service import APIPoolService
 
 
+LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
+
+
 def _key_usage_ratio(key):
     limit = key.google_daily_limit or 0
     if limit <= 0:
@@ -9,10 +12,10 @@ def _key_usage_ratio(key):
     return key.requests_today / limit
 
 
-def get_api_key(agente, servicio):
+def get_next_available_api(agente, servicio):
     """
-    Devuelve la API key asignada al usuario para un servicio.
-    Usa schema v2: UserAPIAssignment + APIKey.
+    Devuelve la próxima API key usable del usuario para un servicio.
+    Rota por menor requests_today y excluye exhausted/dead/disabled.
     """
     servicio_nombre = str(servicio or '').strip().lower()
     if not servicio_nombre:
@@ -23,7 +26,7 @@ def get_api_key(agente, servicio):
             user=agente,
             servicio__nombre__iexact=servicio_nombre,
             activo=True,
-            apikey__status__in=['assigned', 'available', 'exhausted']
+            apikey__status__in=['assigned', 'available']
         ).select_related('apikey').order_by('assigned_at')
 
         candidates = []
@@ -36,17 +39,25 @@ def get_api_key(agente, servicio):
             if limit and key.requests_today >= limit:
                 key.status = 'exhausted'
                 key.save(update_fields=['status', 'updated_at'])
+                continue
+
+            if key.status == 'available':
+                key.status = 'assigned'
+                key.save(update_fields=['status', 'updated_at'])
 
             candidates.append(asig)
 
         if not candidates:
             return None
 
-        # Balancea entre primaria y extras: una extra recién comprada empieza a
-        # usarse aunque la primaria todavía tenga cupo.
         selected = min(
             candidates,
-            key=lambda asig: (_key_usage_ratio(asig.apikey), not asig.is_primary, asig.assigned_at),
+            key=lambda asig: (
+                asig.apikey.requests_today,
+                _key_usage_ratio(asig.apikey),
+                asig.apikey.last_used_at or asig.assigned_at,
+                asig.apikey_id,
+            ),
         )
         return selected.apikey.api_key if selected.apikey else None
 
@@ -60,6 +71,11 @@ def get_api_key(agente, servicio):
         return _buscar_asignada()
 
     return None
+
+
+def get_api_key(agente, servicio):
+    """Alias de compatibilidad para llamadas existentes."""
+    return get_next_available_api(agente, servicio)
 
 
 def liberar_bundle(agente):

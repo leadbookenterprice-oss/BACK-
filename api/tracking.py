@@ -10,6 +10,7 @@ from api.services.pool_service import APIPoolService
 
 
 FREE_POOL_SERVICES = {'gemini', 'elevenlabs', 'uploadpost'}
+LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
 
 
 def _uses_soft_exhaustion(servicio):
@@ -142,11 +143,11 @@ def track_api_call(service, action=''):
             if disabled_assignment and not usable_assignment:
                 raise Exception(f"Servicio {service} no disponible para este usuario")
 
-            from api.pool_manager import get_api_key
+            from api.pool_manager import get_next_available_api
 
-            key_str = get_api_key(agente, service)
+            key_str = get_next_available_api(agente, service)
             if not key_str:
-                raise Exception(f"No hay API Key disponible para {service}")
+                _raise_service_exhausted(service, LIMIT_REACHED_MESSAGE)
 
             key_obj = APIKey.objects.filter(
                 api_key=key_str,
