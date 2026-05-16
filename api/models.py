@@ -786,7 +786,7 @@ class UserAPIQuota(models.Model):
         """
         now = timezone.now()
         servicio_nombre = str(getattr(self.servicio, 'nombre', '') or '').lower()
-        uses_twelve_hour_reset = servicio_nombre in {'gemini', 'elevenlabs', 'uploadpost'}
+        uses_twelve_hour_reset = servicio_nombre in {'gemini', 'elevenlabs'}
 
         if uses_twelve_hour_reset:
             should_reset = self.last_reset_daily is None or now - self.last_reset_daily >= timedelta(hours=12)
@@ -825,6 +825,24 @@ class UserAPIQuota(models.Model):
                             mensaje='Las APIs free fueron reintentadas/resetadas. Si el proveedor ya renovó la cuota, podés generar contenido otra vez.',
                         )
 
+    def maybe_reset_monthly(self):
+        now = timezone.now()
+        should_reset = (
+            self.last_reset_monthly is None
+            or self.last_reset_monthly.year != now.year
+            or self.last_reset_monthly.month != now.month
+        )
+        if should_reset:
+            self.requests_this_month = 0
+            self.last_reset_monthly = now
+            if self.blocked_reason and 'mensual' in self.blocked_reason.lower():
+                self.is_blocked = False
+                self.blocked_reason = None
+            self.save(update_fields=[
+                'requests_this_month', 'last_reset_monthly',
+                'is_blocked', 'blocked_reason', 'updated_at'
+            ])
+
     def recalcular_limite(self, plan=None):
         """
         Recalcula user_daily_limit = límite base del plan + (extras activos × incremento).
@@ -835,14 +853,22 @@ class UserAPIQuota(models.Model):
 
         # Límite base según plan
         planes_limites = {
-            'free':     {'gemini': 1500, 'elevenlabs': 1500, 'uploadpost': 10},
-            'starter':  {'gemini': 3000, 'elevenlabs': 3000, 'uploadpost': 30},
-            'pro':      {'gemini': 7500, 'elevenlabs': 7500, 'uploadpost': 100},
-            'scale':    {'gemini': 15000,'elevenlabs': 15000,'uploadpost': 300},
-            'business': {'gemini': 30000,'elevenlabs': 30000,'uploadpost': 1000},
+            'free':     {'gemini': 1500, 'elevenlabs': 1500, 'uploadpost': 999999},
+            'starter':  {'gemini': 3000, 'elevenlabs': 3000, 'uploadpost': 999999},
+            'pro':      {'gemini': 7500, 'elevenlabs': 7500, 'uploadpost': 999999},
+            'scale':    {'gemini': 15000,'elevenlabs': 15000,'uploadpost': 999999},
+            'business': {'gemini': 30000,'elevenlabs': 30000,'uploadpost': 999999},
+        }
+        planes_limites_mensuales = {
+            'free':     {'uploadpost': 10},
+            'starter':  {'uploadpost': 10},
+            'pro':      {'uploadpost': None},
+            'scale':    {'uploadpost': None},
+            'business': {'uploadpost': None},
         }
         servicio_nombre = self.servicio.nombre
         base = planes_limites.get(plan, {}).get(servicio_nombre, 1500)
+        # LeadBook limita auto-posting por mes; la API/proveedor mantiene sus propios hard caps diarios.
 
         # Extras activos
         extras = UserAPIAssignment.objects.filter(
@@ -859,6 +885,12 @@ class UserAPIQuota(models.Model):
         if self.user_daily_limit != nuevo_limite:
             self.user_daily_limit = nuevo_limite
             self.save(update_fields=['user_daily_limit', 'updated_at'])
+
+        monthly_base = planes_limites_mensuales.get(plan, {}).get(servicio_nombre)
+        nuevo_limite_mensual = None if monthly_base is None else monthly_base + (extras * incremento)
+        if self.user_monthly_limit != nuevo_limite_mensual:
+            self.user_monthly_limit = nuevo_limite_mensual
+            self.save(update_fields=['user_monthly_limit', 'updated_at'])
 
     def __str__(self):
         return f"{self.user.email} — {self.servicio.nombre}: {self.requests_today}/{self.user_daily_limit}"

@@ -7,7 +7,7 @@ from .services.pool_service import APIPoolService
 import requests
 
 
-FREE_POOL_SERVICES = ['gemini', 'elevenlabs', 'uploadpost']
+FREE_POOL_SERVICES = ['gemini', 'elevenlabs']
 
 
 def _notify_free_pool_reset(user, now):
@@ -277,7 +277,16 @@ def reset_daily_counters():
     reset_free_pool_counters()
     now = timezone.now()
     APIKey.objects.exclude(servicio__nombre__in=FREE_POOL_SERVICES).update(requests_today=0)
-    UserAPIQuota.objects.exclude(servicio__nombre__in=FREE_POOL_SERVICES).update(
+
+    non_free_quotas = UserAPIQuota.objects.exclude(servicio__nombre__in=FREE_POOL_SERVICES)
+    monthly_blocked_ids = list(
+        non_free_quotas.filter(blocked_reason__icontains='mensual').values_list('id', flat=True)
+    )
+    non_free_quotas.filter(id__in=monthly_blocked_ids).update(
+        requests_today=0,
+        last_reset_daily=now,
+    )
+    non_free_quotas.exclude(id__in=monthly_blocked_ids).update(
         requests_today=0,
         is_blocked=False,
         blocked_reason=None,
@@ -287,5 +296,16 @@ def reset_daily_counters():
 @shared_task
 def reset_monthly_counters():
     """Se ejecuta cada 1 de mes para reiniciar cuotas"""
+    now = timezone.now()
     APIKey.objects.update(requests_this_month=0)
-    UserAPIQuota.objects.update(requests_this_month=0, last_reset_monthly=timezone.now())
+    UserAPIQuota.objects.update(requests_this_month=0, last_reset_monthly=now)
+    UserAPIQuota.objects.filter(blocked_reason__icontains='mensual').update(
+        is_blocked=False,
+        blocked_reason=None,
+        last_reset_monthly=now,
+    )
+    exhausted_uploadpost = APIKey.objects.filter(servicio__nombre='uploadpost', status='exhausted')
+    for key in exhausted_uploadpost:
+        has_assignment = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
+        key.status = 'assigned' if has_assignment else 'available'
+        key.save(update_fields=['status', 'updated_at'])

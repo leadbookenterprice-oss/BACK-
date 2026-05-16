@@ -4810,6 +4810,12 @@ from django.db import transaction
 
 MP_TEST_PRICE = Decimal('1')
 MP_PRODUCTION_PRICE = Decimal('100000')
+MP_PLAN_PRICES = {
+    'starter': Decimal('25000'),
+    'pro': Decimal('58000'),
+    'scale': Decimal('125000'),
+    'business': Decimal('125000'),
+}
 
 MP_PLAN_LABELS = {
     'starter': 'LeadBook Starter',
@@ -4846,7 +4852,11 @@ def _mp_public_key():
     return config('MP_PUBLIC_KEY', default='').strip()
 
 
-def _mp_unit_price():
+def _mp_unit_price(plan=None):
+    if _mp_mode() == 'test':
+        return MP_TEST_PRICE
+    if plan in MP_PLAN_PRICES:
+        return MP_PLAN_PRICES[plan]
     return MP_TEST_PRICE if _mp_mode() == 'test' else MP_PRODUCTION_PRICE
 
 
@@ -4910,12 +4920,13 @@ def _mp_create_preference(preference_data):
     if preference_response.get('status') == 201:
         response = preference_response.get('response', {})
         init_point = response.get('init_point') or response.get('sandbox_init_point')
+        amount = ((preference_data.get('items') or [{}])[0] or {}).get('unit_price')
         return {
             'init_point': init_point,
             'checkout_url': init_point,
             'preference_id': response.get('id'),
             'mode': _mp_mode(),
-            'amount': str(_mp_unit_price()),
+            'amount': str(amount if amount is not None else _mp_unit_price()),
         }
     print(f"MP Error: {preference_response}")
     return None
@@ -5092,7 +5103,7 @@ def mp_checkout(request):
     if plan not in MP_PLAN_LABELS:
         return Response({"error": "Plan inválido"}, status=400)
 
-    precio = _mp_unit_price()
+    precio = _mp_unit_price(plan)
     nombre = f"{MP_PLAN_LABELS[plan]} ({'Anual' if ciclo == 'annual' else 'Mensual'})"
     frontend_url = _mp_frontend_url()
 
@@ -5244,11 +5255,31 @@ def mp_webhook(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def plan_status(request):
+    from .models import Servicio, UserAPIQuota
+    from .plan_utils import LIMITES
+
     user = request.user
+    plan = user.plan_nombre or 'free'
+    limites = LIMITES.get(plan, LIMITES['free'])
+    now = timezone.now()
+    listados_mes = UsageLog.objects.filter(agent=user, tipo='property', fecha__year=now.year, fecha__month=now.month).count()
+    videos_used = UsageLog.objects.filter(agent=user, tipo='video', fecha__year=now.year, fecha__month=now.month).count()
+    uploadpost_quota = None
+    uploadpost = Servicio.objects.filter(nombre='uploadpost').first()
+    if uploadpost:
+        uploadpost_quota = UserAPIQuota.objects.filter(user=user, servicio=uploadpost).first()
+
     return Response({
-        "plan_nombre": user.plan_nombre,
+        "plan_nombre": plan,
         "plan_activo": user.plan_activo,
         "plan_seleccionado": user.plan_seleccionado,
+        "properties_per_month": limites['properties'],
+        "video_generations": limites['videos'],
+        "auto_posts_per_month": limites.get('auto_posts'),
+        "auto_posting_unlimited": limites.get('auto_posts') is None,
+        "properties_used": listados_mes,
+        "videos_used": videos_used,
+        "auto_posts_used": uploadpost_quota.requests_this_month if uploadpost_quota else 0,
     })
 
 @api_view(['POST'])
@@ -5300,7 +5331,9 @@ def get_plan_info_mp(request):
             "properties_per_month": limites['properties'],
             "ai_generations": limites['ai'],
             "image_generations": limites['images'],
-            "video_generations": limites['videos']
+            "video_generations": limites['videos'],
+            "auto_posts_per_month": limites.get('auto_posts'),
+            "auto_posting_unlimited": limites.get('auto_posts') is None,
         }
     })
 
@@ -5737,6 +5770,8 @@ def dashboard(request):
             'ai_generations': limites['ai'],
             'image_generations': limites['images'],
             'video_generations': limites['videos'],
+            'auto_posts_per_month': limites.get('auto_posts'),
+            'auto_posting_unlimited': limites.get('auto_posts') is None,
             'branding': plan not in ('free',),
         },
         'uso_actual': {

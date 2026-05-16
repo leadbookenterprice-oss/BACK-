@@ -9,12 +9,19 @@ from api.models import APIKey, APIRequestLog, AdminAlert, Servicio, UserAPIAssig
 from api.services.pool_service import APIPoolService
 
 
-FREE_POOL_SERVICES = {'gemini', 'elevenlabs', 'uploadpost'}
+FREE_POOL_SERVICES = {'gemini', 'elevenlabs'}
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
+UPLOADPOST_LIMIT_REACHED_MESSAGE = "Límite de publicaciones automáticas alcanzado. Podés actualizar tu plan para publicar más."
 
 
 def _uses_soft_exhaustion(servicio):
     return str(getattr(servicio, 'nombre', servicio) or '').strip().lower() in FREE_POOL_SERVICES
+
+
+def _limit_message_for_service(service):
+    if str(service or '').strip().lower() == 'uploadpost':
+        return UPLOADPOST_LIMIT_REACHED_MESSAGE
+    return LIMIT_REACHED_MESSAGE
 
 
 def _emit_service_exhausted_event(agente, servicio):
@@ -45,6 +52,25 @@ def _mark_service_exhausted(agente, servicio, quota, key_obj=None, reason='servi
         defaults={
             'titulo': f'{servicio.nombre} al 100% para {agente.email}',
             'mensaje': f'El usuario {agente.email} agotó el 100% de {servicio.nombre}. Motivo: {reason}.',
+        },
+    )
+    _emit_service_exhausted_event(agente, servicio)
+
+
+def _mark_service_monthly_exhausted(agente, servicio, quota, key_obj=None, reason='Límite mensual alcanzado'):
+    quota.is_blocked = True
+    quota.blocked_reason = reason[:255]
+    quota.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
+
+    AdminAlert.objects.get_or_create(
+        tipo='quota_warning',
+        severidad='critical',
+        related_user=agente,
+        related_api_key=key_obj,
+        creado_en__date=timezone.now().date(),
+        defaults={
+            'titulo': f'{servicio.nombre} mensual agotado para {agente.email}',
+            'mensaje': f'El usuario {agente.email} agotó el límite mensual de {servicio.nombre}.',
         },
     )
     _emit_service_exhausted_event(agente, servicio)
@@ -97,6 +123,12 @@ def track_api_call(service, action=''):
             )
             quota.maybe_reset_daily()
             quota.recalcular_limite(plan=agente.plan_nombre)
+            quota.maybe_reset_monthly()
+
+            monthly_limit = quota.user_monthly_limit
+            if monthly_limit and quota.requests_this_month >= monthly_limit:
+                _mark_service_monthly_exhausted(agente, servicio, quota, reason='Límite mensual alcanzado')
+                _raise_service_exhausted(service, _limit_message_for_service(service))
 
             if soft_exhaustion and quota.is_blocked:
                 quota.is_blocked = False
@@ -147,7 +179,7 @@ def track_api_call(service, action=''):
 
             key_str = get_next_available_api(agente, service)
             if not key_str:
-                _raise_service_exhausted(service, LIMIT_REACHED_MESSAGE)
+                _raise_service_exhausted(service, _limit_message_for_service(service))
 
             key_obj = APIKey.objects.filter(
                 api_key=key_str,
