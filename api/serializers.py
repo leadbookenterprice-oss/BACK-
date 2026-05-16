@@ -219,7 +219,7 @@ class BrandTemplateRevisionSerializer(serializers.ModelSerializer):
         layout.setdefault('border_radius', 'medium')
         layout.setdefault('image_treatment', 'normal')
 
-        value['schema_version'] = 1
+        value['schema_version'] = 2
         value['palette'] = palette
         value['typography'] = typography
         value['emoji'] = emoji

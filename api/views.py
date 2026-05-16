@@ -412,6 +412,19 @@ def _build_font_import_url(typography):
     return f"https://fonts.googleapis.com/css2?{'&'.join(parts)}&display=swap"
 
 
+def _deep_merge_dict(base, override):
+    result = dict(base or {})
+    if not isinstance(override, dict):
+        return result
+
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge_dict(result.get(key), value)
+        else:
+            result[key] = value
+    return result
+
+
 def _resolve_brand_template_tokens(tokens):
     source = tokens if isinstance(tokens, dict) else default_template_tokens()
     fallback = default_template_tokens()
@@ -421,21 +434,29 @@ def _resolve_brand_template_tokens(tokens):
     emoji = source.get('emoji') if isinstance(source.get('emoji'), dict) else {}
     copy = source.get('copy') if isinstance(source.get('copy'), dict) else {}
     layout = source.get('layout') if isinstance(source.get('layout'), dict) else {}
+    components = source.get('components') if isinstance(source.get('components'), dict) else {}
+    formats = source.get('formats') if isinstance(source.get('formats'), dict) else {}
 
     merged = {
-        'schema_version': 1,
+        'schema_version': 2,
         'palette': {
             'primary': palette.get('primary') or fallback['palette']['primary'],
             'secondary': palette.get('secondary') or fallback['palette']['secondary'],
             'accent': palette.get('accent') or fallback['palette']['accent'],
             'background': palette.get('background') or fallback['palette']['background'],
+            'surface': palette.get('surface') or fallback['palette'].get('surface', fallback['palette']['secondary']),
             'text': palette.get('text') or fallback['palette']['text'],
+            'muted_text': palette.get('muted_text') or fallback['palette'].get('muted_text', '#8fb1d1'),
+            'border': palette.get('border') or fallback['palette'].get('border', fallback['palette']['secondary']),
+            'overlay': palette.get('overlay') or fallback['palette'].get('overlay', 'rgba(0,0,0,0.65)'),
         },
         'typography': {
             'display': typography.get('display') or fallback['typography']['display'],
             'body': typography.get('body') or fallback['typography']['body'],
             'mono': typography.get('mono') or fallback['typography']['mono'],
             'google_fonts': typography.get('google_fonts') or fallback['typography']['google_fonts'],
+            'title_transform': typography.get('title_transform') or fallback['typography'].get('title_transform', 'uppercase'),
+            'letter_spacing': typography.get('letter_spacing') or fallback['typography'].get('letter_spacing', 'normal'),
         },
         'emoji': {
             'headline': emoji.get('headline') or fallback['emoji']['headline'],
@@ -458,6 +479,8 @@ def _resolve_brand_template_tokens(tokens):
             'border_radius': layout.get('border_radius') or fallback['layout'].get('border_radius', 'medium'),
             'image_treatment': layout.get('image_treatment') or fallback['layout'].get('image_treatment', 'normal'),
         },
+        'components': _deep_merge_dict(fallback.get('components', {}), components),
+        'formats': _deep_merge_dict(fallback.get('formats', {}), formats),
     }
     merged['typography']['font_import_url'] = _build_font_import_url(merged['typography'])
     return merged
@@ -607,6 +630,7 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
     palette = template_tokens.get('palette') or {}
     typography = template_tokens.get('typography') or {}
     layout = template_tokens.get('layout') or {}
+    components = template_tokens.get('components') or {}
 
     base_meta = TEMPLATE_CATALOG.get(template_id, {})
     base_colors = base_meta.get('colors') if isinstance(base_meta.get('colors'), dict) else {}
@@ -620,6 +644,12 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
     display_font = typography.get('display') or 'DM Sans'
     body_font = typography.get('body') or display_font
     mono_font = typography.get('mono') or body_font
+    title_transform = typography.get('title_transform') or 'uppercase'
+    letter_spacing_value = {
+        'tight': '-0.04em',
+        'normal': '0',
+        'wide': '0.08em',
+    }.get(typography.get('letter_spacing'), '0')
     logo_order = (-1, 1) if layout.get('logo_position') == 'top_left' else (2, 1)
     layout_css = (
         ".top{display:flex!important;}"
@@ -645,6 +675,28 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         f".stat,.stat-item,.price-box,.precio-box,.qr-block img,.amenidad-chip{{border-radius:{radius_map.get(layout.get('border_radius'), '16px')} !important;}}"
         f".content,.bottom,.bottom-section,.descripcion,.amenidades,.galeria{{gap:calc(20px * {density_map.get(layout.get('density'), '1')}) !important;}}"
     )
+    hero_tokens = components.get('hero') if isinstance(components.get('hero'), dict) else {}
+    price_tokens = components.get('price') if isinstance(components.get('price'), dict) else {}
+    stats_tokens = components.get('stats') if isinstance(components.get('stats'), dict) else {}
+    contact_tokens = components.get('contact') if isinstance(components.get('contact'), dict) else {}
+    overlay_strength = {
+        'none': 'rgba(0,0,0,0)',
+        'soft': 'rgba(0,0,0,.32)',
+        'medium': 'rgba(0,0,0,.58)',
+        'strong': 'rgba(0,0,0,.78)',
+    }.get(hero_tokens.get('overlay_strength'), None)
+    if overlay_strength:
+        layout_css += f".overlay,.hero-overlay{{background:linear-gradient(0deg,{overlay_strength} 0%,rgba(0,0,0,.24) 60%,rgba(0,0,0,.08) 100%)!important;}}"
+    if hero_tokens.get('show_badge') is False:
+        layout_css += ".badge,.badge-operacion{display:none!important;}"
+    price_size = {'small': '.84', 'medium': '1', 'large': '1.22', 'xlarge': '1.42'}.get(price_tokens.get('size'), '1')
+    layout_css += f".price-box,.precio-valor,.price-value{{transform:scale({price_size});transform-origin:left center;}}"
+    if stats_tokens.get('show_icons') is False:
+        layout_css += ".stat-icon,.pdf-inline-icon{display:none!important;}"
+    if contact_tokens.get('show_qr') is False:
+        layout_css += ".qr-box,.qr-container,.qr-block{display:none!important;}"
+    if contact_tokens.get('show_agent_photo') is False:
+        layout_css += ".agent-avatar,.agent-photo,.lb-agent-photo{display:none!important;}"
 
     style_block = (
         '<style id="brand-template-overrides">'
@@ -653,12 +705,15 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         f"--brand-accent:{palette.get('accent', '#00e5ff')};"
         f"--brand-bg:{palette.get('background', '#081421')};"
         f"--brand-text:{palette.get('text', '#e8f3ff')};"
+        f"--brand-surface:{palette.get('surface', '#0d1b2a')};"
+        f"--brand-muted-text:{palette.get('muted_text', '#8fb1d1')};"
+        f"--brand-border:{palette.get('border', '#1d3e5d')};"
         f"--primario:{palette.get('primary', '#0d47a1')};"
         f"--secundario:{palette.get('secondary', '#1565c0')};"
         f"--acento:{palette.get('accent', '#00e5ff')};"
         f"--accent:{palette.get('accent', '#00e5ff')};}}"
         f"body{{font-family:'{body_font}',sans-serif !important;}}"
-        f"h1,h2,h3,.title,.headline,.hero-titulo{{font-family:'{display_font}',sans-serif !important;}}"
+        f"h1,h2,h3,.title,.headline,.hero-titulo{{font-family:'{display_font}',sans-serif !important;text-transform:{title_transform}!important;letter-spacing:{letter_spacing_value}!important;}}"
         f".badge,.stat-label,.agent-role,.qr-label,.mono{{font-family:'{mono_font}',sans-serif !important;}}"
         f"{layout_css}"
         '</style>'
@@ -2561,6 +2616,106 @@ def _brand_template_demo_context():
     }
 
 
+def _template_patch_from_message(message):
+    text = unicodedata.normalize('NFKD', str(message or '').lower())
+    text = ''.join(ch for ch in text if not unicodedata.combining(ch))
+    patch = {}
+
+    def merge(fragment):
+        nonlocal patch
+        patch = _deep_merge_dict(patch, fragment)
+
+    if any(word in text for word in ('todo negro', 'full black', 'black', 'oscuro', 'negro')):
+        merge({
+            'palette': {
+                'primary': '#000000',
+                'secondary': '#080808',
+                'accent': '#d6d6d6',
+                'background': '#000000',
+                'surface': '#111111',
+                'text': '#ffffff',
+                'muted_text': '#a1a1aa',
+                'border': '#2a2a2a',
+                'overlay': 'rgba(0,0,0,0.72)',
+            },
+            'layout': {'image_treatment': 'dark', 'style': 'dark_luxury'},
+            'components': {'hero': {'overlay_strength': 'strong'}},
+        })
+    if any(word in text for word in ('dorado', 'gold', 'oro', 'luxury')):
+        merge({'palette': {'accent': '#c9a84c'}, 'copy': {'tone': 'lujo'}})
+    if any(word in text for word in ('blanco', 'white', 'minimal', 'limpio')):
+        merge({
+            'palette': {
+                'primary': '#111111',
+                'secondary': '#f2f2f2',
+                'accent': '#111111',
+                'background': '#ffffff',
+                'surface': '#f7f7f7',
+                'text': '#111111',
+                'muted_text': '#666666',
+                'border': '#dddddd',
+            },
+            'layout': {'style': 'minimal_light', 'image_treatment': 'normal'},
+        })
+    if any(word in text for word in ('azul', 'blue', 'tech', 'neon')):
+        merge({'palette': {'primary': '#0d47a1', 'secondary': '#1565c0', 'accent': '#00e5ff', 'background': '#081421', 'text': '#e8f3ff'}, 'layout': {'style': 'tech_modern'}})
+    if any(word in text for word in ('calido', 'tierra', 'mediterraneo', 'warm')):
+        merge({'palette': {'primary': '#6b4423', 'secondary': '#8b5e3c', 'accent': '#c17f3a', 'background': '#f8f4ef', 'text': '#2c2416'}, 'layout': {'style': 'mediterranean_warm', 'image_treatment': 'warm'}})
+
+    if 'precio' in text and any(word in text for word in ('grande', 'mas grande', 'gigante', 'large')):
+        merge({'components': {'price': {'size': 'large'}}})
+    if 'precio' in text and any(word in text for word in ('chico', 'pequeno', 'small')):
+        merge({'components': {'price': {'size': 'small'}}})
+    if 'sin qr' in text or 'ocultar qr' in text or 'no qr' in text:
+        merge({'components': {'contact': {'show_qr': False}}})
+    if 'mostrar qr' in text or 'con qr' in text:
+        merge({'components': {'contact': {'show_qr': True}}})
+    if 'sin foto agente' in text or 'ocultar agente' in text:
+        merge({'components': {'contact': {'show_agent_photo': False}}})
+    if 'sin iconos' in text:
+        merge({'components': {'stats': {'show_icons': False}}})
+    if 'con iconos' in text:
+        merge({'components': {'stats': {'show_icons': True}}})
+
+    if 'logo' in text:
+        if 'izquierda' in text or 'left' in text:
+            merge({'layout': {'logo_position': 'top_left'}})
+        if 'derecha' in text or 'right' in text:
+            merge({'layout': {'logo_position': 'top_right'}})
+    if 'agente' in text:
+        if 'derecha' in text or 'right' in text:
+            merge({'layout': {'agent_block_position': 'bottom_right'}})
+        if 'izquierda' in text or 'left' in text:
+            merge({'layout': {'agent_block_position': 'bottom_left'}})
+    if 'qr' in text:
+        if 'izquierda' in text or 'left' in text:
+            merge({'layout': {'qr_position': 'bottom_left'}})
+        if 'derecha' in text or 'right' in text:
+            merge({'layout': {'qr_position': 'bottom_right'}})
+
+    if any(word in text for word in ('redondo', 'rounded', 'bordes grandes')):
+        merge({'layout': {'border_radius': 'strong'}})
+    if any(word in text for word in ('sin bordes', 'bordes rectos', 'square')):
+        merge({'layout': {'border_radius': 'none'}})
+    if any(word in text for word in ('espaciado', 'aire', 'spacious')):
+        merge({'layout': {'density': 'spacious'}})
+    if any(word in text for word in ('compacto', 'compact')):
+        merge({'layout': {'density': 'compact'}})
+
+    if any(word in text for word in ('bebas', 'alto impacto')):
+        merge({'typography': {'display': 'Bebas Neue', 'google_fonts': ['Bebas Neue', 'DM Sans', 'Space Mono']}})
+    if any(word in text for word in ('editorial', 'elegante')):
+        merge({'typography': {'display': 'Cormorant Garamond', 'body': 'DM Sans', 'google_fonts': ['Cormorant Garamond', 'DM Sans']}})
+    if any(word in text for word in ('mayuscula', 'uppercase')):
+        merge({'typography': {'title_transform': 'uppercase'}})
+    if any(word in text for word in ('minuscula', 'normal case')):
+        merge({'typography': {'title_transform': 'none'}})
+
+    if not patch:
+        merge({'layout': {'density': 'comfortable'}})
+    return patch
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def brand_template_preview(request, template_id):
@@ -2571,9 +2726,46 @@ def brand_template_preview(request, template_id):
         tokens = published.tokens_json if published and isinstance(published.tokens_json, dict) else default_template_tokens()
 
     resolved_tokens = _resolve_brand_template_tokens(tokens)
-    template_file = TEMPLATE_POST_MAP.get(template.base_template_id, TEMPLATE_POST_MAP['tech_modern'])
+    preview_format = str(request.data.get('format') or request.data.get('preview_format') or 'post').strip().lower()
     demo_context = _brand_template_demo_context()
-    html = render_to_string(template_file, demo_context)
+    if preview_format == 'story':
+        template_file = TEMPLATE_STORY_MAP.get(template.base_template_id, TEMPLATE_STORY_MAP['tech_modern'])
+        html = render_to_string(template_file, demo_context)
+    elif preview_format in ('carousel', 'carrusel'):
+        template_file = TEMPLATE_CAROUSEL_MAP.get(template.base_template_id, TEMPLATE_CAROUSEL_MAP['tech_modern'])
+        carousel_context = {
+            **demo_context,
+            'headline': 'Residencia premium',
+            'subheadline': 'Venta por USD 850.000. 320 m2, 4 hab, 3 banos. Desliza para ver la galeria.',
+            'slide_number': 1,
+            'total_slides': 6,
+        }
+        html = render_to_string(template_file, carousel_context)
+    elif preview_format == 'email':
+        template_file = TEMPLATE_EMAIL_MAP.get(template.base_template_id, TEMPLATE_EMAIL_MAP['tech_modern'])
+        email_context = {
+            'asunto': 'Residencia premium disponible',
+            'logo_url': demo_context.get('logo_url', ''),
+            'agenciaNombre': demo_context.get('agencia_nombre', ''),
+            'tipoPropiedad': demo_context.get('tipoPropiedad', ''),
+            'ciudad': demo_context.get('ciudad', ''),
+            'portada_url': demo_context.get('portada_url', ''),
+            'html_content': '<strong>Oportunidad destacada.</strong><br>Una propiedad pensada para vivir o invertir con alto valor percibido.',
+            'moneda': demo_context.get('moneda', ''),
+            'precio': demo_context.get('precio', ''),
+            'operacion': demo_context.get('operacion', ''),
+            'agenteNombre': demo_context.get('agente_nombre', ''),
+            'agenteRol': 'Asesor Comercial',
+            'agenteTelefono': demo_context.get('agente_telefono', ''),
+            'agenteTelefonoDisplay': demo_context.get('agente_telefono', ''),
+            'agenteEmail': 'agente@leadbook.com',
+            'whatsapp_url': '',
+        }
+        html = render_to_string(template_file, email_context)
+    else:
+        preview_format = 'post'
+        template_file = TEMPLATE_POST_MAP.get(template.base_template_id, TEMPLATE_POST_MAP['tech_modern'])
+        html = render_to_string(template_file, demo_context)
     html = _apply_template_tokens_to_html(html, template.base_template_id, resolved_tokens)
     html = _inject_agency_brand_lockup(html, demo_context.get('logo_url', ''), demo_context.get('agencia_nombre', ''))
     instructions = str(request.data.get('gemini_instructions') or '').strip() or _build_template_gemini_instructions(
@@ -2583,8 +2775,33 @@ def brand_template_preview(request, template_id):
     )
     return Response({
         'html': html,
+        'format': preview_format,
         'tokens_json': resolved_tokens,
         'gemini_instructions': instructions,
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def brand_template_chat(request, template_id):
+    template = get_object_or_404(BrandTemplate, id=template_id, owner=request.user, is_active=True)
+    message = str(request.data.get('message') or '').strip()
+    current_tokens = request.data.get('tokens_json') if isinstance(request.data, dict) else None
+    if not isinstance(current_tokens, dict):
+        published = template.revisions.filter(status='published').order_by('-revision').first()
+        current_tokens = published.tokens_json if published and isinstance(published.tokens_json, dict) else default_template_tokens()
+
+    token_patch = _template_patch_from_message(message)
+    merged_tokens = _resolve_brand_template_tokens(_deep_merge_dict(current_tokens, token_patch))
+    reply = 'Apliqué los cambios al borrador. Revisá la preview y guardá la revisión si te gusta.'
+    if not message:
+        reply = 'Decime qué querés cambiar: colores, tipografías, logo, QR, precio, bordes o estilo visual.'
+
+    return Response({
+        'reply': reply,
+        'token_patch': token_patch,
+        'tokens_json': merged_tokens,
+        'gemini_instructions': _build_template_gemini_instructions(template.name, template.base_template_id, merged_tokens),
     }, status=status.HTTP_200_OK)
 
 from .services.instagram_service import (

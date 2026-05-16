@@ -260,19 +260,25 @@ class UserContentPreference(models.Model):
 
 def default_template_tokens():
     return {
-        'schema_version': 1,
+        'schema_version': 2,
         'palette': {
             'primary': '#0d47a1',
             'secondary': '#1565c0',
             'accent': '#00e5ff',
             'background': '#081421',
+            'surface': '#0d1b2a',
             'text': '#e8f3ff',
+            'muted_text': '#8fb1d1',
+            'border': '#1d3e5d',
+            'overlay': 'rgba(0,0,0,0.65)',
         },
         'typography': {
             'display': 'Space Grotesk',
             'body': 'DM Sans',
             'mono': 'Space Mono',
             'google_fonts': ['Space Grotesk', 'DM Sans', 'Space Mono'],
+            'title_transform': 'uppercase',
+            'letter_spacing': 'normal',
         },
         'emoji': {
             'headline': '✨',
@@ -294,6 +300,39 @@ def default_template_tokens():
             'density': 'comfortable',
             'border_radius': 'medium',
             'image_treatment': 'normal',
+        },
+        'components': {
+            'hero': {
+                'variant': 'full_bleed',
+                'title_position': 'bottom_left',
+                'overlay_strength': 'medium',
+                'show_badge': True,
+            },
+            'price': {
+                'variant': 'pill',
+                'position': 'below_title',
+                'size': 'medium',
+            },
+            'stats': {
+                'variant': 'cards',
+                'show_icons': True,
+            },
+            'gallery': {
+                'variant': 'mosaic',
+                'max_items': 6,
+            },
+            'contact': {
+                'variant': 'card',
+                'show_agent_photo': True,
+                'show_qr': True,
+            },
+        },
+        'formats': {
+            'pdf': {'show_gallery': True},
+            'post': {'aspect_ratio': '4:5', 'safe_area': True},
+            'story': {'aspect_ratio': '9:16', 'safe_area': True},
+            'carousel': {'aspect_ratio': '4:5', 'gallery_slide_fit': 'contain'},
+            'email': {'width': 600, 'show_gallery': True, 'button_style': 'solid'},
         },
     }
 
