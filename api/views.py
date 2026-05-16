@@ -3332,9 +3332,29 @@ def publicar_instagram(request):
         else:
             return Response({"success": False, "error": "Tipo invalido (post/story/carrusel)"}, status=status.HTTP_400_BAD_REQUEST)
 
+        from .tracking import record_uploadpost_publication
+        media_count = len(imagenes_urls or []) if tipo == 'carrusel' else (1 if imagen_url else 0)
+        record_uploadpost_publication(
+            user,
+            success=bool(result.get('success')),
+            provider='meta',
+            platform='instagram',
+            media_type='carousel' if tipo == 'carrusel' else tipo,
+            request_id=f"meta-{result.get('post_id')}" if result.get('post_id') else None,
+            job_id=result.get('post_id'),
+            status_value='completed' if result.get('success') else 'failed',
+            caption=caption,
+            media_count=media_count,
+            payload={
+                'tipo': tipo,
+                'imagen_url': imagen_url,
+                'imagenes_urls': imagenes_urls,
+            },
+            response=result,
+            error_message=result.get('error'),
+        )
+
         if result.get('success'):
-            from .tracking import record_uploadpost_publication
-            record_uploadpost_publication(user)
             return Response(result, status=status.HTTP_200_OK)
         else:
             return Response(result, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -3363,6 +3383,7 @@ def publicar_redes_sociales(request):
         platforms = data.get('platforms') # ej: ['instagram', 'facebook', 'youtube']
         scheduled_at = data.get('scheduled_at') # string ISO 8601
         request_id = data.get('request_id')
+        batch_id = data.get('batch_id')
         
         user = request.user
         
@@ -3377,6 +3398,7 @@ def publicar_redes_sociales(request):
             platforms=platforms,
             scheduled_at=scheduled_at,
             request_id=request_id,
+            batch_id=batch_id,
             agente=user
         )
         
@@ -3488,6 +3510,7 @@ def publicar_redes_todo(request):
                 images=images,
                 platforms=['instagram'],
                 request_id=request_id,
+                batch_id=batch_id,
                 agente=user,
             )
 
@@ -5463,10 +5486,12 @@ def seleccionar_plan_free(request):
 def get_plan_info_mp(request):
     from .plan_utils import LIMITES
     from .models import UsageLog
+    from .tracking import get_uploadpost_quota
     agent = request.user
     plan = agent.plan_nombre or 'free'
     limites = LIMITES.get(plan, LIMITES['free'])
     now = timezone.now()
+    uploadpost_quota = get_uploadpost_quota(agent)
     ai_used = UsageLog.objects.filter(
         agent=agent, tipo='ai',
         fecha__year=now.year, fecha__month=now.month
@@ -5491,7 +5516,8 @@ def get_plan_info_mp(request):
             "properties_used": listados_mes,
             "ai_used": ai_used,
             "images_used": images_used,
-            "videos_used": videos_used
+            "videos_used": videos_used,
+            "auto_posts_used": uploadpost_quota.requests_this_month if uploadpost_quota else 0,
         },
         "limites": {
             "properties_per_month": limites['properties'],

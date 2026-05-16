@@ -50,6 +50,10 @@ def mi_uso_apis(request):
         APIPoolService.assign_keys_to_user(user)
         quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
 
+    from api.tracking import get_uploadpost_quota, sync_uploadpost_quota_from_sql
+    get_uploadpost_quota(user)
+    quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
+
     stats = []
     for q in quotas:
         q.maybe_reset_daily()
@@ -70,6 +74,7 @@ def mi_uso_apis(request):
         if svc_name == 'uploadpost':
             q.maybe_reset_monthly()
             q.recalcular_limite(plan=user.plan_nombre)
+            q = sync_uploadpost_quota_from_sql(user, q)
             limite = q.user_monthly_limit
             consumido = q.requests_this_month
         else:

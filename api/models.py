@@ -1177,6 +1177,56 @@ class APIRequestLog(models.Model):
         ]
 
 
+class SocialPublicationLog(models.Model):
+    """
+    Registro persistente de cada intento de publicacion social.
+    UserAPIQuota se sincroniza desde esta tabla para UploadPost/Gestor de Redes.
+    """
+    PROVIDERS = [
+        ('uploadpost', 'UploadPost'),
+        ('meta', 'Meta Graph'),
+    ]
+    STATUSES = [
+        ('queued', 'En cola'),
+        ('completed', 'Completada'),
+        ('failed', 'Fallida'),
+        ('unknown', 'Desconocida'),
+    ]
+
+    user = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='social_publication_logs')
+    servicio = models.ForeignKey(Servicio, on_delete=models.PROTECT, null=True, blank=True, related_name='social_publication_logs')
+    provider = models.CharField(max_length=30, choices=PROVIDERS, default='uploadpost')
+    platform = models.CharField(max_length=50, default='instagram')
+    media_type = models.CharField(max_length=30, default='unknown')
+    request_id = models.CharField(max_length=128, blank=True, db_index=True)
+    job_id = models.CharField(max_length=128, blank=True, db_index=True)
+    batch_id = models.CharField(max_length=64, blank=True, db_index=True)
+    success = models.BooleanField(default=False)
+    counted = models.BooleanField(default=False)
+    status = models.CharField(max_length=30, choices=STATUSES, default='unknown')
+    caption = models.TextField(blank=True)
+    media_count = models.PositiveIntegerField(default=0)
+    payload = models.JSONField(default=dict, blank=True)
+    response = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    creado_en = models.DateTimeField(auto_now_add=True, db_index=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.provider}/{self.media_type} - {self.status}"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'provider', 'request_id'], name='api_social_unique_request'),
+        ]
+        indexes = [
+            models.Index(fields=['user', 'creado_en'], name='api_social_user_created_idx'),
+            models.Index(fields=['user', 'success', 'counted', 'creado_en'], name='api_social_user_count_idx'),
+            models.Index(fields=['provider', 'platform'], name='api_social_provider_idx'),
+            models.Index(fields=['batch_id', 'creado_en'], name='api_social_batch_idx'),
+        ]
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SISTEMA / CONFIGURACIÓN
 # ══════════════════════════════════════════════════════════════════════════════

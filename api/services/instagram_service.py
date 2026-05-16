@@ -204,6 +204,7 @@ def publicar_media_upload_api(
     platforms: list = None,   # ['instagram','facebook','youtube'] o None (todas)
     scheduled_at: str = None, # ISO 8601 string, ej: "2024-06-01T15:00:00Z"
     request_id: str = None,
+    batch_id: str = None,
     api_key: str = None,
     agente=None,
 ) -> dict:
