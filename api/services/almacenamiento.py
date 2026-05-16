@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Tipos de asset soportados ────────────────────────────────────────────────
 TIPO_PDF      = 'pdf'
+TIPO_PDF_COVER = 'pdf_cover'
 TIPO_POST     = 'post'
 TIPO_STORY    = 'story'
 TIPO_CARRUSEL = 'carrusel'
@@ -296,6 +297,10 @@ class AlmacenamientoCloudinary:
     @classmethod
     def guardar_pdf(cls, pdf_bytes: bytes, user_id: int, listado_id: int | None = None) -> str | None:
         return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id)
+
+    @classmethod
+    def guardar_pdf_cover(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
+        return cls.subir(imagen_stream, TIPO_PDF_COVER, user_id, listado_id)
 
     @classmethod
     def guardar_post(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:

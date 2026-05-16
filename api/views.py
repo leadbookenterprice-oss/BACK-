@@ -849,6 +849,21 @@ def _resolve_listing_cover_frame(data):
     if not isinstance(data, dict):
         return ''
 
+    resultados = data.get('resultados') if isinstance(data.get('resultados'), dict) else {}
+    pdf_result = resultados.get('pdf') if isinstance(resultados.get('pdf'), dict) else {}
+
+    pdf_candidates = [
+        pdf_result.get('cover_frame_url'),
+        pdf_result.get('cover_url'),
+        pdf_result.get('thumbnail_url'),
+        pdf_result.get('image_url'),
+        data.get('dashboard_image_url'),
+    ]
+    for candidate in pdf_candidates:
+        resolved = _resolve_cloudinary_asset_url(candidate)
+        if resolved:
+            return resolved
+
     candidates = [
         data.get('portadaUrl'),
         data.get('portada_url'),
@@ -872,6 +887,56 @@ def _resolve_listing_cover_frame(data):
     return ''
 
 
+def _render_and_store_pdf_cover(listado, html):
+    if not listado or not html:
+        return ''
+    try:
+        from api.services.almacenamiento import AlmacenamientoCloudinary
+
+        cover_stream = render_html_to_image(html, 1200, 800)
+        cover_url = AlmacenamientoCloudinary.guardar_pdf_cover(
+            cover_stream,
+            user_id=listado.agente_id,
+            listado_id=listado.id,
+        )
+        return cover_url or ''
+    except Exception as exc:
+        logger.warning('[PDF] No se pudo generar portada para dashboard listado=%s: %s', getattr(listado, 'id', None), exc)
+        return ''
+
+
+def _ensure_listing_pdf_cover_frame(listado):
+    datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    resultados = datos.get('resultados') if isinstance(datos.get('resultados'), dict) else {}
+    pdf_result = resultados.get('pdf') if isinstance(resultados.get('pdf'), dict) else {}
+
+    existing = ''
+    for key in ('cover_frame_url', 'cover_url', 'thumbnail_url', 'image_url'):
+        existing = _resolve_cloudinary_asset_url(pdf_result.get(key))
+        if existing:
+            break
+    if existing:
+        if datos.get('dashboard_image_url') != existing or datos.get('cover_frame_url') != existing:
+            datos['dashboard_image_url'] = existing
+            datos['cover_frame_url'] = existing
+            listado.datos_extra = datos
+            listado.save(update_fields=['datos_extra'])
+        return existing
+
+    html = pdf_result.get('html')
+    cover_url = _render_and_store_pdf_cover(listado, html)
+    if cover_url:
+        pdf_result['cover_frame_url'] = cover_url
+        pdf_result['cover_url'] = cover_url
+        resultados['pdf'] = pdf_result
+        datos['resultados'] = resultados
+        datos['dashboard_image_url'] = cover_url
+        datos['cover_frame_url'] = cover_url
+        listado.datos_extra = datos
+        listado.save(update_fields=['datos_extra'])
+    return cover_url
+
+
 def _ensure_listing_cover_frame(listado):
     datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
     cover_url = _resolve_listing_cover_frame(datos)
@@ -883,7 +948,7 @@ def _ensure_listing_cover_frame(listado):
 
 
 def _serialize_listing_summary(listado):
-    cover_url = _ensure_listing_cover_frame(listado)
+    cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
     datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
     return {
         'id': listado.id,
@@ -897,6 +962,7 @@ def _serialize_listing_summary(listado):
         'videos_creados': listado.videos_creados,
         'video_url': listado.video_url,
         'video_status': listado.video_status,
+        'dashboard_image_url': cover_url,
         'cover_frame_url': cover_url,
         'fotoportada': cover_url,
         'datos': datos,
@@ -4245,6 +4311,7 @@ def generar_pdf(request):
 
         # ─── Conversión a PDF Real con Playwright ────────────────────────────
         pdf_url = None
+        pdf_cover_url = None
         try:
             print(f"[PDF] Iniciando conversión Playwright para listado {listado_id_hint}...")
             pdf_bytes = render_html_to_pdf(html_string)
@@ -4258,6 +4325,7 @@ def generar_pdf(request):
                 
                 # Persistir la URL en el listado para el historial
                 if listado_obj and pdf_url:
+                    pdf_cover_url = _render_and_store_pdf_cover(listado_obj, html_string)
                     if not listado_obj.datos_extra:
                         listado_obj.datos_extra = {}
                     if 'resultados' not in listado_obj.datos_extra:
@@ -4266,10 +4334,15 @@ def generar_pdf(request):
                     listado_obj.datos_extra['resultados']['pdf'] = {
                         "html": html_string,
                         "url": pdf_url,
+                        "cover_frame_url": pdf_cover_url,
+                        "cover_url": pdf_cover_url,
                         "template_id": template_id,
                         "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
                         "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
                     }
+                    if pdf_cover_url:
+                        listado_obj.datos_extra['dashboard_image_url'] = pdf_cover_url
+                        listado_obj.datos_extra['cover_frame_url'] = pdf_cover_url
                     listado_obj.save(update_fields=['datos_extra'])
                     print(f"[PDF] URL guardada en DB: {pdf_url}")
             else:
@@ -4290,6 +4363,8 @@ def generar_pdf(request):
         return Response({
             "html": html_string,
             "url": pdf_url,
+            "cover_frame_url": pdf_cover_url,
+            "cover_url": pdf_cover_url,
             "listado_id": listado_id_hint,
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
