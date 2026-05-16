@@ -372,7 +372,14 @@ class BrandTemplate(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        self.slug = slugify(self.slug or self.name or '')[:140] or f'template-{self.owner_id or "owner"}'
+        base_slug = slugify(self.slug or self.name or '')[:120] or f'template-{self.owner_id or "owner"}'
+        next_slug = base_slug
+        suffix = 2
+        while self.owner_id and BrandTemplate.objects.filter(owner_id=self.owner_id, slug=next_slug).exclude(pk=self.pk).exists():
+            suffix_text = f'-{suffix}'
+            next_slug = f'{base_slug[:140 - len(suffix_text)]}{suffix_text}'
+            suffix += 1
+        self.slug = next_slug[:140]
 
         if self.is_default and self.owner_id:
             BrandTemplate.objects.filter(

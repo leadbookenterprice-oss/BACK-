@@ -262,7 +262,7 @@ class BrandTemplateSerializer(serializers.ModelSerializer):
             'updated_at',
             'published_revision',
         ]
-        read_only_fields = ['id', 'owner', 'created_at', 'updated_at', 'published_revision']
+        read_only_fields = ['id', 'owner', 'slug', 'created_at', 'updated_at', 'published_revision']
 
     def get_published_revision(self, obj):
         published = obj.revisions.filter(status='published').order_by('-revision').first()

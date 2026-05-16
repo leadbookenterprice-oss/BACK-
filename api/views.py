@@ -2643,6 +2643,8 @@ def _template_patch_from_message(message):
         })
     if any(word in text for word in ('dorado', 'gold', 'oro', 'luxury')):
         merge({'palette': {'accent': '#c9a84c'}, 'copy': {'tone': 'lujo'}})
+    if any(word in text for word in ('rojo', 'red', 'colorado')):
+        merge({'palette': {'accent': '#ef4444'}})
     if any(word in text for word in ('blanco', 'white', 'minimal', 'limpio')):
         merge({
             'palette': {
