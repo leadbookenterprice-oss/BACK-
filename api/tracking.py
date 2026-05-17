@@ -34,20 +34,27 @@ def track_api_call(service, action=''):
                 return func(*args, **kwargs)
 
             # Verificar cuota
-            quota, _ = UserAPIQuota.objects.get_or_create(user=agente, service=service)
+            from api.models import Servicio
+            servicio_obj, _ = Servicio.objects.get_or_create(nombre=service)
+            quota, _ = UserAPIQuota.objects.get_or_create(user=agente, servicio=servicio_obj)
             if quota.is_blocked:
                 raise Exception(f"Usuario bloqueado para el servicio {service}: {quota.blocked_reason}")
                 
-            if quota.requests_today >= quota.daily_limit:
+            if quota.requests_today >= quota.user_daily_limit:
                 raise Exception(f"Límite diario alcanzado para el servicio {service}")
 
-            # Buscar la API Key
-            from api.pool_manager import get_api_key
-            key_str = get_api_key(agente, service)
-            key_obj = APIKey.objects.filter(api_key=key_str).first()
-            
-            if not key_str:
-                raise Exception(f"No hay API Key disponible para {service}")
+            # Buscar la API Key (si falla pool legacy, no bloquear ejecución local)
+            key_str = None
+            key_obj = None
+            try:
+                from api.pool_manager import get_api_key
+                key_str = get_api_key(agente, service)
+                if key_str:
+                    key_obj = APIKey.objects.filter(api_key=key_str).first()
+            except Exception as e:
+                # En local/dev puede haber módulos legacy no disponibles.
+                # No frenamos la operación: la función puede tener fallback por env.
+                print(f"[TRACKING] WARN pool unavailable for {service}: {type(e).__name__}: {e}", flush=True)
 
             start_time = time.time()
             success = False
@@ -89,15 +96,16 @@ def track_api_call(service, action=''):
                     key_obj.save()
                     
                     # Alertas de uso
-                    if key_obj.requests_today >= (key_obj.daily_limit * 0.8):
+                    key_daily_limit = getattr(key_obj, 'google_daily_limit', 0) or 0
+                    if key_daily_limit and key_obj.requests_today >= (key_daily_limit * 0.8):
                         AdminAlert.objects.get_or_create(
                             type='quota_warning',
                             severity='warning',
                             related_api_key=key_obj,
                             creado_en__date=timezone.now().date(),
                             defaults={
-                                'title': f'Key al {int((key_obj.requests_today/key_obj.daily_limit)*100)}% de uso diario',
-                                'message': f'La key de {service} asignada a {agente.email if key_obj.assigned_to else "Global"} está por agotarse.'
+                                'title': f'Key al {int((key_obj.requests_today/key_daily_limit)*100)}% de uso diario',
+                                'message': f'La key de {service} asignada a {agente.email} está por agotarse.'
                             }
                         )
 
@@ -106,13 +114,13 @@ def track_api_call(service, action=''):
                     APIRequestLog.objects.create(
                         api_key=key_obj,
                         user=agente,
-                        service=service,
+                        servicio=servicio_obj,
                         endpoint=func.__name__,
+                        method='POST',
                         success=success,
                         status_code=status_code,
                         response_time_ms=elapsed_ms,
                         error_message=error_msg,
-                        request_context={'action_type': action}
                     )
                 
                 # Emitir WebSocket

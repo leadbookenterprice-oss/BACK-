@@ -3,6 +3,11 @@ import os
 import json
 import logging
 import shutil
+import glob
+import time
+import requests
+import re
+import random
 from django.conf import settings
 from decouple import config
 from api.models import Listado
@@ -12,12 +17,271 @@ import cloudinary.uploader
 import cloudinary.api
 from api.ai_services import smart_call, call_elevenlabs_api
 from api.services.almacenamiento import AlmacenamientoCloudinary
+from api.services.video_quality_profile import get_video_profile, get_visual_theme
 
 cloudinary.config( 
   cloud_name = config('CLOUDINARY_CLOUD_NAME', default=''), 
   api_key = config('CLOUDINARY_API_KEY', default=''), 
   api_secret = config('CLOUDINARY_API_SECRET', default='') 
 )
+
+def _cloudinary_ready():
+    return bool(config('CLOUDINARY_CLOUD_NAME', default='').strip() and config('CLOUDINARY_API_KEY', default='').strip() and config('CLOUDINARY_API_SECRET', default='').strip())
+
+def _detect_ffmpeg_bin_dir():
+    ffmpeg_bin = config('FFMPEG_BIN', default='').strip()
+    if ffmpeg_bin and os.path.isdir(ffmpeg_bin):
+        return ffmpeg_bin
+
+    winget_root = os.path.join(
+        os.environ.get('LOCALAPPDATA', ''),
+        'Microsoft',
+        'WinGet',
+        'Packages',
+        'Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe',
+    )
+    pattern = os.path.join(winget_root, 'ffmpeg-*', 'bin')
+    matches = sorted(glob.glob(pattern), reverse=True)
+    if matches:
+        return matches[0]
+    return ''
+
+def _call_elevenlabs_direct(text: str, voz='femenina'):
+    key = config('ELEVENLABS_API_KEY', default='').strip() or getattr(settings, 'ELEVENLABS_API_KEY', '')
+    if not key:
+        return None
+
+    env_male = config('ELEVENLABS_VOICE_ID_MALE', default='').strip()
+    env_female = config('ELEVENLABS_VOICE_ID_FEMALE', default='').strip()
+    default_female = "EXAVITQu4vr4xnSDxMaL"
+    default_male = "21m00Tcm4TlvDq8ikWAM"
+    legacy_male = "pNInz6obpgnuMvHLW6m8"
+
+    if voz == 'masculina':
+        voice_candidates = [env_male, default_male, env_female, default_female, legacy_male]
+    else:
+        voice_candidates = [env_female, default_female, env_male, default_male, legacy_male]
+
+    filtered_candidates = []
+    for v in voice_candidates:
+        vv = (v or '').strip()
+        if vv and vv not in filtered_candidates:
+            filtered_candidates.append(vv)
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": key,
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {"stability": 0.55, "similarity_boost": 0.65},
+    }
+    for attempt in range(3):
+        try:
+            for voice_id in filtered_candidates:
+                url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+                response = requests.post(url, json=payload, headers={**headers, "Connection": "close"}, timeout=(20, 120))
+                if response.status_code == 200:
+                    return response.content
+                if response.status_code == 404 and 'voice_not_found' in (response.text or ''):
+                    continue
+                logging.error(f"ElevenLabs direct fallback failed ({response.status_code}) attempt {attempt+1}: {response.text[:250]}")
+        except Exception as e:
+            logging.error(f"ElevenLabs direct fallback exception attempt {attempt+1}: {e}")
+        time.sleep(1.2 * (attempt + 1))
+    return None
+
+def _prepare_tts_text(raw_text: str, is_tour: bool) -> str:
+    text = (raw_text or '').strip()
+    if not text:
+        return ''
+
+    # Limpieza básica para TTS
+    text = re.sub(r'\s+', ' ', text)
+    text = text.replace('**', '').replace('"', '').strip()
+    text = re.sub(r'\bUSD\b', 'dólares', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bUS\$\b', 'dólares', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bARS\b', 'pesos argentinos', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bMXN\b', 'pesos mexicanos', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bCLP\b', 'pesos chilenos', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bCOP\b', 'pesos colombianos', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bEUR\b', 'euros', text, flags=re.IGNORECASE)
+    text = re.sub(r'\$', ' dólares ', text)
+    text = re.sub(r'\bu\.?s\.?d\b', 'dólares', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bdólares\s+dólares\b', 'dólares', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b1\s+baños\b', 'un baño', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b1\s+baño\b', 'un baño', text, flags=re.IGNORECASE)
+    text = re.sub(r'\buna\s+baño\b', 'un baño', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b1\s+recámaras\b', 'una recámara', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b1\s+recámara\b', 'una recámara', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b1\s+habitaciones\b', 'una habitación', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b1\s+habitación\b', 'una habitación', text, flags=re.IGNORECASE)
+
+
+    max_chars = 1500 if is_tour else 900
+    if len(text) <= max_chars:
+        return text
+
+    # Recorte por oración para evitar cortes abruptos de API
+    parts = re.split(r'(?<=[\.!?])\s+', text)
+    acc = []
+    total = 0
+    for p in parts:
+        if total + len(p) + 1 > max_chars:
+            break
+        acc.append(p)
+        total += len(p) + 1
+
+    if not acc:
+        return text[:max_chars]
+    return ' '.join(acc).strip()
+
+
+def _to_int_price(price_raw):
+    s = str(price_raw or '').strip()
+    if not s:
+        return None
+    digits = ''.join(ch for ch in s if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except Exception:
+        return None
+
+
+def _num_to_es(n: int) -> str:
+    units = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve"]
+    teens = ["diez", "once", "doce", "trece", "catorce", "quince", "dieciséis", "diecisiete", "dieciocho", "diecinueve"]
+    tens = ["", "", "veinte", "treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta", "noventa"]
+    hundreds = ["", "ciento", "doscientos", "trescientos", "cuatrocientos", "quinientos", "seiscientos", "setecientos", "ochocientos", "novecientos"]
+
+    def _lt100(x):
+        if x < 10:
+            return units[x]
+        if 10 <= x < 20:
+            return teens[x - 10]
+        if 20 <= x < 30:
+            return "veinte" if x == 20 else f"veinti{units[x - 20]}"
+        d, u = divmod(x, 10)
+        return tens[d] if u == 0 else f"{tens[d]} y {units[u]}"
+
+    def _lt1000(x):
+        if x < 100:
+            return _lt100(x)
+        if x == 100:
+            return "cien"
+        c, r = divmod(x, 100)
+        return hundreds[c] if r == 0 else f"{hundreds[c]} {_lt100(r)}"
+
+    if n < 1000:
+        return _lt1000(n)
+    if n < 1000000:
+        m, r = divmod(n, 1000)
+        mtxt = "mil" if m == 1 else f"{_lt1000(m)} mil"
+        return mtxt if r == 0 else f"{mtxt} {_lt1000(r)}"
+    return str(n)
+
+
+def _format_price_for_voice(price_raw, moneda_raw):
+    moneda = str(moneda_raw or '').strip().lower()
+    n = _to_int_price(price_raw)
+    if n is None:
+        return str(price_raw or '').strip()
+
+    if moneda in ['usd', 'us$', 'dolar', 'dólar', 'dolares', 'dólares']:
+        currency_word = 'dólares'
+    elif moneda in ['ars', 'peso', 'pesos']:
+        currency_word = 'pesos argentinos'
+    elif moneda in ['mxn']:
+        currency_word = 'pesos mexicanos'
+    elif moneda in ['clp']:
+        currency_word = 'pesos chilenos'
+    elif moneda in ['cop']:
+        currency_word = 'pesos colombianos'
+    elif moneda in ['eur', 'euro', 'euros']:
+        currency_word = 'euros'
+    else:
+        currency_word = 'pesos'
+
+    return f"{_num_to_es(n)} {currency_word}"
+
+
+def _format_count(value, singular, plural):
+    raw = str(value or '').strip()
+    if not raw:
+        return ''
+    try:
+        n = int(float(raw))
+    except Exception:
+        return ''
+    if n == 1 and singular == 'baño':
+        return 'un baño'
+    if n == 1 and singular in ['recámara', 'habitación']:
+        return f'una {singular}'
+    return f"{n} {singular if n == 1 else plural}"
+
+
+def _build_property_script(datos, listado, price_voice):
+    tipo = str(datos.get('tipoPropiedad') or datos.get('tipo_propiedad') or listado.tipo_propiedad or 'propiedad')
+    tipo_lower = tipo.lower()
+    masculine_types = ['departamento', 'depto', 'apartamento', 'terreno', 'lote', 'local', 'duplex', 'dúplex', 'ph']
+    feminine_types = ['casa', 'propiedad', 'oficina', 'unidad', 'quinta']
+    article = 'este' if any(x in tipo_lower for x in masculine_types) else 'esta'
+    if any(x in tipo_lower for x in feminine_types):
+        article = 'esta'
+    ciudad = str(datos.get('ciudad') or listado.ciudad or '').strip()
+    operacion = str(datos.get('operacion') or 'venta').strip()
+    rec = _format_count(datos.get('recamaras') or datos.get('habitaciones'), 'recámara', 'recámaras')
+    banos = _format_count(datos.get('banos') or datos.get('bathrooms'), 'baño', 'baños')
+    sup = str(datos.get('superficieCubierta') or datos.get('superficieConstruida') or datos.get('metros') or '').strip()
+
+    features = [x for x in [rec, banos, f"{sup} metros cuadrados cubiertos" if sup else ''] if x]
+    features_txt = ', '.join(features)
+    variant = int(time.time()) % 3
+
+    if variant == 0:
+        return (
+            f"Conocé {article} {tipo} en {operacion} en {ciudad}. "
+            f"{features_txt + '. ' if features_txt else ''}"
+            f"Una propuesta pensada para vivir cómodo, con buena distribución y potencial de valorización. "
+            f"Precio {price_voice}. Coordiná una visita y descubrí si es la oportunidad que estabas buscando."
+        )
+
+    if variant == 1:
+        return (
+            f"{article.capitalize()} {tipo} en {ciudad} combina ubicación, funcionalidad y una excelente oportunidad comercial. "
+            f"{features_txt + '. ' if features_txt else ''}"
+            f"Ideal para quienes buscan un espacio listo para disfrutar o invertir con criterio. "
+            f"Precio {price_voice}. Escribinos para recibir más información."
+        )
+
+    return (
+        f"Si estás buscando una propiedad con buena proyección, {article} {tipo} en {ciudad} merece tu atención. "
+        f"{features_txt + '. ' if features_txt else ''}"
+        f"Una alternativa atractiva por ubicación, prestaciones y valor de mercado. "
+        f"Precio {price_voice}. Contactanos y coordinamos una visita."
+    )
+
+
+def _sanitize_video_script(text, price_voice):
+    cleaned = str(text or '')
+    # Reemplaza frases de precio con abreviaturas o símbolos por una versión hablable única.
+    cleaned = re.sub(
+        r'precio\s*[:\-]?\s*(?:usd|ars|mxn|clp|cop|eur|us\$|\$)?\s*[\d\.,]+\s*(?:usd|ars|mxn|clp|cop|eur|dólares|dolares|pesos|euros)?',
+        f'Precio {price_voice}',
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r'\b1\s+baños\b', 'un baño', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\b1\s+baño\b', 'un baño', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\buna\s+baño\b', 'un baño', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\b1\s+recámaras\b', 'una recámara', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\b1\s+recámara\b', 'una recámara', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\b1\s+habitaciones\b', 'una habitación', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\b1\s+habitación\b', 'una habitación', cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 def generar_video_listado(listado_id):
     try:
@@ -27,13 +291,52 @@ def generar_video_listado(listado_id):
         
         # Paths
         engine_dir = os.path.join(settings.BASE_DIR, 'hyperframes_engine')
-        output_filename = f'video_{listado.id}.mp4'
+        output_filename = f"video_{listado.id}_{int(time.time())}.mp4"
         output_path = os.path.join(settings.MEDIA_ROOT, 'assets', output_filename)
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         # Temp render directory
         render_dir = os.path.join(settings.MEDIA_ROOT, 'temp_render', str(listado.id))
         os.makedirs(render_dir, exist_ok=True)
+
+        backend_url = config('BACKEND_URL', default='http://localhost:8000')
+
+        def _absolute_media_url(url):
+            if not url:
+                return ''
+            u = str(url).strip()
+            if not u:
+                return ''
+            if u.startswith('http://') or u.startswith('https://'):
+                return u
+            if u.startswith('//'):
+                return f"https:{u}"
+            if u.startswith('/'):
+                return f"{backend_url}{u}"
+            return u
+
+        def _existing_local_media_url(relative_path):
+            rel = relative_path.replace('/', os.sep)
+            full_path = os.path.join(settings.MEDIA_ROOT, rel)
+            if os.path.exists(full_path):
+                return f"{backend_url}/media/{relative_path}"
+            return ''
+
+        def _pick_local_music():
+            music_dir = os.path.join(os.path.dirname(__file__), 'musica_videos')
+            tracks = sorted(glob.glob(os.path.join(music_dir, '*.mp3')))
+            if not tracks:
+                return ''
+
+            tone = str(datos.get('tono') or '').lower()
+            if tone == 'energetico':
+                preferred = [p for p in tracks if any(k in os.path.basename(p).lower() for k in ['snapshots', 'city', 'bonita', 'indigo'])]
+            elif tone == 'lujo':
+                preferred = [p for p in tracks if any(k in os.path.basename(p).lower() for k in ['elevated', 'selfless', 'phases'])]
+            else:
+                preferred = [p for p in tracks if any(k in os.path.basename(p).lower() for k in ['butterflies', 'galanthus', 'phases'])]
+
+            return random.choice(preferred or tracks)
         
         datos = listado.datos
         
@@ -48,19 +351,20 @@ def generar_video_listado(listado_id):
         if not music_obj:
             music_obj = VideoMusic.objects.filter(activo=True).order_by('?').first()
         
-        music_url = music_obj.archivo.url if music_obj else f"{backend_url}/media/assets/music/fondo.mp3"
+        music_url = _absolute_media_url(music_obj.archivo.url) if music_obj else _existing_local_media_url('assets/music/fondo.mp3')
+        local_music_path = '' if music_url else _pick_local_music()
         
         # SFX: Swoosh
         sfx_swoosh = VideoSFX.objects.filter(tipo='swoosh', activo=True).order_by('?').first()
-        sfx_swoosh_url = sfx_swoosh.archivo.url if sfx_swoosh else f"{backend_url}/media/assets/sfx/EMP - Techno House Samples - Fx Swoosh 1.wav"
+        sfx_swoosh_url = _absolute_media_url(sfx_swoosh.archivo.url) if sfx_swoosh else _existing_local_media_url('assets/sfx/EMP - Techno House Samples - Fx Swoosh 1.wav')
         
         # SFX: Impact
         sfx_impact = VideoSFX.objects.filter(tipo='impact', activo=True).order_by('?').first()
-        sfx_impact_url = sfx_impact.archivo.url if sfx_impact else f"{backend_url}/media/assets/sfx/CBE_Impact_150_02.wav"
+        sfx_impact_url = _absolute_media_url(sfx_impact.archivo.url) if sfx_impact else _existing_local_media_url('assets/sfx/CBE_Impact_150_02.wav')
         
         # SFX: Camera
         sfx_camera = VideoSFX.objects.filter(tipo='camera', activo=True).order_by('?').first()
-        sfx_camera_url = sfx_camera.archivo.url if sfx_camera else f"{backend_url}/media/assets/sfx/CameraShot.wav"
+        sfx_camera_url = _absolute_media_url(sfx_camera.archivo.url) if sfx_camera else _existing_local_media_url('assets/sfx/CameraShot.wav')
 
         escenas = datos.get('escenas', [])
 
@@ -70,6 +374,8 @@ def generar_video_listado(listado_id):
                     return str(item.get('url')).strip()
                 if item.get('fotoUrl'):
                     return str(item.get('fotoUrl')).strip()
+                if item.get('foto_url'):
+                    return str(item.get('foto_url')).strip()
             if isinstance(item, str):
                 return item.strip()
             return ''
@@ -94,7 +400,7 @@ def generar_video_listado(listado_id):
             fotos_base.append(portada)
 
         fotos = fotos_escenas or fotos_base
-        fotos = [f for f in fotos if f]
+        fotos = [_absolute_media_url(f) for f in fotos if f]
         if not fotos:
             fotos = ["https://via.placeholder.com/1080x1920/111"]
 
@@ -103,19 +409,38 @@ def generar_video_listado(listado_id):
         audio_path = os.path.join(settings.MEDIA_ROOT, 'assets', audio_filename)
         
         tipo_video = datos.get('tipoVideo', 'reel').lower()
+        tipo_propiedad_raw = str(datos.get('tipoPropiedad') or datos.get('tipo_propiedad') or listado.tipo_propiedad or '').lower()
+        is_land = any(x in tipo_propiedad_raw for x in ['terreno', 'lote', 'lot', 'land'])
+        quality_profile = get_video_profile(tipo_video=tipo_video, is_land=is_land)
         voz_seleccionada = datos.get('voz', 'femenina').lower()
         tono_seleccionado = datos.get('tono', 'profesional')
+        visual_theme = get_visual_theme(is_land=is_land, tone=tono_seleccionado)
         contexto_adicional = datos.get('contextoAdicional', '')
         is_tour = 'tour' in tipo_video
         
         # Parámetros según el estilo
-        vo_duration = 45 if is_tour else 15 # fallback initial
+        vo_duration = 0.0
         duracion_texto = "entre 45 y 60 segundos. Describí los ambientes con detalle y de forma inmersiva" if is_tour else "unos 15-20 segundos. Sé muy dinámico y enfocado en el hook"
+        script_vo = ""
         
         try:
+            superficie_terreno = (
+                str(datos.get('superficieTerreno') or datos.get('superficieTotal') or datos.get('superficie') or '').strip()
+            )
+            moneda = str(datos.get('moneda') or listado.moneda or '').strip()
+            price_voice = _format_price_for_voice(listado.precio, moneda)
+
             # SI EL USUARIO EDITÓ EL GUION EN EL PASO 5, USAR ESO Y NO REGENERAR
-            if escenas and isinstance(escenas, list) and len(escenas) > 0:
-                script_vo = " ".join([str(esc.get('texto', '')).strip() for esc in escenas if isinstance(esc, dict) and str(esc.get('texto', '')).strip()])
+            if is_land:
+                dim_text = f"Cuenta con una superficie aproximada de {superficie_terreno} metros cuadrados. " if superficie_terreno else ""
+                script_vo = (
+                    f"Presentamos este terreno en {listado.ciudad}, una excelente oportunidad de inversión. "
+                    f"{dim_text}"
+                    f"Ideal para desarrollo residencial o comercial, con gran potencial de valorización. "
+                    f"Precio: {price_voice}. Contactanos para más información y coordinar una visita."
+                )
+            elif escenas and isinstance(escenas, list) and len(escenas) > 0:
+                script_vo = _build_property_script(datos, listado, price_voice)
             else:
                 prompt_vo = f"""Escribí un guion persuasivo para un video sobre esta propiedad.
 Tipo: {listado.tipo_propiedad} en {listado.ciudad}
@@ -130,14 +455,20 @@ No incluyas preámbulos, solo el texto en español neutro."""
                 
                 script_vo = smart_call(prompt_vo, agente=listado.agente)
                 if not script_vo:
-                    script_vo = f"Descubre esta increíble {listado.tipo_propiedad} en {listado.ciudad}. Una oportunidad única por solo {listado.precio}. Contáctanos hoy mismo para más información."
+                    script_vo = _build_property_script(datos, listado, price_voice)
 
             if script_vo:
-                script_vo = script_vo.replace('**', '').replace('"', '').strip()
+                script_vo = _sanitize_video_script(script_vo, price_voice)
+                script_vo = _prepare_tts_text(script_vo, is_tour=is_tour)
                 audio_bytes = call_elevenlabs_api(script_vo, agente=listado.agente, voz=voz_seleccionada)
+                if not audio_bytes:
+                    audio_bytes = _call_elevenlabs_direct(script_vo, voz=voz_seleccionada)
                 if audio_bytes:
                     with open(audio_path, 'wb') as f_audio:
                         f_audio.write(audio_bytes)
+
+                    # Fallback duration if Whisper/ffprobe is unavailable; prevents a 0s VO clip.
+                    vo_duration = max(2.0, len(script_vo.split()) / 2.6)
                     
                     # Transcribe for word-level timing using Local Whisper
                     try:
@@ -179,15 +510,24 @@ No incluyas preámbulos, solo el texto en español neutro."""
         except Exception as e:
             logging.error(f"Voiceover/Transcription failed: {e}")
 
+        ffmpeg_bin_dir = _detect_ffmpeg_bin_dir()
+
         # --- VIDEO COMPOSITION LOGIC ---
-        scene_duration = 3.8 if is_tour else 1.8
-        first_overlap = 0.8
+        target_min_duration = quality_profile['min_duration']
+
+        if is_tour:
+            scene_duration = max(quality_profile['scene_min'], (target_min_duration - 2.0) / max(1, len(fotos)))
+            first_overlap = quality_profile['first_overlap']
+        else:
+            scene_duration = max(quality_profile['scene_min'], (target_min_duration - 2.0) / max(1, len(fotos)))
+            first_overlap = quality_profile['first_overlap']
+
         if len(fotos) <= 1:
             visual_duration = scene_duration + 2
         else:
             visual_duration = (scene_duration + first_overlap) + ((len(fotos) - 1) * scene_duration)
 
-        total_duration = max(vo_duration + 2.0, visual_duration + 1.0)
+        total_duration = max(vo_duration + 2.0, visual_duration + 1.0, target_min_duration)
         total_duration = max(10.0, total_duration)
         cta_start = max(1.5, total_duration - 3.5)
         
@@ -210,39 +550,193 @@ No incluyas preámbulos, solo el texto en español neutro."""
                 duration = scene_duration
                 track_index = 6
 
+            if i == len(fotos) - 1:
+                duration = max(duration, total_duration - start)
+
             start_str = f"{start:.3f}".rstrip('0').rstrip('.')
             duration_str = f"{duration:.3f}".rstrip('0').rstrip('.')
             images_html += f'<img id="img{i}" class="scene-img clip" data-start="{start_str}" data-duration="{duration_str}" data-track-index="{track_index}" src="{url}" />\n'
             ken_burns_js += f'tl.fromTo("#img{i}", {{ scale: 1.000 }}, {{ scale: 1.03, duration: {duration_str}, ease: "none" }}, {start_str});\n'
 
-            if i > 0:
+            if i > 0 and sfx_camera_url:
                 sfx_camera_html += f'<audio class="clip" data-start="{start_str}" data-duration="1" data-track-index="2" data-volume="0.65" src="{sfx_camera_url}"></audio>\n'
                 cut_times.append(start_str)
 
         # Build Captions
         captions_html = ""
         words_js = ""
+        if script_vo:
+            token_list = [w for w in re.split(r'\s+', script_vo.replace('\n', ' ').strip()) if w]
+            chunk_size = int(quality_profile['caption_chunk_size'])
+            chunk_idx = 0
+            start_base = 0.9
+            usable = max(8.0, total_duration - 2.2)
+            total_chunks = max(1, (len(token_list) + chunk_size - 1) // chunk_size)
+            per_chunk = max(0.85, usable / total_chunks)
+
+            for i in range(0, len(token_list), chunk_size):
+                chunk = token_list[i:i + chunk_size]
+                caption_text = ' '.join(chunk).upper().strip()
+                if not caption_text:
+                    continue
+
+                extra_class = ""
+                if any(x in caption_text for x in ["PESOS", "$", "USD", "DÓLARES"]):
+                    extra_class = "price"
+                elif len(caption_text) > 22:
+                    extra_class = "gold"
+
+                start_t = start_base + (chunk_idx * per_chunk)
+                end_t = min(total_duration - 0.8, start_t + per_chunk * 0.92)
+                if end_t <= start_t:
+                    break
+
+                captions_html += f'<div id="cg-{chunk_idx}" class="cap-word"><div class="cap-inner"><span class="cap-text {extra_class}">{caption_text}</span></div></div>\n'
+                words_js += f'[{chunk_idx}, {start_t:.3f}, {end_t:.3f}],\n'
+                chunk_idx += 1
+
         transcript_path = audio_path.replace('.mp3', '.json')
-        if os.path.exists(transcript_path):
+        if not words_js and os.path.exists(transcript_path):
             with open(transcript_path, 'r', encoding='utf-8') as f_trans:
                 words = json.load(f_trans)
-                for i, w in enumerate(words):
-                    word_text = str(w['word']).strip().upper()
-                    if not word_text:
+            chunk_size = 4
+            chunk_idx = 0
+            i = 0
+            while i < len(words):
+                chunk = words[i:i + chunk_size]
+                tokens = []
+                starts = []
+                ends = []
+                for w in chunk:
+                    t = str(w.get('word', '')).strip()
+                    if not t:
                         continue
+                    tokens.append(t)
+                    starts.append(float(w.get('start', 0.0)))
+                    ends.append(float(w.get('end', 0.0)))
+
+                if not tokens:
+                    i += chunk_size
+                    continue
+
+                caption_text = ' '.join(tokens).upper()
+                extra_class = ""
+                if any(x in caption_text for x in ["PESOS", "$", "USD"]):
+                    extra_class = "price"
+                elif len(caption_text) > 22:
+                    extra_class = "gold"
+
+                start_t = max(0.0, min(starts) + 0.45)
+                end_t = max(start_t + float(quality_profile['caption_min_duration']), max(ends) + 0.7)
+
+                captions_html += f'<div id="cg-{chunk_idx}" class="cap-word"><div class="cap-inner"><span class="cap-text {extra_class}">{caption_text}</span></div></div>\n'
+                words_js += f'[{chunk_idx}, {start_t:.3f}, {end_t:.3f}],\n'
+                chunk_idx += 1
+                i += chunk_size
+
+        if not words_js and isinstance(escenas, list) and escenas:
+            phrase_idx = 0
+            t = 0.8
+            usable_duration = max(6.0, total_duration - 2.0)
+            scene_slot = usable_duration / max(1, len(escenas))
+            for escena in escenas:
+                if not isinstance(escena, dict):
+                    continue
+                raw_text = str(escena.get('texto', '')).strip()
+                if not raw_text:
+                    continue
+                words = [w for w in raw_text.replace('\n', ' ').split(' ') if w.strip()]
+                if not words:
+                    continue
+                per_word = max(0.32, min(0.75, scene_slot / max(2, len(words))))
+                scene_end = min(total_duration - 0.8, t + scene_slot)
+                for token in words[:14]:
+                    clean = token.strip()
+                    if not clean:
+                        continue
+                    if t + per_word > scene_end:
+                        break
+                    upper = clean.upper()
                     extra_class = ""
-                    if any(x in word_text for x in ["PESOS", "$", "USD"]): extra_class = "price"
-                    elif len(word_text) > 8: extra_class = "gold"
+                    if any(x in upper for x in ["PESOS", "$", "USD"]):
+                        extra_class = "price"
+                    elif len(upper) > 8:
+                        extra_class = "gold"
+                    captions_html += f'<div id="cg-{phrase_idx}" class="cap-word"><div class="cap-inner"><span class="cap-text {extra_class}">{upper}</span></div></div>\n'
+                    words_js += f'[{phrase_idx}, {t:.3f}, {(t + per_word):.3f}],\n'
+                    t += per_word
+                    phrase_idx += 1
+                t = max(t + 0.18, scene_end)
 
-                    captions_html += f'<div id="cg-{i}" class="cap-word"><div class="cap-inner"><span class="cap-text {extra_class}">{word_text}</span></div></div>\n'
-                    word_start = max(0.0, float(w["start"]) + 0.5)
-                    word_end = max(word_start + 0.04, float(w["end"]) + 0.5)
-                    words_js += f'[{i}, {word_start:.3f}, {word_end:.3f}],\n'
-
+        has_voiceover_file = os.path.exists(audio_path)
         local_audio_name = os.path.basename(audio_path)
         render_audio_path = os.path.join(render_dir, local_audio_name)
-        if os.path.exists(audio_path):
+        if has_voiceover_file:
             shutil.copy2(audio_path, render_audio_path)
+
+        # Music fallback local: ensures audible track in local/dev
+        effective_music_url = music_url
+        if not effective_music_url and local_music_path:
+            local_music_name = f"music_{listado.id}_{int(time.time())}.mp3"
+            local_music_render_path = os.path.join(render_dir, local_music_name)
+            try:
+                shutil.copy2(local_music_path, local_music_render_path)
+                effective_music_url = f"./{local_music_name}"
+            except Exception as e:
+                logging.error(f"No se pudo copiar musica local: {e}")
+
+        if not effective_music_url:
+            ffmpeg_exe = os.path.join(ffmpeg_bin_dir, 'ffmpeg.exe') if ffmpeg_bin_dir else 'ffmpeg'
+            fallback_music = os.path.join(render_dir, 'fallback_music.mp3')
+            try:
+                subprocess.run(
+                    [
+                        ffmpeg_exe,
+                        '-y',
+                        '-f', 'lavfi',
+                        '-i', f'sine=frequency=196:sample_rate=44100:duration={max(10.0, total_duration):.2f}',
+                        '-filter:a', 'volume=0.08',
+                        '-c:a', 'libmp3lame',
+                        fallback_music,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=90,
+                )
+                if os.path.exists(fallback_music):
+                    effective_music_url = './fallback_music.mp3'
+            except Exception:
+                effective_music_url = ''
+
+        music_html = ''
+        if effective_music_url:
+            music_html = (
+                f'<audio id="audio-music" class="clip" data-start="0" '
+                f'data-duration="{f"{total_duration:.3f}".rstrip("0").rstrip(".")}" '
+                f'data-track-index="0" data-volume="{quality_profile["music_volume"]}" src="{effective_music_url}"></audio>'
+            )
+
+        vo_html = ''
+        if has_voiceover_file:
+            vo_html = (
+                f'<audio id="audio-vo" class="clip" data-start="0.5" '
+                f'data-duration="{f"{vo_duration:.3f}".rstrip("0").rstrip(".")}" '
+                f'data-track-index="1" data-volume="1.0" src="./{local_audio_name}"></audio>'
+            )
+
+        sfx_swoosh_html = ''
+        if sfx_swoosh_url:
+            sfx_swoosh_html = (
+                f'<audio id="sfx-swoosh1" class="clip" data-start="0" data-duration="3" data-track-index="4" data-volume="{quality_profile["sfx_volume"]}" src="{sfx_swoosh_url}"></audio>'
+                f'<audio id="sfx-swoosh2" class="clip" data-start="{f"{cta_start:.3f}".rstrip("0").rstrip(".")}" data-duration="3" data-track-index="4" data-volume="{quality_profile["sfx_volume"]}" src="{sfx_swoosh_url}"></audio>'
+            )
+
+        sfx_impact_html = ''
+        if sfx_impact_url:
+            sfx_impact_html = (
+                f'<audio id="sfx-impact" class="clip" data-start="{f"{cta_start:.3f}".rstrip("0").rstrip(".")}" data-duration="2" data-track-index="5" data-volume="{quality_profile["sfx_volume"]}" src="{sfx_impact_url}"></audio>'
+            )
 
         # --- FILL TEMPLATE ---
         template_path = os.path.join(engine_dir, 'template_index.html')
@@ -252,9 +746,10 @@ No incluyas preámbulos, solo el texto en español neutro."""
         replacements = {
             '{{ duration }}': f"{total_duration:.3f}".rstrip('0').rstrip('.'),
             '{{ images_html }}': images_html,
-            '{{ music_url }}': music_url,
-            '{{ vo_url }}': f"./{local_audio_name}",
-            '{{ vo_duration }}': f"{vo_duration:.3f}".rstrip('0').rstrip('.'),
+            '{{ music_html }}': music_html,
+            '{{ vo_html }}': vo_html,
+            '{{ sfx_swoosh_html }}': sfx_swoosh_html,
+            '{{ sfx_impact_html }}': sfx_impact_html,
             '{{ sfx_swoosh_url }}': sfx_swoosh_url,
             '{{ sfx_impact_url }}': sfx_impact_url,
             '{{ cta_start }}': f"{cta_start:.3f}".rstrip('0').rstrip('.'),
@@ -262,10 +757,30 @@ No incluyas preámbulos, solo el texto en español neutro."""
             '{{ captions_html }}': captions_html,
             '{{ price }}': listado.precio,
             '{{ location }}': f"{listado.ciudad}",
+            '{{ contact_cta }}': 'Escribinos para coordinar visita',
             '{{ ken_burns_js }}': ken_burns_js,
             '{{ cut_times }}': ",".join(cut_times),
             '{{ words_js }}': words_js
         }
+
+        agent_name = str(datos.get('agenteNombre') or datos.get('agente_nombre') or '').strip()
+        agent_phone = str(datos.get('agenteTelefono') or datos.get('agente_telefono') or '').strip()
+        if agent_phone:
+            replacements['{{ contact_cta }}'] = f"Contacto: {agent_phone}"
+        elif agent_name:
+            replacements['{{ contact_cta }}'] = f"Asesor: {agent_name}"
+
+        replacements.update({
+            '{{ caption_bg }}': visual_theme['caption_bg'],
+            '{{ caption_primary }}': visual_theme['caption_primary'],
+            '{{ caption_accent }}': visual_theme['caption_accent'],
+            '{{ caption_stroke }}': visual_theme['caption_stroke'],
+            '{{ cta_border }}': visual_theme['cta_border'],
+            '{{ cta_accent }}': visual_theme['cta_accent'],
+            '{{ caption_top }}': visual_theme['caption_top'],
+            '{{ caption_size }}': visual_theme['caption_size'],
+            '{{ cta_top }}': visual_theme['cta_top'],
+        })
         
         for k, v in replacements.items():
             html_content = html_content.replace(k, v)
@@ -278,21 +793,39 @@ No incluyas preámbulos, solo el texto en español neutro."""
         # --- RENDER ---
         render_cmd = [
             "npx.cmd" if os.name == 'nt' else "npx",
+            "-y",
             "hyperframes",
             "render",
             ".", # Render the current (temp) directory
             "--output", output_path,
             "--quality", config('HYPERFRAMES_QUALITY', default='high')
         ]
-        
-        process = subprocess.run(
-            render_cmd,
-            cwd=render_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            shell=True if os.name == 'nt' else False
-        )
+
+        render_timeout_seconds = int(config('HYPERFRAMES_RENDER_TIMEOUT', default=420))
+
+        render_env = os.environ.copy()
+        if ffmpeg_bin_dir and os.path.isdir(ffmpeg_bin_dir):
+            render_env['PATH'] = ffmpeg_bin_dir + os.pathsep + render_env.get('PATH', '')
+
+        try:
+            process = subprocess.run(
+                render_cmd,
+                cwd=render_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                shell=True if os.name == 'nt' else False,
+                timeout=render_timeout_seconds,
+                env=render_env,
+            )
+        except subprocess.TimeoutExpired as e:
+            listado.video_status = 'error'
+            listado.save(update_fields=['video_status'])
+            logging.error(
+                f"Render timeout after {render_timeout_seconds}s for listado {listado.id}. "
+                f"stdout={str(e.stdout)[:2000]} stderr={str(e.stderr)[:2000]}"
+            )
+            return False
 
         # Cleanup
         try:
@@ -304,13 +837,16 @@ No incluyas preámbulos, solo el texto en español neutro."""
 
         if process.returncode == 0:
             try:
-                video_url = AlmacenamientoCloudinary.guardar_video(
-                    output_path,
-                    user_id=listado.agente.id,
-                    listado_id=listado.id,
-                )
-                if video_url:
-                    listado.video_url = video_url
+                if _cloudinary_ready():
+                    video_url = AlmacenamientoCloudinary.guardar_video(
+                        output_path,
+                        user_id=listado.agente.id,
+                        listado_id=listado.id,
+                    )
+                    if video_url:
+                        listado.video_url = video_url
+                    else:
+                        listado.video_url = f"/media/assets/{output_filename}"
                 else:
                     listado.video_url = f"/media/assets/{output_filename}"
                     

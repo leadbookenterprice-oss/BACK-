@@ -207,8 +207,8 @@ CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://dash-admi
 # Celery Configuration
 CELERY_BROKER_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
 CELERY_RESULT_BACKEND = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
-# En local sin Redis, las tasks se ejecutan en línea (síncrono)
-CELERY_TASK_ALWAYS_EAGER = config('CELERY_TASK_ALWAYS_EAGER', default=True, cast=bool)
+# En local sin Redis puede activarse con CELERY_TASK_ALWAYS_EAGER=True.
+CELERY_TASK_ALWAYS_EAGER = config('CELERY_TASK_ALWAYS_EAGER', default=DEBUG, cast=bool)
 CELERY_TASK_EAGER_PROPAGATES = True
 
 # Cache Configuration — usa Redis si está disponible, sino memoria local

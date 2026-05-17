@@ -242,6 +242,14 @@ class Listado(models.Model):
 
     def __str__(self): return f"{self.titulo} — {self.agente.nombre}"
 
+    @property
+    def datos(self):
+        return self.datos_extra if self.datos_extra is not None else {}
+
+    @datos.setter
+    def datos(self, value):
+        self.datos_extra = value or {}
+
     class Meta:
         ordering = ['-creado_en']
         indexes = [

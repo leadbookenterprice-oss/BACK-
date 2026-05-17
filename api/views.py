@@ -44,7 +44,7 @@ def actualizar_resultados_listado(listado, tipo, resultado):
         listado.datos['resultados'] = {}
     
     listado.datos['resultados'][tipo] = resultado
-    listado.save(update_fields=['datos'])
+    listado.save(update_fields=['datos_extra'])
 
 LIMITES_PLAN = {
     'free':     {'listados_mes': 10},
@@ -251,6 +251,8 @@ def generar_guion(request):
     data = request.data
     tipo_video = data.get('tipoVideo', 'reel')
     tipo = data.get('tipoPropiedad', 'Propiedad')
+    tipo_lower = str(tipo).lower()
+    is_land = any(x in tipo_lower for x in ['terreno', 'lote', 'lot', 'land'])
     ciudad = data.get('ciudad', '')
     operacion = data.get('operacion', 'Venta')
     moneda = data.get('moneda', 'USD')
@@ -287,16 +289,27 @@ def generar_guion(request):
         palabras_por_escena = "25-38 palabras" if tipo_video == 'reel' else "50-75 palabras"
         palabras_total = "100-150 palabras" if tipo_video == 'reel' else "200-300 palabras"
         contexto_extra = f"\nENFOQUE ADICIONAL DEL CLIENTE: {contexto_adicional}" if contexto_adicional else ''
-        prompt = f"""Sos un copywriter inmobiliario experto.
-Generá un guión PROFESIONAL para video tipo {tipo_video}.
-
-PROPIEDAD:
+        if is_land:
+            details_block = f"""PROPIEDAD:
+- Tipo: {tipo}
+- Operación: {operacion}
+- Ubicación: {ciudad}
+- Precio: {moneda} {precio}
+- Superficie: {superficie or 'No informada'}
+- Amenidades/Entorno: {', '.join(data.get('amenidades', [])) if isinstance(data.get('amenidades', []), list) and data.get('amenidades', []) else 'No especificado'}"""
+        else:
+            details_block = f"""PROPIEDAD:
 - Tipo: {tipo}
 - Operación: {operacion}
 - Ubicación: {ciudad}
 - Precio: {moneda} {precio}
 - Recámaras: {recamaras}
-- Baños: {banos}
+- Baños: {banos}"""
+
+        prompt = f"""Sos un copywriter inmobiliario experto.
+Generá un guión PROFESIONAL para video tipo {tipo_video}.
+
+{details_block}
 
 ESTILO DE NARRACIÓN:
 - Tono: {tono_instrucciones}
@@ -328,31 +341,49 @@ RESPONDE SOLO JSON, SIN PREAMBLE."""
     # Fallback local — siempre 4 escenas con rangos exactos de palabras
     if tipo_video == 'tour':
         # Tour narrado: 6 escenas arquitectónicas (porta el estilo de LEADBOOK UP)
-        escenas_default = [
-            {"nombre": "Fachada", "icono": "🏠",
-             "texto": f"Bienvenidos a esta {tipo} en {operacion} en {ciudad}. Una oportunidad única en el mercado inmobiliario actual. Precio: {moneda} {precio}."},
-            {"nombre": "Sala", "icono": "🛋️",
-             "texto": "Amplios espacios interiores diseñados para el confort familiar. Luz natural, alturas generosas y un diseño que invita a disfrutar cada rincón."},
-            {"nombre": "Cocina", "icono": "🍳",
-             "texto": "Cocina funcional con terminaciones de primera calidad, espacios de guardado y distribución inteligente para el uso diario."},
-            {"nombre": "Recámara", "icono": "🛏️",
-             "texto": f"{'Con ' + str(recamaras) + ' recámaras y ' + str(banos) + ' baños.' if recamaras else 'Dormitorios luminosos para el descanso ideal.'} Acabados de primera línea{(', superficie cubierta de ' + superficie + ' m²') if superficie else ''}."},
-            {"nombre": "Exteriores", "icono": "🌿",
-             "texto": f"Espacios exteriores que complementan una vida plena en {ciudad}. Zonas de esparcimiento, acceso a servicios y conectividad inmejorable."},
-            {"nombre": "Cierre", "icono": "📞",
-             "texto": f"Precio: {moneda} {precio}. No dejes que alguien más tome esta decisión. Contactanos hoy mismo y agendá tu visita personalizada. ¡Te esperamos!"}
-        ]
+        if is_land:
+            escenas_default = [
+                {"nombre": "Apertura", "icono": "🌍", "texto": f"Descubrí este {tipo} en {operacion} en {ciudad}. Una oportunidad estratégica para construir, invertir o desarrollar."},
+                {"nombre": "Ubicación", "icono": "📍", "texto": f"Ubicación destacada en {ciudad}, con excelente conectividad y acceso a servicios clave para potenciar el valor del proyecto."},
+                {"nombre": "Superficie", "icono": "📐", "texto": f"{('Superficie aproximada de ' + superficie + ' m². ') if superficie else ''}Espacio ideal para vivienda, renta o desarrollo inmobiliario de mediano plazo."},
+                {"nombre": "Entorno", "icono": "🌿", "texto": "Zona con proyección y crecimiento sostenido. Entorno aprovechable para uso residencial, comercial o mixto según normativa local."},
+                {"nombre": "Potencial", "icono": "🚀", "texto": "Excelente opción para quien busca asegurar plusvalía y entrar en una operación con alto potencial de valorización futura."},
+                {"nombre": "Cierre", "icono": "📞", "texto": f"Precio: {moneda} {precio}. Escribinos y coordinamos una visita para evaluar el terreno en detalle."},
+            ]
+        else:
+            escenas_default = [
+                {"nombre": "Fachada", "icono": "🏠",
+                 "texto": f"Bienvenidos a esta {tipo} en {operacion} en {ciudad}. Una oportunidad única en el mercado inmobiliario actual. Precio: {moneda} {precio}."},
+                {"nombre": "Sala", "icono": "🛋️",
+                 "texto": "Amplios espacios interiores diseñados para el confort familiar. Luz natural, alturas generosas y un diseño que invita a disfrutar cada rincón."},
+                {"nombre": "Cocina", "icono": "🍳",
+                 "texto": "Cocina funcional con terminaciones de primera calidad, espacios de guardado y distribución inteligente para el uso diario."},
+                {"nombre": "Recámara", "icono": "🛏️",
+                 "texto": f"{'Con ' + str(recamaras) + ' recámaras y ' + str(banos) + ' baños.' if recamaras else 'Dormitorios luminosos para el descanso ideal.'} Acabados de primera línea{(', superficie cubierta de ' + superficie + ' m²') if superficie else ''}."},
+                {"nombre": "Exteriores", "icono": "🌿",
+                 "texto": f"Espacios exteriores que complementan una vida plena en {ciudad}. Zonas de esparcimiento, acceso a servicios y conectividad inmejorable."},
+                {"nombre": "Cierre", "icono": "📞",
+                 "texto": f"Precio: {moneda} {precio}. No dejes que alguien más tome esta decisión. Contactanos hoy mismo y agendá tu visita personalizada. ¡Te esperamos!"}
+            ]
     else:  # reel rápido: 100-150 palabras totales (25-38 palabras por escena)
-        escenas_default = [
-            {"nombre": "Apertura", "icono": "⚡",
-             "texto": f"✨ {tipo} en {operacion} en {ciudad}. Precio: {moneda} {precio}. Una oportunidad única en el mercado inmobiliario actual. No te la pierdas."},
-            {"nombre": "Características", "icono": "🏠",
-             "texto": f"{recamaras} recámaras · {banos} baños{(' · ' + superficie + ' m²') if superficie else ''}. Espacios amplios, luminosos y diseñados para el máximo confort. Acabados de primera categoría."},
-            {"nombre": "Ubicación", "icono": "📍",
-             "texto": f"Estratégicamente ubicado en {ciudad}. Acceso a los mejores servicios, comercios, transporte y zonas de esparcimiento. Todo lo que necesitás, cerca de vos."},
-            {"nombre": "Contacto", "icono": "📞",
-             "texto": f"¡El hogar que soñabas está en {ciudad}! Contactanos ahora mismo, agendá tu visita y hacelo tuyo antes de que sea tarde."}
-        ]
+        if is_land:
+            escenas_default = [
+                {"nombre": "Apertura", "icono": "⚡", "texto": f"✨ {tipo} en {operacion} en {ciudad}. Precio: {moneda} {precio}. Oportunidad ideal para invertir o desarrollar."},
+                {"nombre": "Potencial", "icono": "📐", "texto": f"{('Superficie: ' + superficie + ' m². ') if superficie else ''}Terreno con gran potencial para proyecto residencial, comercial o mixto según tu estrategia."},
+                {"nombre": "Ubicación", "icono": "📍", "texto": f"Ubicación estratégica en {ciudad}, con acceso a servicios, conectividad y entorno en crecimiento."},
+                {"nombre": "Contacto", "icono": "📞", "texto": f"Si buscás una oportunidad real de valorización, este terreno es para vos. Escribinos y coordinamos visita."},
+            ]
+        else:
+            escenas_default = [
+                {"nombre": "Apertura", "icono": "⚡",
+                 "texto": f"✨ {tipo} en {operacion} en {ciudad}. Precio: {moneda} {precio}. Una oportunidad única en el mercado inmobiliario actual. No te la pierdas."},
+                {"nombre": "Características", "icono": "🏠",
+                 "texto": f"{recamaras} recámaras · {banos} baños{(' · ' + superficie + ' m²') if superficie else ''}. Espacios amplios, luminosos y diseñados para el máximo confort. Acabados de primera categoría."},
+                {"nombre": "Ubicación", "icono": "📍",
+                 "texto": f"Estratégicamente ubicado en {ciudad}. Acceso a los mejores servicios, comercios, transporte y zonas de esparcimiento. Todo lo que necesitás, cerca de vos."},
+                {"nombre": "Contacto", "icono": "📞",
+                 "texto": f"¡El hogar que soñabas está en {ciudad}! Contactanos ahora mismo, agendá tu visita y hacelo tuyo antes de que sea tarde."}
+            ]
 
 
     # Parsear respuesta de IA si vino bien
@@ -895,7 +926,7 @@ class ListadosView(APIView):
             tipo_propiedad=tipo_propiedad,
             ciudad=ciudad,
             precio=precio,
-            datos=payload
+            datos_extra=payload
         )
         
         incrementar_uso(user, 'property')
@@ -1054,11 +1085,20 @@ def generar_video_task(listado_id):
 def generar_video(request, pk):
     """Dispara la generación de video asincronamente"""
     try:
+        from django.conf import settings
+        import threading
         listado = Listado.objects.get(id=pk, agente=request.user)
         listado.video_status = 'queued'
-        listado.save(update_fields=['video_status'])
-        # Dispara tarea Celery
-        generar_video_task.delay(pk)
+        listado.video_url = None
+        listado.save(update_fields=['video_status', 'video_url'])
+
+        # En local/eager evitamos bloquear el request (Daphne timeout warnings)
+        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            threading.Thread(target=generar_video_task, args=(pk,), daemon=True).start()
+        else:
+            # Dispara tarea Celery real
+            generar_video_task.delay(pk)
+
         return Response({
             "status": "queued",
             "mensaje": "El video se está generando en segundo plano",

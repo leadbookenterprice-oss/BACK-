@@ -5,8 +5,20 @@
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;900&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --caption-bg: {{ caption_bg }};
+      --caption-primary: {{ caption_primary }};
+      --caption-accent: {{ caption_accent }};
+      --caption-stroke: {{ caption_stroke }};
+      --cta-border: {{ cta_border }};
+      --cta-accent: {{ cta_accent }};
+      --caption-top: {{ caption_top }};
+      --caption-size: {{ caption_size }};
+      --cta-top: {{ cta_top }};
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
@@ -44,7 +56,7 @@
       position: absolute;
       left: 0;
       width: 1080px;
-      top: 1249px;
+      top: var(--caption-top);
       display: flex;
       justify-content: center;
       align-items: center;
@@ -53,24 +65,26 @@
       visibility: hidden;
     }
     .cap-inner {
-      background: rgba(0, 0, 0, 0.55);
-      border-radius: 8px;
-      padding: 10px 26px;
+      background: var(--caption-bg);
+      border-radius: 12px;
+      padding: 12px 28px;
       max-width: 920px;
+      backdrop-filter: blur(3px);
     }
     .cap-text {
-      font-family: "Outfit", sans-serif;
-      font-weight: 900;
-      font-size: 80px;
-      color: #00E5FF;
-      text-shadow: 3px 3px 14px rgba(0, 0, 0, 0.95);
+      font-family: "Manrope", "Outfit", sans-serif;
+      font-weight: 800;
+      font-size: var(--caption-size);
+      color: var(--caption-primary);
+      text-shadow: 0 2px 18px rgba(0, 0, 0, 0.95);
+      -webkit-text-stroke: 1px var(--caption-stroke);
       text-align: center;
       line-height: 1.1;
       text-transform: uppercase;
       display: block;
     }
-    .cap-text.gold  { color: #FFD700; }
-    .cap-text.price { color: #FFD700; font-size: 88px; }
+    .cap-text.gold  { color: var(--caption-accent); }
+    .cap-text.price { color: var(--caption-accent); font-size: 88px; }
     .cap-text.white { color: #ffffff; }
 
     /* ── CTA OVERLAY ─────────────────────────────────────────── */
@@ -78,43 +92,58 @@
       position: absolute;
       left: 0;
       width: 1080px;
-      top: 1450px;
+      top: var(--cta-top);
       display: flex;
       justify-content: center;
       z-index: 70;
       opacity: 0;
     }
     .cta-card {
-      background: rgba(0, 0, 0, 0.4);
-      border: 2px solid #FFD700;
-      border-radius: 18px;
-      padding: 28px 56px;
+      background: linear-gradient(135deg, rgba(10, 14, 26, 0.78), rgba(18, 26, 46, 0.72));
+      border: 2px solid var(--cta-border);
+      border-radius: 20px;
+      padding: 24px 38px;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      gap: 6px;
+      align-items: flex-start;
+      gap: 4px;
+      min-width: 720px;
+      backdrop-filter: blur(5px);
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.42);
+    }
+    .cta-head {
+      font-family: "Manrope", "Outfit", sans-serif;
+      font-weight: 700;
+      font-size: 28px;
+      color: #d7e7ff;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      opacity: 0.9;
+      margin-bottom: 4px;
     }
     .cta-price {
-      font-family: "Outfit", sans-serif;
+      font-family: "Manrope", "Outfit", sans-serif;
       font-weight: 900;
-      font-size: 86px;
-      color: #FFD700;
+      font-size: 74px;
+      color: var(--cta-border);
       text-shadow: 2px 2px 10px rgba(0, 0, 0, 0.9);
       line-height: 1.1;
     }
     .cta-location {
-      font-family: "Outfit", sans-serif;
+      font-family: "Manrope", "Outfit", sans-serif;
       font-weight: 600;
-      font-size: 38px;
+      font-size: 33px;
       color: #ffffff;
       text-shadow: 1px 1px 6px rgba(0, 0, 0, 0.9);
     }
     .cta-dm {
-      font-family: "Outfit", sans-serif;
+      font-family: "Manrope", "Outfit", sans-serif;
       font-weight: 700;
-      font-size: 46px;
-      color: #00E5FF;
+      font-size: 32px;
+      color: var(--cta-accent);
       text-shadow: 2px 2px 10px rgba(0, 0, 0, 0.9);
+      margin-top: 6px;
+      letter-spacing: 0.4px;
     }
 
     #final-fade {
@@ -143,24 +172,11 @@
   <!-- ── IMAGES (slideshow) ──────────────────────────────────── -->
   {{ images_html }}
 
-  <!-- ── MUSIC ───────────────────────────────────── -->
-  <audio id="audio-music" class="clip"
-         data-start="0" data-duration="{{ duration }}"
-         data-track-index="0" data-volume="0.2"
-         src="{{ music_url }}"></audio>
-
-  <!-- ── VOICEOVER ─────────────────────── -->
-  <audio id="audio-vo" class="clip"
-         data-start="0.5" data-duration="{{ vo_duration }}"
-         data-track-index="1" data-volume="1.0"
-         src="{{ vo_url }}"></audio>
-
-  <!-- ── SFX: SWOOSH at open and CTA ───── -->
-  <audio id="sfx-swoosh1" class="clip" data-start="0" data-duration="3" data-track-index="4" data-volume="0.5" src="{{ sfx_swoosh_url }}"></audio>
-  <audio id="sfx-swoosh2" class="clip" data-start="{{ cta_start }}" data-duration="3" data-track-index="4" data-volume="0.5" src="{{ sfx_swoosh_url }}"></audio>
-
-  <!-- ── SFX: IMPACT at CTA ──────────────────── -->
-  <audio id="sfx-impact" class="clip" data-start="{{ cta_start }}" data-duration="2" data-track-index="5" data-volume="0.55" src="{{ sfx_impact_url }}"></audio>
+  <!-- ── AUDIO TRACKS ──────────────────────────── -->
+  {{ music_html }}
+  {{ vo_html }}
+  {{ sfx_swoosh_html }}
+  {{ sfx_impact_html }}
 
   <!-- ── SFX: CAMERA SHOTS at each cut ───────────────────────── -->
   {{ sfx_camera_html }}
@@ -174,9 +190,10 @@
   <!-- ── CTA OVERLAY ────────────────────────── -->
   <div id="cta-overlay">
     <div class="cta-card">
-      <div class="cta-price">🏡 {{ price }}</div>
+      <div class="cta-head">Asesor comercial</div>
+      <div class="cta-price">{{ price }}</div>
       <div class="cta-location">{{ location }}</div>
-      <div class="cta-dm">Consultar por MD ✉️</div>
+      <div class="cta-dm">{{ contact_cta }}</div>
     </div>
   </div>
 
@@ -210,7 +227,8 @@
   WORDS.forEach(function (w) {
     var id = w[0], start = w[1], end = w[2];
     var el = "#cg-" + id;
-    var dur = end - start;
+    var dur = Math.max(end - start, 0.2);
+    var outEnd = start + dur;
 
     tl.set(el, { visibility: "visible", opacity: 0 }, start);
 
@@ -224,10 +242,10 @@
       tl.set(el, { opacity: 1, scale: 1 }, start);
     }
 
-    if (dur >= 0.14) {
-      tl.to(el, { opacity: 0, scale: 0.94, duration: 0.06, ease: "power2.in" }, end - 0.06);
+    if (dur >= 0.2) {
+      tl.to(el, { opacity: 0, scale: 0.94, duration: 0.06, ease: "power2.in" }, outEnd - 0.06);
     }
-    tl.set(el, { opacity: 0, visibility: "hidden" }, end);
+    tl.set(el, { opacity: 0, visibility: "hidden" }, outEnd);
   });
 
   // ── CTA OVERLAY ─────────────────────

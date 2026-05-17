@@ -54,6 +54,7 @@ urlpatterns = [
     path('listados/<int:pk>/html/', generar_html, name='generar_html'),
     path('listados/<int:pk>/generar-video/', generar_video, name='generar_video'),
     path('listados/<int:pk>/video/', generar_video, name='generar_video_legacy'),
+    path('listados/<int:listado_id>/video-status/', video_status, name='video_status_legacy'),
     path('listados/<int:listado_id>/pdf-proxy/', proxy_pdf_view, name='pdf_proxy'),
     path('listados/<int:listado_id>/pdf-thumbnail/', proxy_pdf_thumbnail_view, name='pdf_thumbnail'),
     path('descargar-pdf/<int:listado_id>/', views.descargar_pdf, name='descargar_pdf'),

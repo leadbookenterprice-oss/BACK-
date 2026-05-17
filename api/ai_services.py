@@ -64,7 +64,7 @@ def generar_html_desde_template(context, agente):
                 datos = listado.datos or {}
                 datos['template'] = template_elegido.replace('.html', '').replace('template_', '')
                 listado.datos = datos
-                listado.save(update_fields=['datos'])
+                listado.save(update_fields=['datos_extra'])
                 print(f"[Template] Guardado template en DB: {datos['template']}")
         except Exception as e:
             print(f"[Template] Error guardando template: {e}")
@@ -365,25 +365,43 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
 @track_api_call(service='elevenlabs')
 def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
     """Genera audio MP3 usando ElevenLabs y el Pool de APIs."""
-    if agente is not None:
-        from api.pool_manager import get_api_key
-        key = get_api_key(agente, 'elevenlabs')
-        if not key:
-            print("[ERROR] No hay ElevenLabs API Key asignada para el usuario en el Pool.")
-            return None
+    fallback_env_key = getattr(settings, 'ELEVENLABS_API_KEY', '')
+
+    # En local/dev priorizamos key de entorno para evitar dependencias legacy del pool.
+    if fallback_env_key:
+        key = fallback_env_key
+    elif agente is not None:
+        try:
+            from api.pool_manager import get_api_key
+            key = get_api_key(agente, 'elevenlabs')
+        except Exception as e:
+            print(f"[WARN] Fallo pool_manager ElevenLabs ({type(e).__name__}).")
+            key = None
     else:
-        key = getattr(settings, 'ELEVENLABS_API_KEY', '')
+        key = None
 
     if not key:
         print("[ERROR] No hay ElevenLabs API Key disponible.")
         return None
 
-    # Voice selection
+    # Voice selection (con fallback robusto y configurable por .env)
+    env_male = getattr(settings, 'ELEVENLABS_VOICE_ID_MALE', '') or ''
+    env_female = getattr(settings, 'ELEVENLABS_VOICE_ID_FEMALE', '') or ''
+    default_female = "EXAVITQu4vr4xnSDxMaL"
+    default_male = "21m00Tcm4TlvDq8ikWAM"
+    legacy_male = "pNInz6obpgnuMvHLW6m8"
+
     if voz == 'masculina':
-        voice_id = "pNInz6obpgnuMvHLW6m8" # Daniel (Spanish)
+        voice_candidates = [env_male, default_male, env_female, default_female, legacy_male]
     else:
-        voice_id = "EXAVITQu4vr4xnSDxMaL" # Bella (Default Femenina)
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        voice_candidates = [env_female, default_female, env_male, default_male, legacy_male]
+
+    # dedupe conservando orden
+    filtered_candidates = []
+    for v in voice_candidates:
+        vv = (v or '').strip()
+        if vv and vv not in filtered_candidates:
+            filtered_candidates.append(vv)
 
     headers = {
         "Accept": "audio/mpeg",
@@ -401,29 +419,36 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
     }
 
     try:
-        response = requests.post(url, json=data, headers=headers)
-        if response.status_code == 200:
-            return response.content
-        else:
+        for voice_id in filtered_candidates:
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            response = requests.post(url, json=data, headers=headers, timeout=60)
+            if response.status_code == 200:
+                return response.content
+
+            # si la voz no existe en la cuenta, probamos siguiente voice_id
+            if response.status_code == 404 and 'voice_not_found' in (response.text or ''):
+                print(f"[WARN] ElevenLabs voice_id no disponible: {voice_id}. Probando fallback...")
+                continue
+
             print(f"[ERROR] ElevenLabs API failed ({response.status_code}): {response.text}")
             if agente and response.status_code in [401, 429]:
-                 from api.pool_manager import marcar_agotada
-                 marcar_agotada(agente, 'elevenlabs')
-                 # Forzar cuota al maximo para que la UI marque 100% consumido
-                 try:
-                     from api.pool_manager import get_api_key
-                     from api.models import APIKey
-                     key_str = get_api_key(agente, 'elevenlabs')
-                     if key_str:
-                         k = APIKey.objects.filter(api_key=key_str).first()
-                         if k:
-                             k.status = 'exhausted'
-                             k.requests_this_month = k.monthly_limit or 10000
-                             k.save()
-                 except Exception as e:
-                     logger.error(f"Error marcando ElevenLabs como agotada: {e}")
-                 raise Exception("Llegaste al límite mensual de tu API de Audio (ElevenLabs).")
-            return None
+                from api.pool_manager import marcar_agotada
+                marcar_agotada(agente, 'elevenlabs')
+                try:
+                    from api.pool_manager import get_api_key
+                    from api.models import APIKey
+                    key_str = get_api_key(agente, 'elevenlabs')
+                    if key_str:
+                        k = APIKey.objects.filter(api_key=key_str).first()
+                        if k:
+                            k.status = 'exhausted'
+                            k.requests_this_month = k.google_monthly_limit or 10000
+                            k.save()
+                except Exception as e:
+                    logger.error(f"Error marcando ElevenLabs como agotada: {e}")
+                raise Exception("Llegaste al límite mensual de tu API de Audio (ElevenLabs).")
+
+        return None
     except Exception as e:
         print(f"[ERROR] Exception in ElevenLabs call: {str(e)}")
         return None
