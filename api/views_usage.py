@@ -50,17 +50,68 @@ def mi_uso_apis(request):
         APIPoolService.assign_keys_to_user(user)
         quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
 
+    from api.tracking import get_uploadpost_quota, sync_uploadpost_quota_from_sql
+    get_uploadpost_quota(user)
+    quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
+
     stats = []
     for q in quotas:
+        q.maybe_reset_daily()
+        q.recalcular_limite(plan=user.plan_nombre)
+        if q.is_blocked and q.requests_today < q.user_daily_limit:
+            q.is_blocked = False
+            q.blocked_reason = None
+            q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
+
         svc_name = q.servicio.nombre
+        soft_exhaustion = svc_name in {'gemini', 'elevenlabs'}
         info = SERVICIO_MAP.get(svc_name, {
             'nombre': svc_name.capitalize(),
             'unidad': "unidades",
             'icono': "api"
         })
         
-        limite = q.user_daily_limit or 1500
-        consumido = q.requests_today
+        if svc_name == 'uploadpost':
+            q.maybe_reset_monthly()
+            q.recalcular_limite(plan=user.plan_nombre)
+            q = sync_uploadpost_quota_from_sql(user, q)
+            limite = q.user_monthly_limit
+            consumido = q.requests_this_month
+        else:
+            limite = q.user_daily_limit or 1500
+            consumido = q.requests_today
+        unlimited = svc_name == 'uploadpost' and limite is None
+        usable_statuses = ['assigned', 'available', 'exhausted'] if soft_exhaustion else ['assigned', 'available']
+        active_assignments = UserAPIAssignment.objects.filter(
+            user=user,
+            servicio=q.servicio,
+            activo=True,
+            apikey__status__in=usable_statuses,
+        ).select_related('apikey')
+        if soft_exhaustion:
+            has_usable_key = active_assignments.exists()
+            exhausted_by_key = False
+            if q.is_blocked:
+                q.is_blocked = False
+                q.blocked_reason = None
+                q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
+        else:
+            has_usable_key = any(
+                not (a.apikey.google_daily_limit and a.apikey.requests_today >= a.apikey.google_daily_limit)
+                for a in active_assignments
+            )
+            exhausted_by_key = not has_usable_key and UserAPIAssignment.objects.filter(
+                user=user,
+                servicio=q.servicio,
+                activo=True,
+                apikey__status='exhausted',
+            ).exists()
+        extras_activos = UserAPIAssignment.objects.filter(
+            user=user,
+            servicio=q.servicio,
+            activo=True,
+            is_primary=False,
+        ).count()
         
         # ElevenLabs: si es posible, consultar a la API real para mayor precisión
         # (Solo si tiene una key asignada y activa)
@@ -74,9 +125,16 @@ def mi_uso_apis(request):
                 except Exception:
                     pass
 
-        porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
-        if q.is_blocked:
+        porcentaje = 0 if unlimited else (min(100, int((consumido / limite) * 100)) if limite else 0)
+        if q.is_blocked or exhausted_by_key:
             porcentaje = 100
+            if limite:
+                consumido = max(consumido, limite)
+            if not q.is_blocked:
+                q.is_blocked = True
+                q.blocked_reason = 'API key obligatoria agotada'
+                q.requests_today = consumido
+                q.save(update_fields=['is_blocked', 'blocked_reason', 'requests_today', 'updated_at'])
             
         stats.append({
             "servicio": svc_name,
@@ -84,9 +142,12 @@ def mi_uso_apis(request):
             "icono": info['icono'],
             "consumido": consumido,
             "limite": limite,
+            "ilimitado": unlimited,
+            "limite_label": "∞" if unlimited else limite,
+            "extras_activos": extras_activos,
             "unidad": info['unidad'],
             "porcentaje": porcentaje,
-            "status": "exhausted" if q.is_blocked else "ok"
+            "status": "ok" if soft_exhaustion else ("exhausted" if q.is_blocked or exhausted_by_key else "ok")
         })
 
     return Response({
@@ -110,6 +171,9 @@ def admin_uso_global(request):
         limite = k.google_daily_limit or 1500
         consumido = k.requests_today
         porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
+        if k.status == 'exhausted':
+            porcentaje = 100
+            consumido = max(consumido, limite)
         
         resultado.append({
             "id": k.id,

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;700&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --bg: #080808; --fg: #f5f3ee; --accent: #c9a84c; }
+  body { width: 1080px; height: 1920px; background: var(--bg); font-family: 'DM Sans', sans-serif; color: var(--fg); overflow: hidden; position: relative; }
+  .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+  .overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(8,8,8,0.95) 0%, rgba(8,8,8,0.68) 38%, rgba(8,8,8,0.2) 64%, rgba(8,8,8,0.5) 100%); z-index: 2; }
+  .content { position: absolute; inset: 0; z-index: 3; padding: 80px 64px 100px; display: flex; flex-direction: column; justify-content: space-between; }
+  .top-section { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+  .logo { max-width: 240px; max-height: 96px; object-fit: contain; filter: brightness(0) invert(1); }
+  .badge { background: var(--accent); color: var(--bg); font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; letter-spacing: 3px; padding: 14px 36px; text-transform: uppercase; border-radius: 999px; }
+  .bottom-section { display: flex; flex-direction: column; gap: 24px; }
+  .title { font-family: 'Bebas Neue', sans-serif; font-size: 128px; line-height: 0.86; letter-spacing: 2px; text-transform: uppercase; color: var(--fg); text-shadow: 0 4px 30px rgba(0,0,0,0.6); }
+  .title span { color: var(--accent); }
+  .price-box { display: inline-block; align-self: flex-start; border: 2px solid var(--fg); border-radius: 14px; padding: 15px 28px; font-family: 'Space Mono', monospace; font-size: 40px; font-weight: 700; background: rgba(255,255,255,0.08); backdrop-filter: blur(10px); }
+  .stats-grid { display: flex; gap: 12px; margin-top: 20px; }
+  .stat-item { flex: 1; border: 1px solid rgba(255,255,255,0.14); border-radius: 14px; padding: 22px 16px; background: rgba(8,8,8,0.62); text-align: center; }
+  .stat-value { font-family: 'Bebas Neue', sans-serif; font-size: 46px; color: var(--accent); line-height: 1; }
+  .stat-label { font-family: 'Space Mono', monospace; font-size: 15px; letter-spacing: 2px; color: rgba(255,255,255,0.7); text-transform: uppercase; }
+  .contact-strip { margin-top: 14px; display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; border: 1px solid rgba(201,168,76,0.35); border-radius: 14px; padding: 14px 16px; background: rgba(8,8,8,0.62); }
+  .agent-box { display: flex; flex-direction: column; gap: 3px; max-width: 70%; }
+  .agent-name { font-family: 'Bebas Neue', sans-serif; font-size: 40px; letter-spacing: 1px; color: var(--accent); line-height: 1; text-transform: uppercase; }
+  .agent-role { font-family: 'Space Mono', monospace; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.68); }
+  .agent-meta { font-size: 21px; color: rgba(255,255,255,0.9); }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .qr-box img { width: 118px; height: 118px; padding: 6px; background: #fff; border-radius: 8px; }
+  .qr-box span { font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.6); }
+</style>
+</head>
+<body>
+  {% if portada_url %}<img src="{{ portada_url }}" class="bg-image" />{% endif %}
+  <div class="overlay"></div>
+  <div class="content">
+    <div class="top-section">
+      <div class="badge">{{ operacion }}</div>
+      {% if logo_url %}<div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo" /><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% else %}<div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% endif %}
+    </div>
+    <div class="bottom-section">
+      <div class="title">{{ tipoPropiedad }}<br><span>{{ ciudad }}</span></div>
+      <div class="price-box">{{ moneda }} {{ precio }}</div>
+      {% if caracteristicas %}
+      <div class="stats-grid">
+        {% for stat in caracteristicas|slice:":3" %}
+        <div class="stat-item">
+          <div class="stat-label">{{ stat.label }}</div>
+          <div class="stat-value">{{ stat.valor }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="contact-strip">
+        <div class="agent-box">
+          <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+          <div class="agent-role">{{ agente_rol|default:"Asesor Comercial" }} · {{ agencia_nombre }}</div>
+          <div class="agent-meta">{{ agente_telefono }}</div>
+        </div>
+        {% if qr_url %}
+        <div class="qr-box">
+          <img src="{{ qr_url }}" alt="QR" />
+          <span>Escaneá</span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</body>
+</html>

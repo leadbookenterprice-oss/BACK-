@@ -1,8 +1,9 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from decouple import config
+from django.utils.crypto import constant_time_compare
 
-ADMIN_KEY = config('ADMIN_KEY', default='leadbook_admin_2026')
+ADMIN_KEY = config('ADMIN_KEY', default='')
 
 class AdminDashboardConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -11,7 +12,7 @@ class AdminDashboardConsumer(AsyncWebsocketConsumer):
         params = dict(qc.split('=') for qc in query_string.split('&') if '=' in qc)
         provided_key = params.get('key', '')
 
-        if provided_key != ADMIN_KEY:
+        if not ADMIN_KEY or not provided_key or not constant_time_compare(provided_key, ADMIN_KEY):
             await self.close(code=4003)
             return
 

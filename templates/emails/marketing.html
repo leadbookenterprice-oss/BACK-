@@ -14,9 +14,9 @@
                     <tr>
                         <td align="center" style="padding: 30px 20px; background-color: #080808;">
                             {% if logo_url %}
-                                <img src="{{ logo_url }}" alt="Logo" width="140" style="display: block; filter: brightness(1);">
+                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td valign="middle"><img src="{{ logo_url }}" alt="Logo" width="42" height="42" style="display:block;width:42px;height:42px;border-radius:50%;object-fit:contain;background:#fff;padding:4px;"></td><td valign="middle" style="padding-left:12px;color:#C5A059;font-family:Helvetica,Arial,sans-serif;font-size:20px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;">{{ agenciaNombre|default:"Agencia" }}</td></tr></table>
                             {% else %}
-                                <div style="color: #C5A059; font-family: 'Helvetica', Arial, sans-serif; font-size: 24px; font-weight: bold; letter-spacing: 5px;">LEADBOOK</div>
+                                <div style="color: #C5A059; font-family: 'Helvetica', Arial, sans-serif; font-size: 24px; font-weight: bold; letter-spacing: 2px;">{{ agenciaNombre|default:"Agencia" }}</div>
                             {% endif %}
                         </td>
                     </tr>
@@ -54,9 +54,11 @@
                             <table border="0" cellpadding="0" cellspacing="0" width="100%">
                                 <tr>
                                     <td align="left">
+                                        {% if whatsapp_url or agenteEmail %}
                                         <div style="background-color: #C5A059; display: inline-block; padding: 15px 30px; border: 1px solid #080808;">
-                                            <a href="#" style="color: #ffffff; text-decoration: none; font-family: 'Helvetica', Arial, sans-serif; font-size: 12px; font-weight: bold; letter-spacing: 2px; text-transform: uppercase;">CONTACTAR AGENTE</a>
+                                            <a href="{% if whatsapp_url %}{{ whatsapp_url }}{% else %}mailto:{{ agenteEmail }}{% endif %}" style="color: #ffffff; text-decoration: none; font-family: 'Helvetica', Arial, sans-serif; font-size: 12px; font-weight: bold; letter-spacing: 2px; text-transform: uppercase;">CONTACTAR AGENTE</a>
                                         </div>
+                                        {% endif %}
                                     </td>
                                 </tr>
                             </table>
@@ -88,8 +90,10 @@
                                 <tr>
                                     <td style="font-size: 13px; color: #555;">
                                         Presentado por:<br>
-                                        <strong style="color: #080808; font-size: 15px;">{{ agenteNombre|default:"Tu Agente Leadbook" }}</strong><br>
-                                        {{ agenciaNombre|default:"" }}
+                                        <strong style="color: #080808; font-size: 15px;">{{ agenteNombre|default:"Asesor Comercial" }}</strong><br>
+                                        {{ agenteRol|default:"Asesor Comercial" }} · {{ agenciaNombre|default:"Agencia" }}<br>
+                                        {% if agenteTelefono %}WhatsApp: {% if whatsapp_url %}<a href="{{ whatsapp_url }}" style="color: #C5A059; text-decoration: none;">{{ agenteTelefonoDisplay|default:agenteTelefono }}</a>{% else %}{{ agenteTelefonoDisplay|default:agenteTelefono }}{% endif %}{% endif %}
+                                        {% if agenteEmail %}<br>Email: <a href="mailto:{{ agenteEmail }}" style="color: #C5A059; text-decoration: none;">{{ agenteEmail }}</a>{% endif %}
                                     </td>
                                 </tr>
                             </table>
@@ -100,7 +104,7 @@
                     <tr>
                         <td style="padding: 40px; background-color: #000000; text-align: center;">
                             <div style="font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 20px;">
-                                GENERADO POR LEADBOOK AI MARKETING
+                                CONTENIDO GENERADO PARA TU AGENCIA
                             </div>
                             <div style="color: #333; font-size: 11px;">
                                 Este es un correo automatizado de prueba. Los datos de la propiedad son referenciales.<br>

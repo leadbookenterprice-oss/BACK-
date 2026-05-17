@@ -8,6 +8,8 @@ from django.db import models, transaction
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.utils import timezone
+from django.utils.text import slugify
+from datetime import timedelta
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -104,6 +106,12 @@ class Agent(AbstractBaseUser, PermissionsMixin):
         Anonimiza al usuario en vez de borrarlo físicamente.
         Cumple Ley 25326 (derecho al olvido) sin romper registros contables.
         """
+        try:
+            from api.services.pool_service import APIPoolService
+            APIPoolService.release_keys_from_user(self)
+        except Exception:
+            pass
+
         self.email    = f"deleted_{self.id}@leadbook.com"
         self.nombre   = "Usuario eliminado"
         self.telefono = None
@@ -133,6 +141,338 @@ class AgentAssociation(models.Model):
 
     class Meta:
         unique_together = ('agente', 'asociado')
+
+
+class ComercialAgentProfile(models.Model):
+    """
+    Perfil comercial reutilizable para branding en assets.
+    Un usuario puede tener varios perfiles y marcar uno como default.
+    """
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='commercial_agents')
+    nombre = models.CharField(max_length=255)
+    rol = models.CharField(max_length=120, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    telefono_e164 = models.CharField(max_length=20, blank=True, null=True)
+    foto_url = models.TextField(blank=True, null=True)
+    is_default = models.BooleanField(default=False)
+    activo = models.BooleanField(default=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-is_default', '-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner'],
+                condition=models.Q(is_default=True),
+                name='unique_default_commercial_agent_per_owner',
+            )
+        ]
+        indexes = [
+            models.Index(fields=['owner', 'is_default']),
+            models.Index(fields=['owner', 'activo']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.telefono_e164:
+            value = str(self.telefono_e164).strip()
+            if value and not value.startswith('+'):
+                value = f'+{value}'
+            self.telefono_e164 = value
+
+        if self.is_default and self.owner_id:
+            ComercialAgentProfile.objects.filter(
+                owner_id=self.owner_id,
+                is_default=True,
+            ).exclude(pk=self.pk).update(is_default=False)
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.nombre} ({self.owner_id})"
+
+
+class AgentMediaAsset(models.Model):
+    """Cloudinary asset vinculado a un perfil comercial."""
+
+    ASSET_KINDS = [
+        ('agent_photo', 'Agent Photo'),
+    ]
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='agent_media_assets')
+    profile = models.ForeignKey(ComercialAgentProfile, on_delete=models.CASCADE, related_name='media_assets')
+    kind = models.CharField(max_length=40, choices=ASSET_KINDS, default='agent_photo')
+    cloud_name = models.CharField(max_length=120)
+    public_id = models.CharField(max_length=255)
+    resource_type = models.CharField(max_length=40, default='image')
+    secure_url = models.TextField(blank=True, null=True)
+    bytes = models.PositiveIntegerField(default=0)
+    format = models.CharField(max_length=30, blank=True, null=True)
+    folder = models.CharField(max_length=255, blank=True, null=True)
+    original_filename = models.CharField(max_length=255, blank=True, null=True)
+    version = models.CharField(max_length=60, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+        indexes = [
+            models.Index(fields=['owner', 'kind', 'is_active']),
+            models.Index(fields=['profile', 'kind', 'is_active']),
+            models.Index(fields=['cloud_name', 'public_id']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['profile'],
+                condition=models.Q(kind='agent_photo', is_active=True),
+                name='unique_active_agent_photo_per_profile',
+            )
+        ]
+
+    def as_cloudinary_ref(self):
+        return {
+            'cloudinary_account': self.cloud_name,
+            'cloud_name': self.cloud_name,
+            'public_id': self.public_id,
+            'resource_type': self.resource_type,
+            'url': self.secure_url or '',
+        }
+
+    def __str__(self):
+        return f"{self.kind}:{self.public_id}"
+
+
+class UserContentPreference(models.Model):
+    """Preferencias globales para captions generados por IA."""
+
+    EMOJI_DENSITY_CHOICES = [
+        ('none', 'None'),
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+    ]
+
+    owner = models.OneToOneField(Agent, on_delete=models.CASCADE, related_name='content_preferences')
+    hashtags = models.JSONField(default=list, blank=True)
+    emoji_density = models.CharField(max_length=20, choices=EMOJI_DENSITY_CHOICES, default='medium')
+    use_emojis = models.BooleanField(default=True)
+    tone = models.CharField(max_length=40, default='premium')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"content-preferences:{self.owner_id}"
+
+
+def default_template_tokens():
+    return {
+        'schema_version': 2,
+        'palette': {
+            'primary': '#0d47a1',
+            'secondary': '#1565c0',
+            'accent': '#00e5ff',
+            'background': '#081421',
+            'surface': '#0d1b2a',
+            'text': '#e8f3ff',
+            'muted_text': '#8fb1d1',
+            'border': '#1d3e5d',
+            'overlay': 'rgba(0,0,0,0.65)',
+        },
+        'typography': {
+            'display': 'Space Grotesk',
+            'body': 'DM Sans',
+            'mono': 'Space Mono',
+            'google_fonts': ['Space Grotesk', 'DM Sans', 'Space Mono'],
+            'title_transform': 'uppercase',
+            'letter_spacing': 'normal',
+        },
+        'emoji': {
+            'headline': '✨',
+            'price': '💰',
+            'location': '📍',
+            'cta': '📲',
+        },
+        'copy': {
+            'tone': 'premium',
+            'emoji_density': 'low',
+            'cta_style': 'whatsapp_direct',
+            'hashtags': ['#RealEstate', '#Inmobiliaria', '#Propiedades', '#Inversion'],
+        },
+        'layout': {
+            'logo_position': 'top_right',
+            'agent_block_position': 'bottom_left',
+            'qr_position': 'bottom_right',
+            'style': 'tech_modern',
+            'density': 'comfortable',
+            'border_radius': 'medium',
+            'image_treatment': 'normal',
+            'custom_css': '',
+        },
+        'components': {
+            'hero': {
+                'variant': 'full_bleed',
+                'title_position': 'bottom_left',
+                'overlay_strength': 'medium',
+                'show_badge': True,
+            },
+            'price': {
+                'variant': 'pill',
+                'position': 'below_title',
+                'size': 'medium',
+            },
+            'stats': {
+                'variant': 'cards',
+                'show_icons': True,
+            },
+            'gallery': {
+                'variant': 'mosaic',
+                'max_items': 6,
+            },
+            'contact': {
+                'variant': 'card',
+                'show_agent_photo': True,
+                'show_qr': True,
+            },
+        },
+        'formats': {
+            'pdf': {'show_gallery': True},
+            'post': {'aspect_ratio': '4:5', 'safe_area': True},
+            'story': {'aspect_ratio': '9:16', 'safe_area': True},
+            'carousel': {'aspect_ratio': '4:5', 'gallery_slide_fit': 'contain'},
+            'email': {'width': 600, 'show_gallery': True, 'button_style': 'solid'},
+        },
+    }
+
+
+class BrandTemplate(models.Model):
+    BASE_TEMPLATE_CHOICES = [
+        ('dubai_night', 'Dubai Night'),
+        ('beverly_hills', 'Beverly Hills'),
+        ('manhattan', 'Manhattan'),
+        ('mediterraneo', 'Mediterraneo'),
+        ('tech_modern', 'Tech Modern'),
+    ]
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='brand_templates')
+    name = models.CharField(max_length=120)
+    slug = models.SlugField(max_length=140)
+    description = models.TextField(blank=True, null=True)
+    base_template_id = models.CharField(max_length=40, choices=BASE_TEMPLATE_CHOICES, default='tech_modern')
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-is_default', '-updated_at']
+        constraints = [
+            models.UniqueConstraint(fields=['owner', 'slug'], name='unique_brand_template_slug_per_owner'),
+            models.UniqueConstraint(
+                fields=['owner'],
+                condition=models.Q(is_default=True, is_active=True),
+                name='unique_default_brand_template_per_owner',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['owner', 'is_active']),
+            models.Index(fields=['owner', 'is_default']),
+        ]
+
+    def save(self, *args, **kwargs):
+        base_slug = slugify(self.slug or self.name or '')[:120] or f'template-{self.owner_id or "owner"}'
+        next_slug = base_slug
+        suffix = 2
+        while self.owner_id and BrandTemplate.objects.filter(owner_id=self.owner_id, slug=next_slug).exclude(pk=self.pk).exists():
+            suffix_text = f'-{suffix}'
+            next_slug = f'{base_slug[:140 - len(suffix_text)]}{suffix_text}'
+            suffix += 1
+        self.slug = next_slug[:140]
+
+        if self.is_default and self.owner_id:
+            BrandTemplate.objects.filter(
+                owner_id=self.owner_id,
+                is_default=True,
+                is_active=True,
+            ).exclude(pk=self.pk).update(is_default=False)
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name} ({self.owner_id})"
+
+
+class BrandTemplateRevision(models.Model):
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('published', 'Published'),
+        ('archived', 'Archived'),
+    ]
+
+    template = models.ForeignKey(BrandTemplate, on_delete=models.CASCADE, related_name='revisions')
+    revision = models.IntegerField()
+    tokens_json = models.JSONField(default=default_template_tokens)
+    gemini_instructions = models.TextField(blank=True, null=True)
+    preview_html = models.TextField(blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    created_by = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='template_revisions_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-revision']
+        constraints = [
+            models.UniqueConstraint(fields=['template', 'revision'], name='unique_template_revision_number'),
+            models.UniqueConstraint(
+                fields=['template'],
+                condition=models.Q(status='published'),
+                name='unique_published_revision_per_template',
+            ),
+        ]
+        indexes = [models.Index(fields=['template', 'status'])]
+
+    def save(self, *args, **kwargs):
+        if not self.revision:
+            last = BrandTemplateRevision.objects.filter(template_id=self.template_id).order_by('-revision').first()
+            self.revision = (last.revision if last else 0) + 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.template_id} r{self.revision}"
+
+
+class CRMClient(models.Model):
+    """Cliente/lead básico para el CRM de cada inmobiliaria."""
+
+    ESTADOS = [
+        ('nuevo', 'Nuevo'),
+        ('contactado', 'Contactado'),
+        ('interesado', 'Interesado'),
+        ('visita', 'Visita agendada'),
+        ('cerrado', 'Cerrado'),
+        ('descartado', 'Descartado'),
+    ]
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='crm_clients')
+    nombre = models.CharField(max_length=180)
+    email = models.EmailField(blank=True, null=True)
+    telefono = models.CharField(max_length=40, blank=True, null=True)
+    estado = models.CharField(max_length=24, choices=ESTADOS, default='nuevo')
+    origen = models.CharField(max_length=80, blank=True, null=True)
+    presupuesto = models.CharField(max_length=80, blank=True, null=True)
+    ciudad_interes = models.CharField(max_length=120, blank=True, null=True)
+    notas = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['owner', 'estado']),
+            models.Index(fields=['owner', 'updated_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.nombre} ({self.owner_id})"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -233,6 +573,8 @@ class Listado(models.Model):
     video_url        = models.URLField(max_length=500, null=True, blank=True)
     video_status     = models.CharField(max_length=50, default='none')
     videos_creados   = models.IntegerField(default=0)
+    brand_template   = models.ForeignKey('BrandTemplate', on_delete=models.SET_NULL, null=True, blank=True, related_name='listados')
+    brand_template_revision = models.ForeignKey('BrandTemplateRevision', on_delete=models.SET_NULL, null=True, blank=True, related_name='listados')
 
     # Datos adicionales no estructurados
     datos_extra      = models.JSONField(default=dict, blank=True)
@@ -447,19 +789,67 @@ class UserAPIQuota(models.Model):
 
     def maybe_reset_daily(self):
         """
-        Reset lazy: si el último reset fue antes de hoy, resetear ahora.
+        Reset lazy: las APIs free se resetean cada 12 horas; el resto, diario.
         Es el fallback para cuando Celery está caído.
         Se llama al inicio de cada request antes de verificar la cuota.
         """
-        today = timezone.now().date()
-        if self.last_reset_daily is None or self.last_reset_daily.date() < today:
+        now = timezone.now()
+        servicio_nombre = str(getattr(self.servicio, 'nombre', '') or '').lower()
+        uses_twelve_hour_reset = servicio_nombre in {'gemini', 'elevenlabs'}
+
+        if uses_twelve_hour_reset:
+            should_reset = self.last_reset_daily is None or now - self.last_reset_daily >= timedelta(hours=12)
+        else:
+            should_reset = self.last_reset_daily is None or self.last_reset_daily.date() < now.date()
+
+        if should_reset:
+            should_notify = (
+                uses_twelve_hour_reset
+                and self.last_reset_daily is not None
+                and (self.is_blocked or self.requests_today >= (self.user_daily_limit or 0))
+            )
             self.requests_today = 0
             self.is_blocked     = False
             self.blocked_reason = None
-            self.last_reset_daily = timezone.now()
+            self.last_reset_daily = now
             self.save(update_fields=[
                 'requests_today', 'is_blocked', 'blocked_reason',
                 'last_reset_daily', 'updated_at'
+            ])
+
+            if should_notify:
+                notificacion_model = globals().get('Notificacion')
+                if notificacion_model:
+                    cutoff = now - timedelta(hours=11, minutes=30)
+                    exists = notificacion_model.objects.filter(
+                        usuario=self.user,
+                        tipo='reset_creditos',
+                        creada_en__gte=cutoff,
+                    ).exists()
+                    if not exists:
+                        notificacion_model.objects.create(
+                            usuario=self.user,
+                            tipo='reset_creditos',
+                            titulo='Ya podés generar contenido de nuevo',
+                            mensaje='Las APIs free fueron reintentadas/resetadas. Si el proveedor ya renovó la cuota, podés generar contenido otra vez.',
+                        )
+
+    def maybe_reset_monthly(self):
+        now = timezone.now()
+        should_reset = (
+            self.last_reset_monthly is None
+            or self.last_reset_monthly.year != now.year
+            or self.last_reset_monthly.month != now.month
+        )
+        if should_reset:
+            self.requests_this_month = 0
+            self.last_reset_monthly = now
+            if self.blocked_reason and 'mensual' in self.blocked_reason.lower():
+                self.is_blocked = False
+                self.blocked_reason = None
+            self.save(update_fields=[
+                'requests_this_month', 'last_reset_monthly',
+                'is_blocked', 'blocked_reason', 'updated_at'
             ])
 
     def recalcular_limite(self, plan=None):
@@ -472,14 +862,22 @@ class UserAPIQuota(models.Model):
 
         # Límite base según plan
         planes_limites = {
-            'free':     {'gemini': 1500, 'elevenlabs': 1500, 'uploadpost': 10},
-            'starter':  {'gemini': 3000, 'elevenlabs': 3000, 'uploadpost': 30},
-            'pro':      {'gemini': 7500, 'elevenlabs': 7500, 'uploadpost': 100},
-            'scale':    {'gemini': 15000,'elevenlabs': 15000,'uploadpost': 300},
-            'business': {'gemini': 30000,'elevenlabs': 30000,'uploadpost': 1000},
+            'free':     {'gemini': 1500, 'elevenlabs': 1500, 'uploadpost': 999999},
+            'starter':  {'gemini': 3000, 'elevenlabs': 3000, 'uploadpost': 999999},
+            'pro':      {'gemini': 7500, 'elevenlabs': 7500, 'uploadpost': 999999},
+            'scale':    {'gemini': 15000,'elevenlabs': 15000,'uploadpost': 999999},
+            'business': {'gemini': 30000,'elevenlabs': 30000,'uploadpost': 999999},
+        }
+        planes_limites_mensuales = {
+            'free':     {'uploadpost': 10},
+            'starter':  {'uploadpost': 10},
+            'pro':      {'uploadpost': None},
+            'scale':    {'uploadpost': None},
+            'business': {'uploadpost': None},
         }
         servicio_nombre = self.servicio.nombre
         base = planes_limites.get(plan, {}).get(servicio_nombre, 1500)
+        # LeadBook limita auto-posting por mes; la API/proveedor mantiene sus propios hard caps diarios.
 
         # Extras activos
         extras = UserAPIAssignment.objects.filter(
@@ -490,8 +888,18 @@ class UserAPIQuota(models.Model):
         ).count()
 
         incremento = self.servicio.extra_increment
-        self.user_daily_limit = base + (extras * incremento)
-        self.save(update_fields=['user_daily_limit', 'updated_at'])
+        if servicio_nombre == 'uploadpost' and incremento == 1500:
+            incremento = 10
+        nuevo_limite = base + (extras * incremento)
+        if self.user_daily_limit != nuevo_limite:
+            self.user_daily_limit = nuevo_limite
+            self.save(update_fields=['user_daily_limit', 'updated_at'])
+
+        monthly_base = planes_limites_mensuales.get(plan, {}).get(servicio_nombre)
+        nuevo_limite_mensual = None if monthly_base is None else monthly_base + (extras * incremento)
+        if self.user_monthly_limit != nuevo_limite_mensual:
+            self.user_monthly_limit = nuevo_limite_mensual
+            self.save(update_fields=['user_monthly_limit', 'updated_at'])
 
     def __str__(self):
         return f"{self.user.email} — {self.servicio.nombre}: {self.requests_today}/{self.user_daily_limit}"
@@ -731,7 +1139,13 @@ class UsageLog(models.Model):
     Log de uso de features.
     Campo archivado=True para cleanup periódico — no crece infinito.
     """
-    TIPOS = [('ai','IA / Guion'),('image','Imagen'),('video','Video'),('pdf','PDF')]
+    TIPOS = [
+        ('property', 'Listado'),
+        ('ai', 'IA / Guion'),
+        ('image', 'Imagen'),
+        ('video', 'Video'),
+        ('pdf', 'PDF'),
+    ]
 
     agent     = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='usage_logs')
     tipo      = models.CharField(max_length=10, choices=TIPOS)
@@ -769,6 +1183,56 @@ class APIRequestLog(models.Model):
             models.Index(fields=['user', 'creado_en']),
             models.Index(fields=['api_key', 'creado_en']),
             models.Index(fields=['archivado', 'creado_en']),
+        ]
+
+
+class SocialPublicationLog(models.Model):
+    """
+    Registro persistente de cada intento de publicacion social.
+    UserAPIQuota se sincroniza desde esta tabla para UploadPost/Gestor de Redes.
+    """
+    PROVIDERS = [
+        ('uploadpost', 'UploadPost'),
+        ('meta', 'Meta Graph'),
+    ]
+    STATUSES = [
+        ('queued', 'En cola'),
+        ('completed', 'Completada'),
+        ('failed', 'Fallida'),
+        ('unknown', 'Desconocida'),
+    ]
+
+    user = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='social_publication_logs')
+    servicio = models.ForeignKey(Servicio, on_delete=models.PROTECT, null=True, blank=True, related_name='social_publication_logs')
+    provider = models.CharField(max_length=30, choices=PROVIDERS, default='uploadpost')
+    platform = models.CharField(max_length=50, default='instagram')
+    media_type = models.CharField(max_length=30, default='unknown')
+    request_id = models.CharField(max_length=128, blank=True, db_index=True)
+    job_id = models.CharField(max_length=128, blank=True, db_index=True)
+    batch_id = models.CharField(max_length=64, blank=True, db_index=True)
+    success = models.BooleanField(default=False)
+    counted = models.BooleanField(default=False)
+    status = models.CharField(max_length=30, choices=STATUSES, default='unknown')
+    caption = models.TextField(blank=True)
+    media_count = models.PositiveIntegerField(default=0)
+    payload = models.JSONField(default=dict, blank=True)
+    response = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    creado_en = models.DateTimeField(auto_now_add=True, db_index=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.provider}/{self.media_type} - {self.status}"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'provider', 'request_id'], name='api_social_unique_request'),
+        ]
+        indexes = [
+            models.Index(fields=['user', 'creado_en'], name='api_social_user_created_idx'),
+            models.Index(fields=['user', 'success', 'counted', 'creado_en'], name='api_social_user_count_idx'),
+            models.Index(fields=['provider', 'platform'], name='api_social_provider_idx'),
+            models.Index(fields=['batch_id', 'creado_en'], name='api_social_batch_idx'),
         ]
 
 
@@ -815,6 +1279,26 @@ class AmenidadPreset(models.Model):
         unique_together = ['agente', 'nombre']
 
 
+class UserFieldPreset(models.Model):
+    user = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='field_presets')
+    field = models.CharField(max_length=60)
+    value = models.CharField(max_length=255)
+    label = models.CharField(max_length=255, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    usage_count = models.PositiveIntegerField(default=1)
+    last_used_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['field', '-usage_count', '-last_used_at']
+        unique_together = ['user', 'field', 'value']
+        indexes = [
+            models.Index(fields=['user', 'field', '-usage_count']),
+            models.Index(fields=['user', 'last_used_at']),
+        ]
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MEDIA / AUDIO
 # ══════════════════════════════════════════════════════════════════════════════
@@ -851,11 +1335,11 @@ def setup_nuevo_usuario(sender, instance, created, **kwargs):
     TODO dentro de transaction.atomic() — si falla cualquier paso, se revierte todo.
     Si falla, el admin ve una AdminAlert crítica y puede reparar manualmente.
     """
-    if created:
-        from api.services.pool_service import APIPoolService
+    if created and instance.is_active and not instance.eliminado_en:
+        from api.services.pool_service import assign_apis_to_agent
         try:
             with transaction.atomic():
-                APIPoolService.assign_keys_to_user(instance)
+                assign_apis_to_agent(instance)
         except Exception as e:
             AdminAlert.objects.create(
                 tipo='assign_failed',
@@ -889,11 +1373,18 @@ def recalcular_quotas_al_cambiar_plan(sender, instance, created, **kwargs):
     Evita que un usuario que hizo downgrade mantenga límites del plan anterior.
     """
     if not created:
-        # Solo si cambió el plan
+        for quota in instance.api_quotas.all():
+            quota.recalcular_limite(plan=instance.plan_nombre)
+        if not instance.is_active or instance.eliminado_en:
+            return
         try:
-            old = Agent.objects.get(pk=instance.pk)
-            if old.plan_nombre != instance.plan_nombre:
-                for quota in instance.api_quotas.all():
-                    quota.recalcular_limite(plan=instance.plan_nombre)
-        except Agent.DoesNotExist:
-            pass
+            from api.services.pool_service import assign_apis_to_agent
+            assign_apis_to_agent(instance)
+        except Exception as e:
+            AdminAlert.objects.create(
+                tipo='assign_failed',
+                severidad='warning',
+                titulo=f'Fallo reasignación por plan — {instance.email}',
+                mensaje=f'No se pudieron completar APIs del plan {instance.plan_nombre}: {str(e)}',
+                related_user=instance,
+            )

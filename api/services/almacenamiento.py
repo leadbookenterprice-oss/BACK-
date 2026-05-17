@@ -14,6 +14,7 @@ import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 from django.core.cache import cache
+from django.conf import settings
 
 from api.models import APIKey
 
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Tipos de asset soportados ────────────────────────────────────────────────
 TIPO_PDF      = 'pdf'
+TIPO_PDF_COVER = 'pdf_cover'
 TIPO_POST     = 'post'
 TIPO_STORY    = 'story'
 TIPO_CARRUSEL = 'carrusel'
@@ -138,6 +140,30 @@ class AlmacenamientoCloudinary:
 
         return mejor_creds, mejor_key_id
 
+    @classmethod
+    def get_cuentas_ordenadas(cls) -> list[tuple[dict | None, int | None]]:
+        """Devuelve cuentas del pool ordenadas por espacio libre y fallback global al final."""
+        cuentas = []
+        for k in cls._get_pool_keys():
+            creds = cls._parse_cloudinary_url(k.api_key)
+            if not creds:
+                continue
+            stats = cls._get_stats(k)
+            cuentas.append((stats.get('free_bytes', 0), creds, k.id))
+        cuentas.sort(key=lambda row: row[0], reverse=True)
+        ordered = [(creds, key_id) for _, creds, key_id in cuentas]
+
+        global_creds = {
+            'cloud_name': getattr(settings, 'CLOUDINARY_CLOUD_NAME', '') or getattr(settings, 'CLOUDINARY_CLOUD', ''),
+            'api_key': getattr(settings, 'CLOUDINARY_API_KEY', ''),
+            'api_secret': getattr(settings, 'CLOUDINARY_API_SECRET', ''),
+        }
+        if all(global_creds.values()):
+            ordered.append((global_creds, None))
+        if not ordered:
+            ordered.append((None, None))
+        return ordered
+
     # ── Subida de archivos ────────────────────────────────────────────────────
 
     @classmethod
@@ -148,6 +174,7 @@ class AlmacenamientoCloudinary:
         user_id: int,
         listado_id: int | None = None,
         sufijo: str = '',        # ej: "_slide_0" para carrusel
+        return_metadata: bool = False,
     ) -> str | None:
         """
         Sube un archivo al Almacenamiento Cloudinary.
@@ -177,76 +204,83 @@ class AlmacenamientoCloudinary:
             if tipo == TIPO_PDF:
                 public_id += '.pdf'
 
-        creds, key_id = cls.get_mejor_cuenta()
-        extra_creds = creds if creds else {}
+        last_error = None
+        for creds, key_id in cls.get_cuentas_ordenadas():
+            extra_creds = creds if creds else {}
+            try:
+                if hasattr(contenido, 'read'):
+                    contenido.seek(0)
 
-        try:
-            # Normalizar contenido a bytes si es BytesIO
-            if hasattr(contenido, 'read'):
-                contenido.seek(0)
+                upload_params = {
+                    'public_id': public_id,
+                    'type': 'upload',
+                    'overwrite': True,
+                    'invalidate': True,
+                    **extra_creds,
+                }
+                if tipo == TIPO_PDF:
+                    upload_params['resource_type'] = 'raw'
+                    upload_params['access_mode'] = 'public'
+                else:
+                    upload_params['resource_type'] = 'auto'
 
-            # Lógica especial para PDFs: deben ser públicos y descargables
-            upload_params = {
-                'public_id': public_id,
-                'type': 'upload',
-                'overwrite': True,
-                'invalidate': True,
-                **extra_creds,
-            }
-            
-            if tipo == TIPO_PDF:
-                upload_params['resource_type'] = 'raw'
-                upload_params['access_mode'] = 'public'
-            else:
-                upload_params['resource_type'] = 'auto'
+                resultado = cloudinary.uploader.upload(contenido, **upload_params)
+                resource_type_result = resultado.get('resource_type', 'auto')
 
-            resultado = cloudinary.uploader.upload(
-                contenido,
-                **upload_params
-            )
+                from cloudinary.utils import cloudinary_url
+                if tipo == TIPO_PDF:
+                    url, _ = cloudinary_url(public_id, resource_type='raw', type='upload', secure=True, **extra_creds)
+                else:
+                    url, _ = cloudinary_url(public_id, resource_type=resource_type_result, type='upload', sign_url=True, secure=True, **extra_creds)
 
-            resource_type_result = resultado.get('resource_type', 'auto')
+                if key_id:
+                    cls._invalidate_stats_cache(key_id)
 
-            # Generar URL: Pública directa para PDF (raw), Firmada para el resto (seguridad)
-            from cloudinary.utils import cloudinary_url
-            
-            if tipo == TIPO_PDF:
-                url, _ = cloudinary_url(
-                    public_id,
-                    resource_type='raw',
-                    type='upload',
-                    secure=True,
-                    **extra_creds
-                )
-            else:
-                url, _ = cloudinary_url(
-                    public_id,
-                    resource_type=resource_type_result,
-                    type='upload',
-                    sign_url=True,
-                    secure=True,
-                    **extra_creds
-                )
-            
-            logger.info(f'[Almacenamiento] ✓ {tipo} subido (Public={tipo==TIPO_PDF}) para user {user_id}: {url}')
+                cloud_name_result = (creds or {}).get('cloud_name') or resultado.get('cloud_name') or ''
+                if not cloud_name_result and url:
+                    parsed_url = urlparse(url)
+                    parts = parsed_url.path.strip('/').split('/')
+                    if parsed_url.netloc.endswith('res.cloudinary.com') and parts:
+                        cloud_name_result = parts[0]
 
-            # Invalida caché de stats de la cuenta usada
-            if key_id:
-                cls._invalidate_stats_cache(key_id)
-
-            return url
-
-        except cloudinary.exceptions.Error as e:
-            # Si el error es "recurso ya existe", extraer la URL existente
-            if 'already exists' in str(e).lower() or '409' in str(e):
-                logger.info(f'[Almacenamiento] Archivo ya existe en Cloudinary, recuperando URL: {public_id}')
-                return cls._get_existing_url(public_id, 'auto', extra_creds)
-            logger.error(f'[Almacenamiento] Error Cloudinary al subir {tipo}: {e}')
-            return None
-
-        except Exception as e:
-            logger.error(f'[Almacenamiento] Error inesperado al subir {tipo}: {e}')
-            return None
+                metadata = {
+                    'url': url,
+                    'secure_url': resultado.get('secure_url') or url,
+                    'cloud_name': cloud_name_result,
+                    'cloudinary_account': cloud_name_result,
+                    'public_id': resultado.get('public_id') or public_id,
+                    'resource_type': resultado.get('resource_type') or resource_type_result,
+                    'bytes': resultado.get('bytes') or 0,
+                    'format': resultado.get('format') or '',
+                    'folder': resultado.get('folder') or '',
+                    'original_filename': resultado.get('original_filename') or '',
+                    'version': str(resultado.get('version') or ''),
+                    'storage_key_id': key_id,
+                }
+                logger.info(f'[Almacenamiento] ✓ {tipo} subido para user {user_id}: {url}')
+                return metadata if return_metadata else url
+            except cloudinary.exceptions.Error as e:
+                last_error = e
+                if 'already exists' in str(e).lower() or '409' in str(e):
+                    existing = cls._get_existing_url(public_id, 'auto', extra_creds)
+                    if existing:
+                        if return_metadata:
+                            return {
+                                'url': existing,
+                                'secure_url': existing,
+                                'cloud_name': (creds or {}).get('cloud_name') or '',
+                                'cloudinary_account': (creds or {}).get('cloud_name') or '',
+                                'public_id': public_id,
+                                'resource_type': 'image',
+                                'storage_key_id': key_id,
+                            }
+                        return existing
+                logger.warning(f'[Almacenamiento] Cuenta Cloudinary falló para {tipo}, probando siguiente: {e}')
+            except Exception as e:
+                last_error = e
+                logger.warning(f'[Almacenamiento] Error subiendo {tipo}, probando siguiente cuenta: {e}')
+        logger.error(f'[Almacenamiento] Error final subiendo {tipo}: {last_error}')
+        return None
 
     @staticmethod
     def _get_existing_url(public_id: str, resource_type: str, creds: dict) -> str | None:
@@ -263,6 +297,10 @@ class AlmacenamientoCloudinary:
     @classmethod
     def guardar_pdf(cls, pdf_bytes: bytes, user_id: int, listado_id: int | None = None) -> str | None:
         return cls.subir(pdf_bytes, TIPO_PDF, user_id, listado_id)
+
+    @classmethod
+    def guardar_pdf_cover(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
+        return cls.subir(imagen_stream, TIPO_PDF_COVER, user_id, listado_id)
 
     @classmethod
     def guardar_post(cls, imagen_stream, user_id: int, listado_id: int | None = None) -> str | None:
@@ -287,6 +325,10 @@ class AlmacenamientoCloudinary:
     @classmethod
     def guardar_avatar(cls, imagen, user_id: int) -> str | None:
         return cls.subir(imagen, TIPO_AVATAR, user_id)
+
+    @classmethod
+    def guardar_avatar_metadata(cls, imagen, user_id: int) -> dict | None:
+        return cls.subir(imagen, TIPO_AVATAR, user_id, return_metadata=True)
 
     @classmethod
     def guardar_foto_propiedad(cls, base64_str: str, user_id: int, listado_id: int | None = None, tipo_foto: str = 'portada', indice: int = 0) -> dict | None:

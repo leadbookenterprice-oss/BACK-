@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;700&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --bg: #080808; --fg: #f5f3ee; --accent: #c9a84c; }
+  body { width: 1080px; height: 1350px; background: var(--bg); font-family: 'DM Sans', sans-serif; color: var(--fg); overflow: hidden; position: relative; }
+  .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+  .overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(8,8,8,0.95) 0%, rgba(8,8,8,0.6) 40%, rgba(8,8,8,0.3) 100%); z-index: 2; }
+  .content { position: absolute; inset: 0; z-index: 3; padding: 92px 78px; display: flex; flex-direction: column; justify-content: space-between; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .logo { max-width: 250px; max-height: 100px; object-fit: contain; filter: brightness(0) invert(1); }
+  .badge { border: 1px solid rgba(201,168,76,0.65); color: var(--accent); font-family: 'Space Mono', monospace; font-size: 18px; letter-spacing: 3px; padding: 10px 18px; text-transform: uppercase; background: rgba(0,0,0,0.25); border-radius: 999px; }
+  .middle { display: flex; flex-direction: column; gap: 28px; margin-bottom: 44px; }
+  .headline { font-family: 'Bebas Neue', sans-serif; font-size: 152px; line-height: 0.9; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); text-shadow: 0 4px 30px rgba(0,0,0,0.45); }
+  .subheadline { font-size: 46px; line-height: 1.28; color: var(--fg); max-width: 900px; }
+  .footer { display: flex; justify-content: space-between; align-items: flex-end; gap: 14px; border: 1px solid rgba(201,168,76,0.35); border-radius: 12px; padding: 12px 14px; background: rgba(8,8,8,0.58); }
+  .agent-box { display: flex; flex-direction: column; gap: 2px; max-width: 68%; }
+  .agent-name { font-family: 'Bebas Neue', sans-serif; font-size: 33px; color: var(--accent); line-height: 1; letter-spacing: 1px; text-transform: uppercase; }
+  .agent-meta { font-family: 'DM Sans', sans-serif; font-size: 18px; color: rgba(255,255,255,0.9); }
+  .footer-text { font-family: 'Space Mono', monospace; font-size: 14px; color: rgba(255,255,255,0.58); letter-spacing: 2px; text-transform: uppercase; }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+  .qr-box img { width: 88px; height: 88px; padding: 5px; background: white; border-radius: 7px; }
+  .qr-box span { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.62); }
+</style>
+</head>
+<body>
+  {% if portada_url %}<img src="{{ portada_url }}" class="bg-image" />{% endif %}
+  <div class="overlay"></div>
+  <div class="content">
+    <div class="top">
+      <div class="badge">{{ operacion }}</div>
+      {% if logo_url %}<div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo" /><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% else %}<div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% endif %}
+    </div>
+    <div class="middle">
+      <div class="headline">{{ headline }}</div>
+      <div class="subheadline">{{ subheadline }}</div>
+    </div>
+    <div class="footer">
+      <div class="agent-box">
+        <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+        <div class="agent-meta">{{ agente_telefono }}</div>
+        {% if slide_number < total_slides %}
+          <div class="footer-text">Deslizá para seguir</div>
+        {% else %}
+          <div class="footer-text" style="color: var(--accent)">Guardalo y escribinos</div>
+        {% endif %}
+      </div>
+      {% if qr_url %}
+      <div class="qr-box">
+        <img src="{{ qr_url }}" alt="QR" />
+        <span>Escaneá</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

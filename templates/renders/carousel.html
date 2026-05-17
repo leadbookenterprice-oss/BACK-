@@ -8,9 +8,12 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   
   :root {
-    --black: #080808;
+    --black: {{ bg_color|default:'#080808' }};
     --white: #F5F3EE;
-    --accent: #C8FF00;
+    --accent: {{ accent_color|default:'#C8FF00' }};
+    --overlay-bottom: {{ overlay_bottom|default:'rgba(8,8,8,0.95)' }};
+    --overlay-mid: {{ overlay_mid|default:'rgba(8,8,8,0.60)' }};
+    --overlay-top: {{ overlay_top|default:'rgba(8,8,8,0.30)' }};
   }
   
   body {
@@ -35,7 +38,7 @@
   .overlay {
     position: absolute;
     inset: 0;
-    background: linear-gradient(0deg, rgba(8,8,8,0.95) 0%, rgba(8,8,8,0.6) 40%, rgba(8,8,8,0.3) 100%);
+    background: linear-gradient(0deg, var(--overlay-bottom) 0%, var(--overlay-mid) 40%, var(--overlay-top) 100%);
     z-index: 2;
   }
   
@@ -63,21 +66,6 @@
     filter: brightness(0) invert(1);
   }
   
-  .slide-counter {
-    background: rgba(255,255,255,0.1);
-    backdrop-filter: blur(10px);
-    border: 2px solid rgba(255,255,255,0.2);
-    color: var(--white);
-    font-family: 'Space Mono', monospace;
-    font-size: 28px;
-    font-weight: 700;
-    padding: 12px 24px;
-    border-radius: 100px;
-  }
-  
-  .slide-counter span {
-    color: var(--accent);
-  }
   
   /* Middle Section */
   .middle-section {
@@ -133,11 +121,11 @@
   <div class="content">
     <div class="top-section">
       {% if logo_url %}
-        <img src="{{ logo_url }}" class="logo" />
+        <div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo" /><span class="lb-brand-name">{{ agencia_nombre }}</span></div>
       {% else %}
-        <div></div>
+        <div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>
       {% endif %}
-      <div class="slide-counter"><span>{{ slide_number }}</span> / {{ total_slides }}</div>
+      <div></div>
     </div>
     
     <div class="middle-section">

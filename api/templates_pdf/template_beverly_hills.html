@@ -6,17 +6,22 @@
 <title>{{TITULO}} - {{AGENCIA_NOMBRE}}</title>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
+@page { size: A4; margin: 0; }
 :root {
   --primario: {{COLOR_PRIMARIO}};
   --secundario: {{COLOR_SECUNDARIO}};
   --acento: {{COLOR_ACENTO}};
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; }
+body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+
+.topbar, .hero, .precio-bar, .stats, .descripcion, .amenidades, .galeria, .footer { break-inside: avoid; page-break-inside: avoid; }
 
 .topbar { display: flex; justify-content: space-between; align-items: center; padding: 24px 48px; background: #fff; border-bottom: 1px solid #e8e4df; }
-.topbar .logo img { height: 36px; object-fit: contain; }
-.topbar .logo-text { font-family: 'Cormorant Garamond', serif; font-size: 24px; color: var(--primario); letter-spacing: 4px; text-transform: uppercase; }
+.topbar .logo { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.topbar .agent-avatar { width: 64px; height: 64px; border-radius: 999px; object-fit: cover; border: 2px solid var(--primario); }
+.topbar .agency-logo { max-width: 180px; max-height: 58px; object-fit: contain; }
+.topbar .logo-text { font-family: 'Cormorant Garamond', serif; font-size: 24px; color: var(--primario); letter-spacing: 4px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .badge-operacion { background: var(--primario); color: #fff; font-size: 10px; font-weight: 500; letter-spacing: 3px; padding: 8px 16px; text-transform: uppercase; }
 
 .hero { position: relative; height: 560px; overflow: hidden; }
@@ -34,12 +39,13 @@ body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; 
 .stats { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--secundario); }
 .stat-item { padding: 28px 20px; text-align: center; border-right: 1px solid rgba(255,255,255,0.2); }
 .stat-item:last-child { border-right: none; }
+.stat-icon { color: #f5d27f; font-size: 22px; margin-bottom: 8px; }
 .stat-valor { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; color: #fff; margin-bottom: 6px; }
 .stat-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.6); }
 
 .descripcion { padding: 56px 48px; background: #fff; }
 .section-title { font-size: 10px; letter-spacing: 4px; text-transform: uppercase; color: var(--acento); margin-bottom: 24px; font-weight: 500; }
-.descripcion-texto { font-size: 16px; line-height: 2; color: #555; font-weight: 300; max-width: 720px; font-family: 'Cormorant Garamond', serif; font-size: 19px; }
+.descripcion-texto { font-size: 16px; line-height: 1.9; color: #555; font-weight: 300; max-width: 720px; font-family: 'Cormorant Garamond', serif; font-size: 19px; orphans: 3; widows: 3; }
 
 .amenidades { padding: 40px 48px; background: #fafaf8; border-top: 1px solid #e8e4df; border-bottom: 1px solid #e8e4df; }
 .amenidades-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
@@ -47,35 +53,33 @@ body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; 
 
 .galeria { padding: 40px 48px; background: #fff; }
 .galeria-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
-.galeria-foto { width: 100%; height: 440px; object-fit: cover; }
+.galeria-foto { width: 100%; height: 340px; object-fit: cover; break-inside: avoid; page-break-inside: avoid; }
 
-.footer { background: var(--primario); padding: 40px 48px; display: flex; justify-content: space-between; align-items: center; }
+.footer { background: var(--primario); padding: 34px 48px 28px; display: flex; flex-direction: column; gap: 20px; }
+.footer-main { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.agente-info { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.agente-avatar { width: 68px; height: 68px; border-radius: 999px; object-fit: cover; border: 2px solid #fff; flex: 0 0 auto; }
+.agente-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .agente-nombre { font-family: 'Cormorant Garamond', serif; font-size: 24px; color: #fff; margin-bottom: 6px; }
 .agente-agencia { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 10px; }
 .agente-contacto { font-size: 14px; color: rgba(255,255,255,0.8); }
 .agente-contacto a { color: #fff; text-decoration: none; }
+.agente-contacto a:first-child { color: #f5d27f; }
+.agente-contacto:empty { display: none; }
+.contact-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+.whatsapp-cta { display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border-radius: 999px; background: #f5d27f; color: var(--primario) !important; text-decoration: none; font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; }
 .qr-container img { width: 80px; height: 80px; }
 .qr-label { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.4); margin-top: 6px; text-align: center; }
-.watermark {
-  position: fixed;
-  bottom: 18px;
-  right: 20px;
-  width: 120px;
-  opacity: 0.13;
-  pointer-events: none;
-  z-index: 9999;
-}
+.footer-watermark { display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid rgba(255,255,255,0.14); padding-top: 12px; }
+.footer-watermark img { width: 126px; opacity: 0.16; }
+.footer-watermark span { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.36); }
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="logo">
-    {{#if LOGO_AGENCIA}}
-    <img src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">
-    {{else}}
-    <span class="logo-text">{{AGENCIA_NOMBRE}}</span>
-    {{/if}}
+    {{#if LOGO_AGENCIA}}<img class="agency-logo" src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">{{else}}<span class="logo-text">{{AGENCIA_NOMBRE}}</span>{{/if}}
   </div>
   <span class="badge-operacion">{{OPERACION}}</span>
 </div>
@@ -102,11 +106,11 @@ body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; 
 </div>
 
 <div class="stats">
-  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
-  <div class="stat-item"><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
-  <div class="stat-item"><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
-  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
-  <div class="stat-item"><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_TOTAL}}</div><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_RECAMARAS}}</div><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_BANOS}}</div><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_CUBIERTA}}</div><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_ESTACIONAMIENTOS}}</div><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
 </div>
 
 <div class="descripcion">
@@ -127,17 +131,22 @@ body { font-family: 'DM Sans', sans-serif; background: #fafaf8; color: #1a1a1a; 
 </div>
 
 <div class="footer">
-  <div class="agente-info">
-    <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
-    <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
-    <div class="agente-contacto">
-      <a href="tel:{{AGENTE_TELEFONO}}">{{AGENTE_TELEFONO}}</a> &nbsp;·&nbsp;
-      <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
+  <div class="footer-main">
+    <div class="agente-info">
+      {{#if AGENTE_FOTO}}<img class="agente-avatar" src="{{AGENTE_FOTO}}" alt="{{AGENTE_NOMBRE}}">{{/if}}
+      <div class="agente-meta">
+        <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
+        <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
+        <div class="agente-contacto">{{AGENTE_CONTACTO_HTML}}</div>
+        {{#if WHATSAPP_URL}}<div class="contact-actions"><a class="whatsapp-cta" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener">Contactar agente</a></div>{{/if}}
+      </div>
     </div>
+    {{#if QR_CODE}}<div class="qr-container"><img src="{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
   </div>
-  {{#if QR_CODE}}<div class="qr-container"><img src="{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
+  <div class="footer-watermark">
+    <img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+    <span>Generado por LeadBook</span>
+  </div>
 </div>
-
-<img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
 </body>
 </html>

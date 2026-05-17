@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from decouple import config
+from django.utils.crypto import constant_time_compare
 from django.utils.timezone import now
 from datetime import timedelta
 from django.db.models import Count, Sum, Q
@@ -15,9 +16,14 @@ from .models import (
 ADMIN_KEY = config('ADMIN_KEY', default='')
 
 def _is_staff_check(request):
-    if request.headers.get('X-Admin-Key') == ADMIN_KEY and ADMIN_KEY != '':
+    supplied_key = request.headers.get('X-Admin-Key', '')
+    if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
         return True
     return request.user and request.user.is_authenticated and request.user.is_staff
+
+
+def _forbidden():
+    return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -175,6 +181,7 @@ def admin_apikeys_pool_crear(request):
 
 @api_view(['POST'])
 def admin_apikeys_pool_bulk(request):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'message': 'Bulk upload not implemented in v2 stub'})
 
 @api_view(['GET', 'PUT', 'DELETE'])
@@ -193,10 +200,12 @@ def admin_apikeys_pool_detail(request, pk):
 
 @api_view(['GET'])
 def admin_apikeys_global(request):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'settings': {}})
 
 @api_view(['POST'])
 def admin_enviar_email(request):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'ok': True, 'message': 'Email sent stub'})
 
 @api_view(['POST'])
@@ -242,26 +251,32 @@ def admin_apikeys_auto_repair(request):
 # --- Stubs para bundles (eliminados en v2) ---
 @api_view(['GET'])
 def admin_bundles_list(request):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'bundles': [], 'message': 'Bundles eliminados en v2. Usar Pool.'})
 
 @api_view(['POST'])
 def admin_bundles_crear(request):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'error': 'Deprecated'}, status=400)
 
 @api_view(['GET', 'PUT', 'DELETE'])
 def admin_bundles_detail(request, bundle_id):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'error': 'Deprecated'}, status=404)
 
 @api_view(['POST'])
 def admin_bundles_asignar(request, bundle_id):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'error': 'Deprecated'}, status=400)
 
 @api_view(['POST'])
 def admin_bundles_liberar(request, bundle_id):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'error': 'Deprecated'}, status=400)
 
 @api_view(['GET'])
 def admin_bundles_stats(request):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'disponibles': 0, 'asignados': 0})
 
 # --- Librería de Audio (VideoMusic + VideoSFX) ---
@@ -279,6 +294,7 @@ def admin_audio_music(request):
 
 @api_view(['DELETE', 'PATCH'])
 def admin_audio_music_detail(request, pk):
+    if not _is_staff_check(request): return _forbidden()
     VideoMusic.objects.filter(pk=pk).delete()
     return Response({'ok': True})
 
@@ -295,6 +311,7 @@ def admin_audio_sfx(request):
 
 @api_view(['DELETE', 'PATCH'])
 def admin_audio_sfx_detail(request, pk):
+    if not _is_staff_check(request): return _forbidden()
     VideoSFX.objects.filter(pk=pk).delete()
     return Response({'ok': True})
 
@@ -319,6 +336,7 @@ def admin_usuario_eliminar(request, user_id):
 
 @api_view(['GET'])
 def admin_usuario_restaurar(request, user_id):
+    if not _is_staff_check(request): return _forbidden()
     # Requiere manager all_including_deleted()
     u = Agent.objects.all_including_deleted().get(id=user_id)
     u.eliminado_en = None
@@ -337,18 +355,22 @@ def admin_usuario_cambiar_plan(request, user_id):
 
 @api_view(['GET'])
 def admin_apikeys_resumen(request):
+    if not _is_staff_check(request): return _forbidden()
     return Response({"message": "Use admin_pool_estado"})
 
 @api_view(['GET'])
 def admin_pool_estado(request):
+    if not _is_staff_check(request): return _forbidden()
     stats = APIKey.objects.values('servicio__nombre', 'status').annotate(total=Count('id'))
     return Response(list(stats))
 
 @api_view(['POST'])
 def admin_alerts_read(request, alert_id):
+    if not _is_staff_check(request): return _forbidden()
     AdminAlert.objects.filter(id=alert_id).update(is_read=True)
     return Response({'ok': True})
 
 @api_view(['POST'])
 def admin_health_check(request):
+    if not _is_staff_check(request): return _forbidden()
     return Response({'message': 'Task queued'})

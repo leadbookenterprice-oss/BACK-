@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ asunto }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f1ed;color:#20242a;font-family:'DM Sans','Helvetica Neue',Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f3f1ed;padding:30px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="620" cellpadding="0" cellspacing="0" border="0" style="width:620px;max-width:620px;background:#ffffff;border:1px solid #e8e4df;">
+          <tr>
+            <td style="padding:30px 36px;border-bottom:1px solid #e8e4df;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="left" valign="middle">
+                    {% if logo_url %}
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td valign="middle"><img src="{{ logo_url }}" alt="{{ agenciaNombre|default:'Agencia' }}" width="42" height="42" style="display:block;width:42px;height:42px;border-radius:50%;object-fit:contain;background:#fff;padding:4px;"></td><td valign="middle" style="padding-left:12px;font-family:Georgia,serif;font-size:18px;letter-spacing:1px;color:#2c3e50;text-transform:uppercase;font-weight:700;">{{ agenciaNombre|default:'Agencia' }}</td></tr></table>
+                    {% else %}
+                      <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:25px;letter-spacing:3px;color:#2c3e50;text-transform:uppercase;">{{ agenciaNombre|default:'Agencia' }}</div>
+                    {% endif %}
+                  </td>
+                  <td align="right" valign="middle">
+                    <span style="display:inline-block;padding:8px 16px;border:1px solid #2c3e50;color:#2c3e50;background:#fafaf8;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:600;">{{ operacion }}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:34px 36px 16px 36px;">
+              <div style="font-size:11px;letter-spacing:3px;color:#8f98a2;text-transform:uppercase;margin-bottom:10px;">Propuesta exclusiva</div>
+              <h1 style="margin:0;font-family:'Cormorant Garamond',Georgia,serif;font-size:42px;line-height:1.05;font-weight:600;color:#1f2f40;">{{ tipoPropiedad }}<br><span style="color:#2c3e50;">{{ ciudad }}</span></h1>
+            </td>
+          </tr>
+
+          {% if portada_url %}
+          <tr>
+            <td style="padding:14px 36px 0 36px;">
+              <img src="{{ portada_url }}" alt="Imagen de la propiedad" width="548" style="display:block;width:100%;height:auto;max-height:320px;object-fit:cover;border:1px solid #ebe6df;">
+            </td>
+          </tr>
+          {% endif %}
+
+          <tr>
+            <td style="padding:30px 36px 24px 36px;">
+              <div style="font-size:15px;line-height:1.85;color:#3b4652;">{{ html_content|safe }}</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 36px 28px 36px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e8e4df;background:#fbfaf7;">
+                <tr>
+                  <td style="padding:18px 20px;border-right:1px solid #e8e4df;" width="50%">
+                    <div style="font-size:10px;letter-spacing:2px;color:#8f98a2;text-transform:uppercase;margin-bottom:6px;">Precio</div>
+                    <div style="font-family:'Cormorant Garamond',Georgia,serif;font-size:30px;color:#2c3e50;font-weight:700;">{{ moneda }} {{ precio }}</div>
+                  </td>
+                  <td style="padding:18px 20px;" width="50%">
+                    <div style="font-size:10px;letter-spacing:2px;color:#8f98a2;text-transform:uppercase;margin-bottom:6px;">Operacion</div>
+                    <div style="font-size:18px;color:#2c3e50;font-weight:600;text-transform:uppercase;">{{ operacion }}</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 36px 34px 36px;">
+              <div style="padding-top:20px;border-top:1px solid #e8e4df;color:#64707a;font-size:13px;line-height:1.6;">
+                <strong style="color:#2c3e50;font-size:14px;">{{ agenteNombre|default:'Asesor Comercial' }}</strong><br>
+                {{ agenteRol|default:'Asesor Comercial' }} · {{ agenciaNombre|default:'Agencia' }}<br>
+                {% if agenteTelefono %}WhatsApp: {% if whatsapp_url %}<a href="{{ whatsapp_url }}" style="color:#2c3e50;text-decoration:none;">{{ agenteTelefonoDisplay|default:agenteTelefono }}</a>{% else %}{{ agenteTelefonoDisplay|default:agenteTelefono }}{% endif %}{% endif %}
+                {% if agenteEmail %}<br>Email: <a href="mailto:{{ agenteEmail }}" style="color:#2c3e50;text-decoration:none;">{{ agenteEmail }}</a>{% endif %}
+              </div>
+              <div style="padding-top:16px;">
+                {% if whatsapp_url %}
+                  <a href="{{ whatsapp_url }}" style="display:inline-block;padding:10px 16px;border:1px solid #2c3e50;color:#2c3e50;text-decoration:none;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;">Contactar por WhatsApp</a>
+                {% elif agenteEmail %}
+                  <a href="mailto:{{ agenteEmail }}" style="display:inline-block;padding:10px 16px;border:1px solid #2c3e50;color:#2c3e50;text-decoration:none;font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;">Contactar por Email</a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

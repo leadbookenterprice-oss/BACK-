@@ -1,8 +1,30 @@
 from celery import shared_task
 from django.utils import timezone
-from .models import APIKey, UserAPIQuota
+from django.db.models import F, Q
+from datetime import timedelta
+from .models import APIKey, Agent, Notificacion, UserAPIAssignment, UserAPIQuota
 from .services.pool_service import APIPoolService
 import requests
+
+
+FREE_POOL_SERVICES = ['gemini', 'elevenlabs']
+
+
+def _notify_free_pool_reset(user, now):
+    cutoff = now - timedelta(hours=11, minutes=30)
+    if Notificacion.objects.filter(
+        usuario=user,
+        tipo='reset_creditos',
+        creada_en__gte=cutoff,
+    ).exists():
+        return
+
+    Notificacion.objects.create(
+        usuario=user,
+        tipo='reset_creditos',
+        titulo='Ya podés generar contenido de nuevo',
+        mensaje='Las APIs free fueron reintentadas/resetadas. Si el proveedor ya renovó la cuota, podés generar contenido otra vez.',
+    )
 
 
 # ============================================================
@@ -168,6 +190,7 @@ def health_check_all_keys():
     keys = APIKey.objects.exclude(status__in=['disabled', 'dead'])
     for key in keys:
         try:
+            res = None
             servicio_nombre = key.servicio.nombre if hasattr(key.servicio, 'nombre') else str(key.servicio)
             if servicio_nombre == 'gemini':
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={key.api_key}"
@@ -183,6 +206,13 @@ def health_check_all_keys():
                 is_healthy = res.status_code == 200
             else:
                 is_healthy = True  # Desconocido, asume sano
+
+            if res is not None and res.status_code == 429:
+                key.status = 'exhausted'
+                key.last_health_status = True
+                key.error_count = 0
+                key.save(update_fields=['status', 'last_health_status', 'last_health_check', 'error_count', 'updated_at'])
+                continue
                 
             key.last_health_status = is_healthy
             key.last_health_check = timezone.now()
@@ -204,13 +234,78 @@ def health_check_all_keys():
             key.save()
 
 @shared_task
+def reset_free_pool_counters():
+    """Reinicia contadores free cada 12 horas y notifica a usuarios afectados."""
+    now = timezone.now()
+
+    affected_user_ids = set(
+        UserAPIQuota.objects.filter(servicio__nombre__in=FREE_POOL_SERVICES)
+        .filter(Q(is_blocked=True) | Q(requests_today__gte=F('user_daily_limit')))
+        .values_list('user_id', flat=True)
+    )
+    affected_user_ids.update(
+        UserAPIAssignment.objects.filter(
+            activo=True,
+            servicio__nombre__in=FREE_POOL_SERVICES,
+            apikey__status='exhausted',
+        ).values_list('user_id', flat=True)
+    )
+
+    UserAPIQuota.objects.filter(servicio__nombre__in=FREE_POOL_SERVICES).update(
+        requests_today=0,
+        is_blocked=False,
+        blocked_reason=None,
+        last_reset_daily=now,
+    )
+    APIKey.objects.filter(servicio__nombre__in=FREE_POOL_SERVICES).update(requests_today=0)
+
+    exhausted_keys = APIKey.objects.filter(servicio__nombre__in=FREE_POOL_SERVICES, status='exhausted')
+    for key in exhausted_keys:
+        has_assignment = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
+        key.status = 'assigned' if has_assignment else 'available'
+        key.save(update_fields=['status', 'updated_at'])
+
+    for user in Agent.objects.filter(id__in=affected_user_ids):
+        _notify_free_pool_reset(user, now)
+
+    return {'notified_users': len(affected_user_ids)}
+
+
+@shared_task
 def reset_daily_counters():
     """Se ejecuta cada noche a las 00:00 UTC para reiniciar cuotas"""
-    APIKey.objects.update(requests_today=0)
-    UserAPIQuota.objects.update(requests_today=0, last_reset_daily=timezone.now())
+    reset_free_pool_counters()
+    now = timezone.now()
+    APIKey.objects.exclude(servicio__nombre__in=FREE_POOL_SERVICES).update(requests_today=0)
+
+    non_free_quotas = UserAPIQuota.objects.exclude(servicio__nombre__in=FREE_POOL_SERVICES)
+    monthly_blocked_ids = list(
+        non_free_quotas.filter(blocked_reason__icontains='mensual').values_list('id', flat=True)
+    )
+    non_free_quotas.filter(id__in=monthly_blocked_ids).update(
+        requests_today=0,
+        last_reset_daily=now,
+    )
+    non_free_quotas.exclude(id__in=monthly_blocked_ids).update(
+        requests_today=0,
+        is_blocked=False,
+        blocked_reason=None,
+        last_reset_daily=now,
+    )
 
 @shared_task
 def reset_monthly_counters():
     """Se ejecuta cada 1 de mes para reiniciar cuotas"""
+    now = timezone.now()
     APIKey.objects.update(requests_this_month=0)
-    UserAPIQuota.objects.update(requests_this_month=0, last_reset_monthly=timezone.now())
+    UserAPIQuota.objects.update(requests_this_month=0, last_reset_monthly=now)
+    UserAPIQuota.objects.filter(blocked_reason__icontains='mensual').update(
+        is_blocked=False,
+        blocked_reason=None,
+        last_reset_monthly=now,
+    )
+    exhausted_uploadpost = APIKey.objects.filter(servicio__nombre='uploadpost', status='exhausted')
+    for key in exhausted_uploadpost:
+        has_assignment = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
+        key.status = 'assigned' if has_assignment else 'available'
+        key.save(update_fields=['status', 'updated_at'])

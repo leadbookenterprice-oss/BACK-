@@ -6,17 +6,22 @@
 <title>{{TITULO}} - {{AGENCIA_NOMBRE}}</title>
 <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:wght@400;700&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
 <style>
+@page { size: A4; margin: 0; }
 :root {
   --primario: {{COLOR_PRIMARIO}};
   --secundario: {{COLOR_SECUNDARIO}};
   --acento: {{COLOR_ACENTO}};
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; }
+body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+
+.topbar, .hero, .precio-bar, .stats, .descripcion, .amenidades, .galeria, .footer { break-inside: avoid; page-break-inside: avoid; }
 
 .topbar { display: flex; justify-content: space-between; align-items: center; padding: 22px 44px; background: var(--primario); }
-.topbar .logo img { height: 38px; object-fit: contain; }
-.topbar .logo-text { font-family: 'Libre Baskerville', serif; font-size: 20px; color: #fff; letter-spacing: 2px; }
+.topbar .logo { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.topbar .agent-avatar { width: 64px; height: 64px; border-radius: 999px; object-fit: cover; border: 2px solid rgba(255,255,255,0.75); }
+.topbar .agency-logo { max-width: 180px; max-height: 58px; object-fit: contain; }
+.topbar .logo-text { font-family: 'Libre Baskerville', serif; font-size: 20px; color: #fff; letter-spacing: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .badge-operacion { border: 2px solid rgba(255,255,255,0.6); color: #fff; font-size: 11px; font-weight: 700; letter-spacing: 3px; padding: 7px 18px; text-transform: uppercase; }
 
 .hero { position: relative; height: 500px; overflow: hidden; }
@@ -34,12 +39,13 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; }
 .stats { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--secundario); }
 .stat-item { padding: 26px 16px; text-align: center; border-right: 1px solid rgba(255,255,255,0.15); }
 .stat-item:last-child { border-right: none; }
+.stat-icon { color: var(--acento); font-size: 22px; margin-bottom: 8px; }
 .stat-valor { font-family: 'Libre Baskerville', serif; font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 6px; }
 .stat-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.55); }
 
 .descripcion { padding: 48px 44px; background: #fff; }
 .section-title { font-size: 10px; letter-spacing: 4px; text-transform: uppercase; color: var(--acento); margin-bottom: 20px; font-weight: 700; }
-.descripcion-texto { font-size: 17px; line-height: 2; color: #555; font-weight: 300; max-width: 740px; font-family: 'Libre Baskerville', serif; }
+.descripcion-texto { font-size: 17px; line-height: 1.8; color: #555; font-weight: 300; max-width: 740px; font-family: 'Libre Baskerville', serif; orphans: 3; widows: 3; }
 
 .amenidades { padding: 40px 44px; background: #f8f4ef; border-top: 1px solid #e2d9ce; border-bottom: 1px solid #e2d9ce; }
 .amenidades-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
@@ -47,31 +53,31 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; }
 
 .galeria { padding: 40px 44px; background: #fff; }
 .galeria-grid { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
-.galeria-foto { width: 100%; height: 420px; object-fit: cover; }
+.galeria-foto { width: 100%; height: 340px; object-fit: cover; break-inside: avoid; page-break-inside: avoid; }
 
-.footer { background: var(--primario); padding: 36px 44px; display: flex; justify-content: space-between; align-items: center; }
+.footer { background: var(--primario); padding: 32px 44px 26px; display: flex; flex-direction: column; gap: 20px; }
+.footer-main { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.agente-info { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.agente-avatar { width: 68px; height: 68px; border-radius: 999px; object-fit: cover; border: 2px solid #fff; flex: 0 0 auto; }
+.agente-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .agente-nombre { font-family: 'Libre Baskerville', serif; font-size: 22px; color: #fff; margin-bottom: 6px; }
 .agente-agencia { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 10px; }
 .agente-contacto { font-size: 14px; color: rgba(255,255,255,0.8); }
 .agente-contacto a { color: var(--acento); text-decoration: none; }
+.agente-contacto:empty { display: none; }
+.contact-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+.whatsapp-cta { display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border-radius: 999px; background: var(--acento); color: #fff !important; text-decoration: none; font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; }
 .qr-container img { width: 80px; height: 80px; }
 .qr-label { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-top: 6px; text-align: center; }
-.watermark {
-  position: fixed;
-  bottom: 18px;
-  right: 20px;
-  width: 120px;
-  opacity: 0.13;
-  pointer-events: none;
-  z-index: 9999;
-}
+.footer-watermark { display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid rgba(255,255,255,0.14); padding-top: 12px; }
+.footer-watermark img { width: 126px; opacity: 0.13; }
+.footer-watermark span { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.34); }
 </style>
 </head>
 <body>
 <div class="topbar">
   <div class="logo">
-    {{#if LOGO_AGENCIA}}<img src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">
-    {{else}}<span class="logo-text">{{AGENCIA_NOMBRE}}</span>{{/if}}
+    {{#if LOGO_AGENCIA}}<img class="agency-logo" src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">{{else}}<span class="logo-text">{{AGENCIA_NOMBRE}}</span>{{/if}}
   </div>
   <span class="badge-operacion">{{OPERACION}}</span>
 </div>
@@ -88,11 +94,11 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; }
   <span class="operacion-badge">{{OPERACION}}</span>
 </div>
 <div class="stats">
-  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
-  <div class="stat-item"><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
-  <div class="stat-item"><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
-  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
-  <div class="stat-item"><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_TOTAL}}</div><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_RECAMARAS}}</div><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_BANOS}}</div><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_CUBIERTA}}</div><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_ESTACIONAMIENTOS}}</div><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
 </div>
 <div class="descripcion">
   <div class="section-title">Descripción</div>
@@ -109,16 +115,22 @@ body { font-family: 'Lato', sans-serif; background: #f8f4ef; color: #2c2416; }
   </div>
 </div>
 <div class="footer">
-  <div>
-    <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
-    <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
-    <div class="agente-contacto">
-      <a href="tel:{{AGENTE_TELEFONO}}">{{AGENTE_TELEFONO}}</a> &nbsp;·&nbsp;
-      <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
+  <div class="footer-main">
+    <div class="agente-info">
+      {{#if AGENTE_FOTO}}<img class="agente-avatar" src="{{AGENTE_FOTO}}" alt="{{AGENTE_NOMBRE}}">{{/if}}
+      <div class="agente-meta">
+        <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
+        <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
+        <div class="agente-contacto">{{AGENTE_CONTACTO_HTML}}</div>
+        {{#if WHATSAPP_URL}}<div class="contact-actions"><a class="whatsapp-cta" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener">Contactar agente</a></div>{{/if}}
+      </div>
     </div>
+    {{#if QR_CODE}}<div class="qr-container"><img src="{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
   </div>
-  {{#if QR_CODE}}<div class="qr-container"><img src="{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
+  <div class="footer-watermark">
+    <img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+    <span>Generado por LeadBook</span>
+  </div>
 </div>
-<img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
 </body>
 </html>

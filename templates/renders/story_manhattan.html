@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;600;700&family=Source+Sans+3:wght@300;400;600&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --bg: #101010; --fg: #f3f3f3; --accent: #e63946; }
+  body { width: 1080px; height: 1920px; background: var(--bg); font-family: 'Source Sans 3', sans-serif; color: var(--fg); overflow: hidden; position: relative; }
+  .bg-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+  .overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(10,10,10,0.96) 0%, rgba(10,10,10,0.64) 46%, rgba(10,10,10,0.22) 100%); z-index: 2; }
+  .content { position: absolute; inset: 0; z-index: 3; padding: 76px 60px 102px; display: flex; flex-direction: column; justify-content: space-between; }
+  .top-section { display: flex; justify-content: space-between; align-items: center; }
+  .logo { max-width: 220px; max-height: 88px; object-fit: contain; filter: brightness(0) invert(1); }
+  .badge { background: var(--accent); color: #fff; font-family: 'Oswald', sans-serif; font-size: 25px; font-weight: 600; letter-spacing: 4px; padding: 12px 30px; text-transform: uppercase; }
+  .bottom-section { display: flex; flex-direction: column; gap: 20px; }
+  .title { font-family: 'Oswald', sans-serif; font-size: 130px; font-weight: 700; line-height: 0.84; letter-spacing: 2px; text-transform: uppercase; }
+  .title span { color: var(--accent); }
+  .price-box { display: inline-block; align-self: flex-start; border: 2px solid var(--accent); padding: 12px 22px; font-family: 'Oswald', sans-serif; font-size: 44px; font-weight: 600; letter-spacing: 1px; background: rgba(0,0,0,0.4); }
+  .stats-grid { display: flex; gap: 8px; margin-top: 18px; }
+  .stat-item { flex: 1; border-top: 3px solid var(--accent); background: rgba(0,0,0,0.68); padding: 20px 12px; text-align: center; }
+  .stat-value { font-family: 'Oswald', sans-serif; font-size: 42px; color: #fff; line-height: 1; }
+  .stat-label { font-family: 'Oswald', sans-serif; font-size: 14px; letter-spacing: 3px; color: rgba(255,255,255,0.72); text-transform: uppercase; }
+  .contact-strip { margin-top: 14px; display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; border: 1px solid rgba(230,57,70,0.42); border-radius: 14px; padding: 14px 16px; background: rgba(0,0,0,0.72); }
+  .agent-box { display: flex; flex-direction: column; gap: 3px; max-width: 70%; }
+  .agent-name { font-family: 'Oswald', sans-serif; font-size: 39px; line-height: 1; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+  .agent-role { font-family: 'Oswald', sans-serif; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.75); }
+  .agent-meta { font-size: 20px; color: #ffffff; }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .qr-box img { width: 118px; height: 118px; padding: 6px; background: #fff; border-radius: 8px; }
+  .qr-box span { font-family: 'Oswald', sans-serif; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.62); }
+</style>
+</head>
+<body>
+  {% if portada_url %}<img src="{{ portada_url }}" class="bg-image" />{% endif %}
+  <div class="overlay"></div>
+  <div class="content">
+    <div class="top-section">
+      <div class="badge">{{ operacion }}</div>
+      {% if logo_url %}<div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo" /><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% else %}<div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% endif %}
+    </div>
+    <div class="bottom-section">
+      <div class="title">{{ tipoPropiedad }}<br><span>{{ ciudad }}</span></div>
+      <div class="price-box">{{ moneda }} {{ precio }}</div>
+      {% if caracteristicas %}
+      <div class="stats-grid">
+        {% for stat in caracteristicas|slice:":3" %}
+        <div class="stat-item">
+          <div class="stat-label">{{ stat.label }}</div>
+          <div class="stat-value">{{ stat.valor }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="contact-strip">
+        <div class="agent-box">
+          <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+          <div class="agent-role">{{ agente_rol|default:"Asesor Comercial" }} · {{ agencia_nombre }}</div>
+          <div class="agent-meta">{{ agente_telefono }}</div>
+        </div>
+        {% if qr_url %}
+        <div class="qr-box">
+          <img src="{{ qr_url }}" alt="QR" />
+          <span>Escaneá</span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</body>
+</html>

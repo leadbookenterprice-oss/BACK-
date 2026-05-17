@@ -6,17 +6,22 @@
 <title>{{TITULO}} - {{AGENCIA_NOMBRE}}</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
+@page { size: A4; margin: 0; }
 :root {
   --primario: {{COLOR_PRIMARIO}};
   --secundario: {{COLOR_SECUNDARIO}};
   --acento: {{COLOR_ACENTO}};
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Space Grotesk', sans-serif; background: #080c10; color: #e8edf2; }
+body { font-family: 'Space Grotesk', sans-serif; background: #080c10; color: #e8edf2; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+
+.topbar, .hero, .precio-bar, .stats, .descripcion, .amenidades, .galeria, .footer { break-inside: avoid; page-break-inside: avoid; }
 
 .topbar { display: flex; justify-content: space-between; align-items: center; padding: 20px 40px; background: #0d1117; border-bottom: 1px solid rgba(255,255,255,0.06); }
-.topbar .logo img { height: 34px; object-fit: contain; }
-.topbar .logo-text { font-family: 'Space Mono', monospace; font-size: 16px; color: var(--acento); letter-spacing: 3px; text-transform: uppercase; font-weight: 700; }
+.topbar .logo { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.topbar .agent-avatar { width: 64px; height: 64px; border-radius: 999px; object-fit: cover; border: 2px solid var(--acento); }
+.topbar .agency-logo { max-width: 180px; max-height: 58px; object-fit: contain; }
+.topbar .logo-text { font-family: 'Space Mono', monospace; font-size: 16px; color: var(--acento); letter-spacing: 3px; text-transform: uppercase; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .badge-operacion { background: transparent; border: 1px solid var(--acento); color: var(--acento); font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 3px; padding: 7px 16px; text-transform: uppercase; }
 
 .hero { position: relative; height: 500px; overflow: hidden; }
@@ -34,12 +39,13 @@ body { font-family: 'Space Grotesk', sans-serif; background: #080c10; color: #e8
 .stats { display: grid; grid-template-columns: repeat(5, 1fr); background: #0d1117; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .stat-item { padding: 26px 16px; text-align: center; border-right: 1px solid rgba(255,255,255,0.06); }
 .stat-item:last-child { border-right: none; }
+.stat-icon { color: var(--acento); font-size: 22px; margin-bottom: 8px; }
 .stat-valor { font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; color: var(--acento); margin-bottom: 6px; }
 .stat-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.3); }
 
 .descripcion { padding: 48px 40px; background: #0d1117; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .section-title { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 5px; text-transform: uppercase; color: var(--acento); margin-bottom: 20px; }
-.descripcion-texto { font-size: 16px; line-height: 1.9; color: rgba(255,255,255,0.6); font-weight: 300; max-width: 760px; }
+.descripcion-texto { font-size: 16px; line-height: 1.8; color: rgba(255,255,255,0.6); font-weight: 300; max-width: 760px; orphans: 3; widows: 3; }
 
 .amenidades { padding: 40px 40px; background: #080c10; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .amenidades-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
@@ -47,31 +53,31 @@ body { font-family: 'Space Grotesk', sans-serif; background: #080c10; color: #e8
 
 .galeria { padding: 40px 40px; background: #0d1117; }
 .galeria-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 20px; }
-.galeria-foto { width: 100%; height: 430px; object-fit: cover; filter: brightness(0.9); }
+.galeria-foto { width: 100%; height: 340px; object-fit: cover; filter: brightness(0.9); break-inside: avoid; page-break-inside: avoid; }
 
-.footer { background: #0d1117; padding: 36px 40px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--acento); }
+.footer { background: #0d1117; padding: 32px 40px 26px; display: flex; flex-direction: column; gap: 20px; border-top: 1px solid var(--acento); }
+.footer-main { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.agente-info { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.agente-avatar { width: 68px; height: 68px; border-radius: 999px; object-fit: cover; border: 2px solid var(--acento); flex: 0 0 auto; }
+.agente-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .agente-nombre { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 6px; }
 .agente-agencia { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-bottom: 10px; }
 .agente-contacto { font-size: 14px; color: rgba(255,255,255,0.5); }
 .agente-contacto a { color: var(--acento); text-decoration: none; }
+.agente-contacto:empty { display: none; }
+.contact-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+.whatsapp-cta { display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border-radius: 999px; background: var(--acento); color: #071018 !important; text-decoration: none; font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; }
 .qr-container img { width: 80px; height: 80px; }
 .qr-label { font-family: 'Space Mono', monospace; font-size: 8px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,0.2); margin-top: 6px; text-align: center; }
-.watermark {
-  position: fixed;
-  bottom: 18px;
-  right: 20px;
-  width: 120px;
-  opacity: 0.13;
-  pointer-events: none;
-  z-index: 9999;
-}
+.footer-watermark { display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid rgba(255,255,255,0.12); padding-top: 12px; }
+.footer-watermark img { width: 126px; opacity: 0.14; }
+.footer-watermark span { font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.3); }
 </style>
 </head>
 <body>
 <div class="topbar">
   <div class="logo">
-    {{#if LOGO_AGENCIA}}<img src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">
-    {{else}}<span class="logo-text">{{AGENCIA_NOMBRE}}</span>{{/if}}
+    {{#if LOGO_AGENCIA}}<img class="agency-logo" src="{{LOGO_AGENCIA}}" alt="{{AGENCIA_NOMBRE}}">{{else}}<span class="logo-text">{{AGENCIA_NOMBRE}}</span>{{/if}}
   </div>
   <span class="badge-operacion">{{OPERACION}}</span>
 </div>
@@ -89,11 +95,11 @@ body { font-family: 'Space Grotesk', sans-serif; background: #080c10; color: #e8
   <div class="precio-valor">{{PRECIO}}</div>
 </div>
 <div class="stats">
-  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
-  <div class="stat-item"><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
-  <div class="stat-item"><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
-  <div class="stat-item"><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
-  <div class="stat-item"><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_TOTAL}}</div><div class="stat-valor">{{SUPERFICIE_TOTAL}}</div><div class="stat-label">m² total</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_RECAMARAS}}</div><div class="stat-valor">{{RECAMARAS}}</div><div class="stat-label">recámaras</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_BANOS}}</div><div class="stat-valor">{{BANOS}}</div><div class="stat-label">baños</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_CUBIERTA}}</div><div class="stat-valor">{{SUPERFICIE_CUBIERTA}}</div><div class="stat-label">m² cubiertos</div></div>
+  <div class="stat-item"><div class="stat-icon">{{ICON_ESTACIONAMIENTOS}}</div><div class="stat-valor">{{ESTACIONAMIENTOS}}</div><div class="stat-label">estacionam.</div></div>
 </div>
 <div class="descripcion">
   <div class="section-title">// Descripción</div>
@@ -110,16 +116,22 @@ body { font-family: 'Space Grotesk', sans-serif; background: #080c10; color: #e8
   </div>
 </div>
 <div class="footer">
-  <div>
-    <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
-    <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
-    <div class="agente-contacto">
-      <a href="tel:{{AGENTE_TELEFONO}}">{{AGENTE_TELEFONO}}</a> &nbsp;·&nbsp;
-      <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
+  <div class="footer-main">
+    <div class="agente-info">
+      {{#if AGENTE_FOTO}}<img class="agente-avatar" src="{{AGENTE_FOTO}}" alt="{{AGENTE_NOMBRE}}">{{/if}}
+      <div class="agente-meta">
+        <div class="agente-nombre">{{AGENTE_NOMBRE}}</div>
+        <div class="agente-agencia">{{AGENCIA_NOMBRE}}</div>
+        <div class="agente-contacto">{{AGENTE_CONTACTO_HTML}}</div>
+        {{#if WHATSAPP_URL}}<div class="contact-actions"><a class="whatsapp-cta" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener">Contactar agente</a></div>{{/if}}
+      </div>
     </div>
+    {{#if QR_CODE}}<div class="qr-container"><img src="{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
   </div>
-  {{#if QR_CODE}}<div class="qr-container"><img src="{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
+  <div class="footer-watermark">
+    <img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
+    <span>Generado por LeadBook</span>
+  </div>
 </div>
-<img class="watermark" src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">
 </body>
 </html>

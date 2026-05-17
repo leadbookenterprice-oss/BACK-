@@ -154,9 +154,9 @@
   <div class="content">
     <div class="top-section">
       {% if logo_url %}
-        <img src="{{ logo_url }}" class="logo" />
+        <div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo" /><span class="lb-brand-name">{{ agencia_nombre }}</span></div>
       {% else %}
-        <div></div>
+        <div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>
       {% endif %}
       <div class="badge">{{ operacion }}</div>
     </div>

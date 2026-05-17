@@ -10,6 +10,7 @@ import re
 from api.tracking import track_api_call
 
 logger = logging.getLogger(__name__)
+LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates_pdf')
 
@@ -41,6 +42,179 @@ TEMPLATE_COLORES = {
     },
 }
 
+TEMPLATE_IDS = tuple(
+    filename.replace('template_', '').replace('.html', '')
+    for filename in TEMPLATE_COLORES.keys()
+)
+
+
+def _resolve_theme_from_context(context, template_file):
+    tokens = context.get('template_tokens') if isinstance(context, dict) else None
+    base = TEMPLATE_COLORES.get(template_file, {})
+    if not isinstance(tokens, dict):
+        return {
+            'primario': base.get('primario', '#0d47a1'),
+            'secundario': base.get('secundario', '#1565c0'),
+            'acento': base.get('acento', '#00e5ff'),
+            'display_font': 'DM Sans',
+            'body_font': 'DM Sans',
+            'mono_font': 'Space Mono',
+            'font_import_url': '',
+        }
+
+    palette = tokens.get('palette') if isinstance(tokens.get('palette'), dict) else {}
+    typography = tokens.get('typography') if isinstance(tokens.get('typography'), dict) else {}
+    return {
+        'primario': palette.get('primary', base.get('primario', '#0d47a1')),
+        'secundario': palette.get('secondary', base.get('secundario', '#1565c0')),
+        'acento': palette.get('accent', base.get('acento', '#00e5ff')),
+        'display_font': typography.get('display', 'DM Sans'),
+        'body_font': typography.get('body', 'DM Sans'),
+        'mono_font': typography.get('mono', 'Space Mono'),
+        'font_import_url': typography.get('font_import_url', ''),
+    }
+
+
+def _normalize_template_id(value):
+    if not value:
+        return None
+    template_id = str(value).strip().lower()
+    template_id = template_id.replace('template_', '').replace('post_', '').replace('.html', '')
+    if template_id in TEMPLATE_IDS:
+        return template_id
+    return None
+
+
+def _template_file_from_id(template_id):
+    normalized = _normalize_template_id(template_id)
+    if not normalized:
+        return None
+    return f'template_{normalized}.html'
+
+
+def _render_conditional_block(html_text, key, enabled, replacements=None):
+    if not isinstance(html_text, str):
+        return html_text
+
+    replacements = replacements or {}
+    key_escaped = re.escape(str(key))
+
+    # Bloque con else
+    pattern_with_else = re.compile(
+        rf'\{{\{{#if {key_escaped}\}}\}}(.*?)\{{\{{else\}}\}}(.*?)\{{\{{/if\}}\}}',
+        flags=re.DOTALL,
+    )
+
+    def _replace_with_else(match):
+        chunk = match.group(1) if enabled else match.group(2)
+        for token, value in replacements.items():
+            chunk = chunk.replace(token, value)
+        return chunk
+
+    rendered = pattern_with_else.sub(_replace_with_else, html_text)
+
+    # Bloque sin else
+    pattern_plain = re.compile(rf'\{{\{{#if {key_escaped}\}}\}}(.*?)\{{\{{/if\}}\}}', flags=re.DOTALL)
+
+    if enabled:
+        def _replace_plain(match):
+            chunk = match.group(1)
+            for token, value in replacements.items():
+                chunk = chunk.replace(token, value)
+            return chunk
+
+        rendered = pattern_plain.sub(_replace_plain, rendered)
+    else:
+        rendered = pattern_plain.sub('', rendered)
+
+    return rendered
+
+
+def _pdf_inline_icon(name='check'):
+    paths = {
+        'bed': '<path d="M4 11V6"/><path d="M20 18v-5a4 4 0 0 0-4-4H9a5 5 0 0 0-5 5v4"/><path d="M4 14h16"/><path d="M4 18h16"/>',
+        'bath': '<path d="M4 12h16v2a6 6 0 0 1-6 6H10a6 6 0 0 1-6-6v-2Z"/><path d="M7 12V6a3 3 0 0 1 6 0"/>',
+        'ruler': '<path d="M4 18 18 4l2 2L6 20l-2-2Z"/><path d="m8 14 2 2"/><path d="m11 11 2 2"/><path d="m14 8 2 2"/>',
+        'car': '<path d="M5 12 7 7h10l2 5"/><path d="M4 12h16v5H4z"/><circle cx="7" cy="17" r="1.5"/><circle cx="17" cy="17" r="1.5"/>',
+        'location': '<path d="M12 21s7-5.2 7-11a7 7 0 0 0-14 0c0 5.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/>',
+        'check': '<path d="m5 13 4 4L19 7"/>',
+    }
+    return (
+        '<svg class="pdf-inline-icon" viewBox="0 0 24 24" aria-hidden="true" '
+        'style="display:inline-block;width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;'
+        'stroke-linecap:round;stroke-linejoin:round;vertical-align:-0.12em;flex-shrink:0">'
+        f'{paths.get(name, paths["check"])}</svg>'
+    )
+
+
+def _replace_fontawesome_icons(html_text):
+    if not isinstance(html_text, str):
+        return html_text
+
+    cleaned = re.sub(
+        r'<link[^>]+(?:font-awesome|cdnjs\.cloudflare\.com/ajax/libs/font-awesome)[^>]*>\s*',
+        '',
+        html_text,
+        flags=re.IGNORECASE,
+    )
+
+    def icon_for_class(match):
+        class_attr = match.group(1).lower()
+        if 'fa-bed' in class_attr:
+            return _pdf_inline_icon('bed')
+        if 'fa-bath' in class_attr:
+            return _pdf_inline_icon('bath')
+        if 'fa-ruler' in class_attr:
+            return _pdf_inline_icon('ruler')
+        if 'fa-car' in class_attr:
+            return _pdf_inline_icon('car')
+        if 'fa-location' in class_attr:
+            return _pdf_inline_icon('location')
+        return _pdf_inline_icon('check')
+
+    return re.sub(
+        r'<i\s+class=["\']([^"\']*\bfa-[^"\']*)["\']\s*>\s*</i>',
+        icon_for_class,
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+
+def _format_phone_display(value):
+    raw = str(value or '').strip()
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return ''
+
+    if raw.startswith('+'):
+        normalized = f'+{digits}'
+    else:
+        normalized = f'+{digits}'
+
+    country = ''
+    area = ''
+    local = ''
+
+    if digits.startswith('54') and len(digits) >= 10:
+        country = '54'
+        rest = digits[2:]
+        if rest.startswith('9') and len(rest) > 5:
+            rest = rest[1:]
+        if len(rest) >= 10:
+            area = rest[:4]
+            local = rest[4:]
+        elif len(rest) >= 8:
+            area = rest[:3]
+            local = rest[3:]
+        else:
+            local = rest
+    else:
+        local = digits
+
+    if country and area and local:
+        return f'+{country} {area} {local}'
+    return normalized
+
 def generar_html_desde_template(context, agente):
     """
     Genera HTML usando un template prediseñado.
@@ -50,22 +224,38 @@ def generar_html_desde_template(context, agente):
     print(f"[Template DEBUG] portada_url raw: {repr(context.get('portada_url', 'NO EXISTE'))}")
     print(f"[Template DEBUG] portadaUrl raw: {repr(context.get('portadaUrl', 'NO EXISTE'))}")
     
-    # 1. Elegir template al azar (siempre aleatorio al regenerar)
-    templates = list(TEMPLATE_COLORES.keys())
-    template_elegido = random.choice(templates)  # siempre aleatorio al regenerar
+    # 1. Resolver template con prioridad: payload/contexto -> DB -> aleatorio
+    template_id = _normalize_template_id(context.get('template_id'))
+    template_elegido = _template_file_from_id(template_id)
 
-    # Guardar template en DB para persistencia
     listado_id = context.get('listado_id')
+    listado = None
+
     if listado_id:
         try:
             from .models import Listado
             listado = Listado.objects.filter(id=listado_id).first()
-            if listado:
-                datos = listado.datos or {}
-                datos['template'] = template_elegido.replace('.html', '').replace('template_', '')
-                listado.datos = datos
-                listado.save(update_fields=['datos_extra'])
-                print(f"[Template] Guardado template en DB: {datos['template']}")
+            if listado and not template_elegido:
+                datos = listado.datos_extra or {}
+                template_id_db = _normalize_template_id(datos.get('template_id') or datos.get('template'))
+                template_elegido = _template_file_from_id(template_id_db)
+        except Exception as e:
+            print(f"[Template] Error leyendo template en DB: {e}")
+
+    if not template_elegido:
+        template_elegido = random.choice(list(TEMPLATE_COLORES.keys()))
+
+    template_id = template_elegido.replace('template_', '').replace('.html', '')
+    context['template_id'] = template_id
+
+    if listado:
+        try:
+            datos = listado.datos_extra or {}
+            datos['template_id'] = template_id
+            datos['template'] = template_id
+            listado.datos_extra = datos
+            listado.save(update_fields=['datos_extra'])
+            print(f"[Template] Guardado template en DB: {template_id}")
         except Exception as e:
             print(f"[Template] Error guardando template: {e}")
     
@@ -75,10 +265,15 @@ def generar_html_desde_template(context, agente):
         html = f.read()
     
     # 3. Aplicar colores del template
-    colores = TEMPLATE_COLORES[template_elegido]
-    html = html.replace('{{COLOR_PRIMARIO}}', colores['primario'])
-    html = html.replace('{{COLOR_SECUNDARIO}}', colores['secundario'])
-    html = html.replace('{{COLOR_ACENTO}}', colores['acento'])
+    theme = _resolve_theme_from_context(context, template_elegido)
+    html = html.replace('{{COLOR_PRIMARIO}}', theme['primario'])
+    html = html.replace('{{COLOR_SECUNDARIO}}', theme['secundario'])
+    html = html.replace('{{COLOR_ACENTO}}', theme['acento'])
+    html = html.replace('{{ICON_TOTAL}}', _pdf_inline_icon('ruler'))
+    html = html.replace('{{ICON_RECAMARAS}}', _pdf_inline_icon('bed'))
+    html = html.replace('{{ICON_BANOS}}', _pdf_inline_icon('bath'))
+    html = html.replace('{{ICON_CUBIERTA}}', _pdf_inline_icon('ruler'))
+    html = html.replace('{{ICON_ESTACIONAMIENTOS}}', _pdf_inline_icon('car'))
     
     # 4. Reemplazar datos de la propiedad
     html = html.replace('{{TITULO}}', str(context.get('tipo_propiedad', '') + ' en ' + context.get('ciudad', '')))
@@ -92,33 +287,69 @@ def generar_html_desde_template(context, agente):
     html = html.replace('{{SUPERFICIE_TOTAL}}', str(context.get('superficie_total', 'N/A')))
     html = html.replace('{{SUPERFICIE_CUBIERTA}}', str(context.get('superficie_cubierta', 'N/A')))
     html = html.replace('{{ESTACIONAMIENTOS}}', str(context.get('estacionamientos', 'N/A')))
+    agent_phone_raw = str(context.get('agente_telefono', '') or '').strip()
+    phone_href = ''.join(ch for ch in agent_phone_raw if ch.isdigit())
+    if phone_href:
+        phone_href = f'+{phone_href}'
+    phone_display = _format_phone_display(agent_phone_raw)
+
     html = html.replace('{{AGENTE_NOMBRE}}', str(context.get('agente_nombre', '')))
-    html = html.replace('{{AGENTE_TELEFONO}}', str(context.get('agente_telefono', '')))
+    html = html.replace('{{AGENTE_TELEFONO}}', phone_display)
+    html = html.replace('{{AGENTE_TELEFONO_DISPLAY}}', phone_display)
+    html = html.replace('{{AGENTE_TELEFONO_HREF}}', phone_href)
     html = html.replace('{{AGENTE_EMAIL}}', str(context.get('agente_email', '')))
     html = html.replace('{{AGENCIA_NOMBRE}}', str(context.get('agencia_nombre', '')))
+    html = html.replace('{{AGENTE_CONTACTO_HTML}}', str(context.get('agente_contacto_html', '')))
+    html = html.replace('{{WHATSAPP_URL}}', str(context.get('whatsapp_url', '')))
     
     # 5. Logo de agencia
     logo_url = context.get('logo_url_raw', '')
-    if logo_url:
-        html = html.replace('{{#if LOGO_AGENCIA}}', '')
-        html = html.replace('{{/if}}', '')
-        html = html.replace('{{LOGO_AGENCIA}}', logo_url)
-    else:
-        # Eliminar bloque condicional del logo, dejar solo el texto
-        html = re.sub(r'\{\{#if LOGO_AGENCIA\}\}.*?\{\{else\}\}', '', html, flags=re.DOTALL)
-        html = re.sub(r'\{\{/if\}\}', '', html)
+    html = _render_conditional_block(
+        html,
+        'LOGO_AGENCIA',
+        bool(logo_url),
+        replacements={'{{LOGO_AGENCIA}}': str(logo_url or '')},
+    )
     
-    # 6. QR en base64 — CRÍTICO: reemplazar antes de cualquier otra cosa
+    # 6. Foto del agente (perfil)
+    agent_photo_raw = (
+        context.get('agente_foto_url', '')
+        or context.get('agente_foto', '')
+    )
+    if isinstance(agent_photo_raw, dict) and 'public_id' in agent_photo_raw:
+        cloud = agent_photo_raw.get('cloudinary_account', 'df1vldrhb')
+        pid = agent_photo_raw.get('public_id', '')
+        agent_photo = f"https://res.cloudinary.com/{cloud}/image/upload/{pid}"
+    elif isinstance(agent_photo_raw, str) and agent_photo_raw.startswith('http'):
+        agent_photo = re.sub(r's--[^/]+--/', '', agent_photo_raw)
+    else:
+        agent_photo = ''
+    html = _render_conditional_block(
+        html,
+        'AGENTE_FOTO',
+        bool(agent_photo),
+        replacements={'{{AGENTE_FOTO}}': agent_photo},
+    )
+
+    # 7. QR en base64 — CRÍTICO: reemplazar antes de cualquier otra cosa
     qr_code = context.get('qr_code', '')
     print(f"[Template] QR code presente: {bool(qr_code)}, largo: {len(str(qr_code))}")
-    if qr_code:
-        html = html.replace('{{#if QR_CODE}}', '')
-        html = re.sub(r'\{\{/if\}\}', '', html)
-        html = html.replace('{{QR_CODE}}', qr_code)
-    else:
-        html = re.sub(r'\{\{#if QR_CODE\}\}.*?\{\{/if\}\}', '', html, flags=re.DOTALL)
+    html = _render_conditional_block(
+        html,
+        'QR_CODE',
+        bool(qr_code),
+        replacements={'{{QR_CODE}}': str(qr_code or '')},
+    )
+
+    whatsapp_url = str(context.get('whatsapp_url', '') or '')
+    html = _render_conditional_block(
+        html,
+        'WHATSAPP_URL',
+        bool(whatsapp_url),
+        replacements={'{{WHATSAPP_URL}}': whatsapp_url},
+    )
     
-    # 7. Foto de portada — siempre galeria_0 del listado
+    # 8. Foto de portada — siempre galeria_0 del listado
     def _build_cloudinary_url(val):
         if isinstance(val, dict) and 'public_id' in val:
             cloud = val.get('cloudinary_account', 'df1vldrhb')
@@ -143,7 +374,7 @@ def generar_html_desde_template(context, agente):
     html = html.replace('{{FOTO_PORTADA}}', portada_url)
 
     
-    # 8. Fotos de galería
+    # 9. Fotos de galería
     galeria_html = ''
     for i, foto in enumerate(fotos_raw):
         foto_url = _build_cloudinary_url(foto)
@@ -152,10 +383,11 @@ def generar_html_desde_template(context, agente):
 
     html = html.replace('{{GALERIA_FOTOS}}', galeria_html)
     
-    # 9. Amenidades — generar chips HTML (ANTES DE LIMPIAR)
+    # 10. Amenidades — generar chips HTML (ANTES DE LIMPIAR)
     amenidades = context.get('amenidades', [])
     print(f"[Template] Amenidades: {amenidades}")
-    chips_html = ''.join([f'<span class="amenidad-chip">{a}</span>' for a in amenidades])
+    amenity_icon = _pdf_inline_icon('check')
+    chips_html = ''.join([f'<span class="amenidad-chip">{amenity_icon}{a}</span>' for a in amenidades])
     html = html.replace('{{AMENIDADES}}', chips_html)
 
     # Limpiar cualquier placeholder restante
@@ -163,8 +395,20 @@ def generar_html_desde_template(context, agente):
     html = re.sub(r'\{\{else\}\}', '', html)
     html = re.sub(r'\{\{/if\}\}', '', html)
     html = re.sub(r'\{\{[^}]+\}\}', '', html)
+
+    if '</head>' in html:
+        font_link = f'<link rel="stylesheet" href="{theme["font_import_url"]}">' if theme.get('font_import_url') else ''
+        override = (
+            '<style id="brand-template-overrides">'
+            f"body{{font-family:'{theme['body_font']}',sans-serif !important;}}"
+            f"h1,h2,h3,.hero-titulo,.section-title{{font-family:'{theme['display_font']}',sans-serif !important;}}"
+            f".stat-label,.badge-operacion,.qr-label{{font-family:'{theme['mono_font']}',sans-serif !important;}}"
+            '</style>'
+        )
+        html = html.replace('</head>', f'{font_link}{override}</head>', 1)
     
     
+    html = _replace_fontawesome_icons(html)
     logger.info(f"[HTML Template] Template elegido: {template_elegido}. HTML generado: {len(html)} chars.")
     return html
 
@@ -200,14 +444,14 @@ PASO2_CASCADE = [
 
 def _get_nvidia_key():
     from api.models import APIKey
-    pool_key = APIKey.objects.filter(servicio='nvidia', status__in=['available', 'active']).first()
+    pool_key = APIKey.objects.filter(servicio__nombre__iexact='nvidia', status__in=['available', 'assigned']).first()
     if pool_key:
         return pool_key.api_key
     return settings.NVIDIA_API_KEY
 
 def _get_groq_key():
     from api.models import APIKey
-    pool_key = APIKey.objects.filter(servicio='groq', status__in=['available', 'active']).first()
+    pool_key = APIKey.objects.filter(servicio__nombre__iexact='groq', status__in=['available', 'assigned']).first()
     if pool_key:
         return pool_key.api_key
     return settings.GROQ_API_KEY
@@ -237,7 +481,7 @@ def call_groq_api(prompt: str, **kwargs) -> str:
     Llama a Groq. Usa modelos soportados (llama3-8b-8192 fue decomisionado).
     Permite override de modelo por kwargs['model'].
     """
-    key = settings.GROQ_API_KEY or os.environ.get('GROQ_API_KEY', '')
+    key = _get_groq_key() or os.environ.get('GROQ_API_KEY', '')
     if not key:
         raise RuntimeError("GROQ_API_KEY no configurada")
 
@@ -356,6 +600,8 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
             result = call_gemini_api(prompt, agente=agente, **kwargs)
             if result:
                 return result
+        except GeminiQuotaExhaustedError:
+            raise
         except Exception as e:
             print(f"Gemini attempt {attempt+1}/{retries} failed: {str(e)}")
             if attempt < retries - 1:
@@ -372,11 +618,14 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
         key = fallback_env_key
     elif agente is not None:
         try:
-            from api.pool_manager import get_api_key
-            key = get_api_key(agente, 'elevenlabs')
+            from api.pool_manager import get_next_available_api
+            key = get_next_available_api(agente, 'elevenlabs')
         except Exception as e:
             print(f"[WARN] Fallo pool_manager ElevenLabs ({type(e).__name__}).")
             key = None
+        if not key:
+            print("[ERROR] No hay ElevenLabs API Key asignada para el usuario en el Pool.")
+            raise Exception(LIMIT_REACHED_MESSAGE)
     else:
         key = None
 
@@ -432,25 +681,22 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
 
             print(f"[ERROR] ElevenLabs API failed ({response.status_code}): {response.text}")
             if agente and response.status_code in [401, 429]:
-                from api.pool_manager import marcar_agotada
-                marcar_agotada(agente, 'elevenlabs')
                 try:
-                    from api.pool_manager import get_api_key
                     from api.models import APIKey
-                    key_str = get_api_key(agente, 'elevenlabs')
-                    if key_str:
-                        k = APIKey.objects.filter(api_key=key_str).first()
-                        if k:
-                            k.status = 'exhausted'
-                            k.requests_this_month = k.google_monthly_limit or 10000
-                            k.save()
+                    k = APIKey.objects.filter(api_key=key, servicio__nombre__iexact='elevenlabs').first()
+                    if k:
+                        k.status = 'exhausted'
+                        k.requests_this_month = k.google_monthly_limit or max(k.requests_this_month, k.google_daily_limit)
+                        k.save(update_fields=['status', 'requests_this_month', 'updated_at'])
                 except Exception as e:
                     logger.error(f"Error marcando ElevenLabs como agotada: {e}")
-                raise Exception("Llegaste al límite mensual de tu API de Audio (ElevenLabs).")
+                raise Exception(LIMIT_REACHED_MESSAGE)
 
         return None
     except Exception as e:
         print(f"[ERROR] Exception in ElevenLabs call: {str(e)}")
+        if str(e) == LIMIT_REACHED_MESSAGE:
+            raise
         return None
 
 
@@ -475,10 +721,8 @@ def _mark_gemini_exhausted(agente, key_str, is_monthly=False):
             k = APIKey.objects.filter(api_key=key_str).first()
             if k:
                 k.status = 'exhausted'
-                if is_monthly:
-                    k.is_monthly_exhausted = True
-                k.requests_this_month = k.monthly_limit or 1500
-                k.save(update_fields=['status', 'is_monthly_exhausted', 'requests_this_month'])
+                k.requests_this_month = k.google_monthly_limit or k.google_daily_limit or 1500
+                k.save(update_fields=['status', 'requests_this_month', 'updated_at'])
                 print(f"[Pool] Key marcada como AGOTADA: {key_str[:10]}...")
     except Exception as ex:
         logger.error(f"Error marcando Gemini como agotada: {ex}")
@@ -490,19 +734,19 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
     operation_func debe recibir un objeto 'client' como argumento.
     """
     from google import genai
-    from api.pool_manager import get_api_key
+    from api.pool_manager import get_next_available_api
 
     last_key = None
     
     for attempt in range(max_retries + 5): # Damos margen para rotar llaves
         # 1. Obtener llave actual
         if agente:
-            current_key = get_api_key(agente, 'gemini')
+            current_key = get_next_available_api(agente, 'gemini')
         else:
             current_key = settings.GEMINI_API_KEY
-            
+
         if not current_key:
-            raise GeminiQuotaExhaustedError("No hay API Keys disponibles.")
+            raise GeminiQuotaExhaustedError(LIMIT_REACHED_MESSAGE)
 
         # 2. Crear cliente y ejecutar
         try:
@@ -531,15 +775,14 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                     if agente:
                         _mark_gemini_exhausted(agente, current_key, is_monthly=True)
                         # Intentar rotar: buscar si get_api_key ahora nos da otra llave
-                        new_key = get_api_key(agente, 'gemini')
+                        new_key = get_next_available_api(agente, 'gemini')
                         if new_key and new_key != current_key:
                             print(f"[Pool] 🔄 Rotando llave de Gemini: {current_key[:8]} -> {new_key[:8]}")
                             continue # Reintentar con la nueva llave
                     
                     # Si no hay agente o no hay más llaves, lanzar error definitivo
                     raise GeminiQuotaExhaustedError(
-                        "Alcanzaste el límite de tu cuota de IA (incluyendo adicionales). "
-                        "Tu cuota se renueva el próximo mes."
+                        LIMIT_REACHED_MESSAGE
                     )
                 
                 if is_minute or '429' in error_msg:
@@ -595,6 +838,8 @@ def generar_html_gemini(context, agente):
         amenidades = ', '.join(context.get('amenidades', [])[:10])
         agente_nombre = context.get('agente_nombre', '')
         agencia_nombre = context.get('agencia_nombre', '')
+        template_instructions = str(context.get('template_instructions') or '').strip()
+        template_block = f"\nTEMPLATE PERSONALIZADO DEL USUARIO:\n{template_instructions}\n" if template_instructions else ''
 
         prompt_step1 = f"""Sos un director de arte de una agencia de branding de lujo y real estate premium.
         
@@ -607,6 +852,7 @@ DATOS DE LA PROPIEDAD:
 - Ubicación: {ciudad}
 - Amenidades: {amenidades}
 - Agencia: {agencia_nombre} | Agente: {agente_nombre}
+{template_block}
 
 El prompt que generes debe especificar obligatoriamente:
 1. TIPOGRAFÍA (Google Fonts): Elegí una fuente para Títulos (Display/Serif/Sans-Bold) y otra para el Cuerpo de texto. Especificá los 'font-weight' exactos (ej: 300, 700, 900).
@@ -696,6 +942,7 @@ Sos un desarrollador frontend senior especializado en landing pages inmobiliaria
 
 DISEÑO A IMPLEMENTAR (seguilo ESTRICTAMENTE):
 {design_prompt}
+{template_block}
 
 DATOS DE LA PROPIEDAD:
 - Tipo: {context.get('tipo_propiedad')}
@@ -772,6 +1019,7 @@ CRÍTICO — LEÉ ESTO ANTES DE GENERAR:
 
 DISEÑO A IMPLEMENTAR:
 {design_prompt}
+{template_block}
 
 DATOS DE LA PROPIEDAD:
 {datos_propiedad}
@@ -835,6 +1083,7 @@ REGLAS DE DISEÑO PREMIUM:
         if html_output.endswith('```'):
             html_output = html_output[:-3]
 
+        html_output = _replace_fontawesome_icons(html_output)
         logger.info(f"[HTML Gen] Paso 2 completado. HTML generado ({len(html_output)} chars).")
         return html_output.strip()
 

@@ -1,5 +1,8 @@
 # Entornos y credenciales
 .env
+out.json
+project_audit.md
+test_gemini_key.py
 venv/
 venv_msys2_backup/
 env/
