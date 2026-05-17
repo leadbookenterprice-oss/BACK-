@@ -14,12 +14,14 @@ from api.models import (
 )
 from api.services.pool_service import APIPoolService
 from decouple import config
+from django.utils.crypto import constant_time_compare
 
-ADMIN_KEY = config('ADMIN_KEY', default='leadbook_admin_2026')
+ADMIN_KEY = config('ADMIN_KEY', default='')
 
 
 def _check_admin(request):
-    if request.headers.get('X-Admin-Key') == ADMIN_KEY and ADMIN_KEY:
+    supplied_key = request.headers.get('X-Admin-Key', '')
+    if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
         return True
     return request.user and request.user.is_authenticated and request.user.is_staff
 

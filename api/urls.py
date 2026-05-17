@@ -1,6 +1,5 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 from . import views_usage
 from .views import (
@@ -25,7 +24,7 @@ from .views import (
     brand_template_clone, brand_templates_options,
     brand_template_set_default, brand_template_revisions_collection,
     brand_template_publish_revision, brand_template_preview, brand_template_chat,
-    brand_template_draft_preview, brand_template_draft_chat,
+    brand_template_draft_preview, brand_template_draft_chat, CookieTokenRefreshView,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -46,8 +45,8 @@ router.register(r'assets', GeneratedAssetViewSet)
 urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='auth_register'),
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('auth/login/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh_alt'),
+    path('auth/login/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
+    path('auth/token/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh_alt'),
     path('auth/logout/', LogoutView.as_view(), name='auth_logout'),
     path('auth/perfil/', PerfilView.as_view(), name='auth_perfil'),
     path('auth/onboarding/', OnboardingView.as_view(), name='auth_onboarding'),

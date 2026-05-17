@@ -1557,14 +1557,51 @@ def _extract_urls_for_export(value):
     return unique
 
 
-def _download_remote_asset(url, timeout=25):
+def _is_safe_remote_asset_url(url, allowed_hosts=None):
     try:
-        response = requests.get(url, timeout=timeout)
+        import ipaddress
+        import socket
+        from urllib.parse import urlparse
+        from django.conf import settings
+
+        parsed = urlparse(str(url or '').strip())
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+            return False
+
+        hostname = parsed.hostname.lower().rstrip('.')
+        allowed = allowed_hosts or getattr(settings, 'REMOTE_ASSET_ALLOWED_HOSTS', ['res.cloudinary.com'])
+        allowed = {str(host).lower().rstrip('.') for host in allowed if str(host).strip()}
+        if allowed and not any(hostname == host or hostname.endswith(f'.{host}') for host in allowed):
+            return False
+
+        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _download_remote_asset(url, timeout=25, max_bytes=20 * 1024 * 1024):
+    if not _is_safe_remote_asset_url(url):
+        return None, None
+    try:
+        response = requests.get(url, timeout=timeout, stream=True, allow_redirects=False)
         if response.status_code != 200:
             return None, None
 
         content_type = response.headers.get('content-type', '').lower()
-        return response.content, content_type
+        chunks = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=8192):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > max_bytes:
+                return None, None
+            chunks.append(chunk)
+        return b''.join(chunks), content_type
     except Exception:
         return None, None
 
@@ -1905,11 +1942,15 @@ def _sanitize_generated_email_html(raw_html):
     if not html_text:
         return ''
 
-    html_text = re.sub(r'(?is)<(script|style|iframe|object|embed)[^>]*>.*?</\1>', '', html_text)
+    html_text = re.sub(r'(?is)<(script|style|iframe|object|embed|svg|math|form|input|button|meta|link)[^>]*>.*?</\1>', '', html_text)
     html_text = re.sub(r'(?is)<a\b[^>]*>(.*?)</a>', r'\1', html_text)
     html_text = re.sub(r'(?is)</?(html|head|body)[^>]*>', '', html_text)
+    html_text = re.sub(r'(?is)\s(?:on\w+|style|srcdoc|formaction|xlink:href)\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)', '', html_text)
+    html_text = re.sub(r'(?i)(?:javascript:|vbscript:|data:text/html)', '', html_text)
     html_text = re.sub(r'(?i)\b(?:mailto:|tel:|https?://|www\.)\S+', '', html_text)
     html_text = re.sub(r'(?i)href\s*=\s*["\']?(?:mailto:|tel:|https?://|www\.)[^"\'>\s]+["\']?', '', html_text)
+    html_text = re.sub(r'(?is)<(?!/?(?:p|br|strong|b|em|i|ul|ol|li|span|div)\b)[^>]+>', '', html_text)
+    html_text = re.sub(r'(?is)<(p|strong|b|em|i|ul|ol|li|span|div)\b[^>]*>', r'<\1>', html_text)
     html_text = re.sub(r'(?i)\b[\w.+-]+@[\w-]+\.[\w.-]+\b', '', html_text)
     html_text = re.sub(r'>\s+<', '><', html_text)
     html_text = re.sub(r'\s{2,}', ' ', html_text)
@@ -1931,8 +1972,50 @@ def get_client_ip(request):
         ip = request.META.get('REMOTE_ADDR')
     return ip
 
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from api.models import BannedIP, Agent
+
+REFRESH_COOKIE_NAME = 'leadbook_refresh'
+
+
+def _refresh_cookie_options():
+    from django.conf import settings
+    secure = not getattr(settings, 'DEBUG', False)
+    return {
+        'httponly': True,
+        'secure': secure,
+        'samesite': 'None' if secure else 'Lax',
+        'path': '/',
+        'max_age': 7 * 24 * 60 * 60,
+    }
+
+
+def _set_refresh_cookie(response, refresh_token):
+    if refresh_token:
+        response.set_cookie(REFRESH_COOKIE_NAME, str(refresh_token), **_refresh_cookie_options())
+    return response
+
+
+def _delete_refresh_cookie(response):
+    response.delete_cookie(REFRESH_COOKIE_NAME, path='/', samesite=_refresh_cookie_options()['samesite'])
+    return response
+
+
+class CookieTokenRefreshView(TokenRefreshView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        data = request.data.copy()
+        if not data.get('refresh'):
+            data['refresh'] = request.COOKIES.get(REFRESH_COOKIE_NAME, '')
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
+        refresh = response.data.get('refresh') if getattr(response, 'data', None) else None
+        if refresh:
+            _set_refresh_cookie(response, refresh)
+            response.data.pop('refresh', None)
+        return response
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
@@ -1942,6 +2025,10 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         
         response = super().post(request, *args, **kwargs)
         if response.status_code == 200:
+            refresh = response.data.get('refresh')
+            if refresh:
+                _set_refresh_cookie(response, refresh)
+                response.data.pop('refresh', None)
             # Login successful
             email = request.data.get('email')
             user_agent = request.META.get('HTTP_USER_AGENT', '')
@@ -2015,22 +2102,30 @@ class RegisterView(APIView):
             user.last_login_user_agent = request.META.get('HTTP_USER_AGENT', '')
             user.save(update_fields=['last_login_ip', 'last_login_user_agent'])
             refresh = RefreshToken.for_user(user)
-            return Response({
+            response = Response({
                 'access': str(refresh.access_token),
-                'refresh': str(refresh),
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'nombre': user.nombre,
+                    'is_staff': user.is_staff,
+                },
             }, status=status.HTTP_201_CREATED)
+            return _set_refresh_cookie(response, str(refresh))
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LogoutView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     def post(self, request):
-        try:
-            refresh_token = request.data["refresh_token"]
-            token = RefreshToken(refresh_token)
-            token.blacklist()
-            return Response(status=status.HTTP_205_RESET_CONTENT)
-        except Exception as e:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
+        refresh_token = request.COOKIES.get(REFRESH_COOKIE_NAME)
+        if refresh_token:
+            try:
+                token = RefreshToken(refresh_token)
+                token.blacklist()
+            except Exception:
+                logger.info("No se pudo blacklistear refresh token durante logout")
+        response = Response(status=status.HTTP_205_RESET_CONTENT)
+        return _delete_refresh_cookie(response)
 
 class PropertyViewSet(viewsets.ModelViewSet):
     """Stub — Property fue eliminado en v2.0. Se mantiene para compatibilidad con el router."""
@@ -3864,10 +3959,9 @@ Requisitos obligatorios:
             'La API free respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
         )
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return Response({"error": str(e), "detalle": traceback.format_exc()}, status=500)
+    except Exception:
+        logger.exception("Error generando carrusel")
+        return Response({"error": "Error al generar carrusel"}, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -4507,11 +4601,9 @@ def generar_pdf(request):
             "mensaje": str(e),
         }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
-    except Exception as e:
-        import traceback
-        error_completo = traceback.format_exc()
-        print(f"[PDF ERROR COMPLETO]\n{error_completo}")
-        return Response({"error": str(e), "trace": error_completo}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except Exception:
+        logger.exception("Error generando PDF")
+        return Response({"error": "Error al generar PDF"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -4668,10 +4760,9 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return Response({"error": str(e), "detalle": traceback.format_exc()}, status=500)
+    except Exception:
+        logger.exception("Error generando imagen post")
+        return Response({"error": "Error al generar imagen"}, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -4800,10 +4891,9 @@ def generar_imagen_story(request):
         }, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return Response({"error": str(e), "detalle": traceback.format_exc()}, status=500)
+    except Exception:
+        logger.exception("Error generando story")
+        return Response({"error": "Error al generar story"}, status=500)
 
 
 @api_view(['POST'])
@@ -4854,10 +4944,9 @@ No des opciones, no uses títulos como "Opción 1", no expliques el caption, no 
         return Response({"caption": caption, "texto": caption}, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return Response({"error": str(e), "detalle": traceback.format_exc()}, status=500)
+    except Exception:
+        logger.exception("Error generando caption de story")
+        return Response({"error": "Error al generar texto"}, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -5043,8 +5132,9 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
         return Response(parsed, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except Exception:
+        logger.exception("Error generando email")
+        return Response({"error": "Error al generar email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -5057,9 +5147,7 @@ def serve_pdf_file(request, uuid_str):
         if os.path.exists(pdf_path):
             response = FileResponse(open(pdf_path, 'rb'), content_type='application/pdf')
             response['Content-Disposition'] = 'inline; filename="ficha-leadbook.pdf"'
-            response['X-Frame-Options'] = 'ALLOWALL'
-            response['Access-Control-Allow-Origin'] = '*'
-            response['Content-Security-Policy'] = "frame-ancestors *"
+            response['Content-Security-Policy'] = "frame-ancestors 'self' https://leadbook.com.ar https://www.leadbook.com.ar https://dash-admin-leadbook.vercel.app"
             return response
     return Response({"error": "PDF no encontrado"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -5954,7 +6042,11 @@ from datetime import timedelta
 ADMIN_KEY = config('ADMIN_KEY', default='')
 
 def check_admin(request):
-    return request.headers.get('X-Admin-Key') == ADMIN_KEY
+    from django.utils.crypto import constant_time_compare
+    supplied_key = request.headers.get('X-Admin-Key', '')
+    if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
+        return True
+    return bool(request.user and request.user.is_authenticated and request.user.is_staff)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -6602,6 +6694,8 @@ def debug_uploadpost(request, username):
     Endpoint temporal para ver la estructura exacta que devuelve UploadPost
     para un usuario específico.
     """
+    if not check_admin(request):
+        return Response({"error": "Forbidden"}, status=403)
     import os
     from django.conf import settings
     
@@ -6663,6 +6757,8 @@ def debug_email_check(request):
     Sirve para verificar si las env vars GMAIL_USER y GMAIL_APP_PASSWORD
     están cargadas en Railway (o cualquier entorno).
     """
+    if not check_admin(request):
+        return Response({"error": "Forbidden"}, status=403)
     from django.conf import settings
     host_user = getattr(settings, 'EMAIL_HOST_USER', '') or ''
     host_pass = getattr(settings, 'EMAIL_HOST_PASSWORD', '') or ''
@@ -6719,12 +6815,11 @@ def debug_email_send(request):
     """
     Dispara un envío SMTP REAL y SINCRÓNICO de prueba.
     Body JSON: {"email": "destino@mail.com"}  (acepta también "to")
-    Devuelve exactamente lo que pasó, incluyendo error SMTP completo si falla.
-
-    IMPORTANTE: En producción deberías proteger este endpoint con
-    X-Admin-Key antes de dejarlo abierto. Aquí queda AllowAny para debug rápido.
+    Endpoint protegido por staff o X-Admin-Key.
     """
-    import traceback, socket, smtplib, ssl, time
+    if not check_admin(request):
+        return Response({"error": "Forbidden"}, status=403)
+    import socket, smtplib, ssl, time
     from django.conf import settings
     from django.core.mail import get_connection, EmailMultiAlternatives
 
@@ -6736,7 +6831,7 @@ def debug_email_send(request):
     # Provider opcional — si se pasa "resend", probamos Resend sin tocar env vars
     forced_provider = (request.data.get('provider') or '').strip().lower()
     if forced_provider == 'resend':
-        import os, traceback
+        import os
         try:
             from .tasks import _send_via_resend
         except Exception as e_imp:
@@ -6763,10 +6858,10 @@ def debug_email_send(request):
                 "RESEND_FROM": os.environ.get("RESEND_FROM") or getattr(settings, "RESEND_FROM", "") or None,
             }, status=200 if ok else 500)
         except Exception as e_res:
+            logger.exception("Error enviando email debug via Resend")
             return Response({
                 "ok": False, "stage": "resend",
                 "error_type": type(e_res).__name__, "error": str(e_res),
-                "traceback": traceback.format_exc()[-1500:],
             }, status=500)
 
     host      = getattr(settings, 'EMAIL_HOST', '')
@@ -6848,12 +6943,12 @@ def debug_email_send(request):
             **info,
         }, status=500)
     except Exception as e_smtp:
+        logger.exception("Error en handshake SMTP debug")
         return Response({
             "ok": False,
             "stage": "smtp-handshake",
             "error_type": type(e_smtp).__name__,
             "error": str(e_smtp),
-            "traceback": traceback.format_exc()[-1500:],
             "hint": "Falló el handshake SSL/TLS con Gmail. Probablemente Railway bloquea → migrar a Resend.",
             "debug": smtp_debug,
             **info,
@@ -6891,19 +6986,19 @@ def debug_email_send(request):
             "nota": "Si 'sent_count'=1 Gmail aceptó el mensaje. Revisá inbox y spam del destino.",
         })
     except Exception as e_send:
+        logger.exception("Error enviando email debug")
         return Response({
             "ok": False,
             "stage": "send-message",
             "error_type": type(e_send).__name__,
             "error": str(e_send),
-            "traceback": traceback.format_exc()[-1500:],
             "debug": smtp_debug,
             **info,
         }, status=500)
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def proxy_pdf_view(request, listado_id):
     """
     Sirve el PDF desde Cloudinary actuando como proxy para evitar errores 401/ACL.
@@ -6911,7 +7006,7 @@ def proxy_pdf_view(request, listado_id):
     """
     try:
         from .models import Listado
-        listado = Listado.objects.get(id=listado_id)
+        listado = Listado.objects.get(id=listado_id, agente=request.user)
         
         # Buscar URL en los datos del listado
         res = listado.datos_extra.get('resultados', {}) if listado.datos_extra else {}
@@ -6929,8 +7024,11 @@ def proxy_pdf_view(request, listado_id):
                 absolute_url = absolute_url.replace('http://', 'https://')
             return redirect(absolute_url)
 
+        if not _is_safe_remote_asset_url(pdf_url, allowed_hosts=['res.cloudinary.com']):
+            return Response({"error": "URL de PDF no permitida"}, status=status.HTTP_400_BAD_REQUEST)
+
         # Petición interna a Cloudinary
-        response = requests.get(pdf_url, stream=True, timeout=30)
+        response = requests.get(pdf_url, stream=True, timeout=30, allow_redirects=False)
         
         if response.status_code != 200:
             return Response({
@@ -6946,8 +7044,9 @@ def proxy_pdf_view(request, listado_id):
 
     except Listado.DoesNotExist:
         return Response({"error": "Listado no encontrado"}, status=404)
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
+    except Exception:
+        logger.exception("Error en proxy_pdf_view")
+        return Response({"error": "Error al obtener PDF"}, status=500)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -6968,13 +7067,12 @@ def descargar_pdf(request, listado_id):
             return Response({"error": "Error al generar PDF"}, status=500)
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
-        response['Access-Control-Allow-Origin'] = '*'
         return response
     except Listado.DoesNotExist:
         return Response({"error": "Listado no encontrado"}, status=404)
     except Exception as e:
         logger.error(f"Error en descargar_pdf: {e}")
-        return Response({"error": str(e)}, status=500)
+        return Response({"error": "Error al descargar PDF"}, status=500)
 
 
 @api_view(['GET'])
@@ -7124,14 +7222,14 @@ def export_listado_zip(request, pk):
     return response
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])
 def proxy_pdf_thumbnail_view(request, listado_id):
     """
     Genera una vista previa (imagen) de la primera página del PDF vía proxy.
     """
     try:
         from .models import Listado
-        listado = Listado.objects.get(id=listado_id)
+        listado = Listado.objects.get(id=listado_id, agente=request.user)
         res = listado.datos_extra.get('resultados', {}) if listado.datos_extra else {}
         pdf_data = res.get('pdf', {})
         pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else pdf_data
@@ -7144,7 +7242,10 @@ def proxy_pdf_thumbnail_view(request, listado_id):
         if '/upload/' in thumb_url:
             thumb_url = thumb_url.replace('/upload/', '/upload/w_600,h_800,c_fill,pg_1/')
 
-        response = requests.get(thumb_url, stream=True, timeout=15)
+        if not _is_safe_remote_asset_url(thumb_url, allowed_hosts=['res.cloudinary.com']):
+            return Response({"error": "URL de miniatura no permitida"}, status=400)
+
+        response = requests.get(thumb_url, stream=True, timeout=15, allow_redirects=False)
         
         if response.status_code != 200:
             return Response({"error": "No se pudo generar miniatura"}, status=404)
@@ -7154,16 +7255,18 @@ def proxy_pdf_thumbnail_view(request, listado_id):
             content_type='image/jpeg'
         )
 
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
+    except Exception:
+        logger.exception("Error en proxy_pdf_thumbnail_view")
+        return Response({"error": "Error al obtener miniatura"}, status=500)
 
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def generar_html(request, pk):
     from .models import Listado
-    listado = get_object_or_404(Listado, pk=pk)
+    listado = get_object_or_404(Listado, pk=pk, agente=request.user)
     data = listado.datos_extra or {}
     context, temp_files, _, _, _ = construir_contexto_pdf(data, listado.agente, request)
     
@@ -7187,7 +7290,8 @@ def generar_html(request, pk):
                     os.remove(f)
             except Exception:
                 pass
-        return HttpResponse(f"Error generando HTML: {str(e)}<br><pre>{traceback.format_exc()}</pre>", content_type='text/html', status=500)
+        logger.exception("Error generando HTML para listado %s", pk)
+        return HttpResponse("Error generando HTML", content_type='text/plain', status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -7248,8 +7352,9 @@ REQUISITOS:
         return Response({"texto": result.strip()})
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
+    except Exception:
+        logger.exception("Error generando texto de escena")
+        return Response({"error": "Error al generar texto"}, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -7283,6 +7388,8 @@ def upload_fotos_listado(request):
         elif isinstance(portada_b64, dict):
             response_data['portadaUrl'] = portada_b64
         elif portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('http'):
+            if not _is_safe_remote_asset_url(portada_b64):
+                return Response({"error": "URL de portada no permitida"}, status=400)
             response_data['portadaUrl'] = portada_b64
             
         for i, foto in enumerate(fotos_b64):
@@ -7293,15 +7400,15 @@ def upload_fotos_listado(request):
             elif isinstance(foto, dict):
                 response_data['fotosRecorrido'].append(foto)
             elif foto and isinstance(foto, str) and foto.startswith('http'):
+                if not _is_safe_remote_asset_url(foto):
+                    return Response({"error": "URL de foto no permitida"}, status=400)
                 response_data['fotosRecorrido'].append(foto)
 
         return Response(response_data)
         
-    except Exception as e:
-        logger.error(f"Error al subir fotos de listado: {e}")
-        return Response({"error": str(e)}, status=500)
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
+    except Exception:
+        logger.exception("Error al subir fotos de listado")
+        return Response({"error": "Error al subir fotos"}, status=500)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -7373,6 +7480,8 @@ def estado_cuota_ia(request):
 @permission_classes([AllowAny])
 def debug_quota(request):
     from .models import UserAPIAssignment, UserAPIQuota
+    if not check_admin(request):
+        return Response({"error": "Forbidden"}, status=403)
     
     if request.method == 'POST':
         from .models import UserAPIQuota

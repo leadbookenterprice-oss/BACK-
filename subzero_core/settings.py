@@ -43,7 +43,10 @@ _default_allowed_hosts = [
     'localhost',
     '127.0.0.1',
 ]
-ALLOWED_HOSTS = ['*'] if '*' in _env_allowed_hosts else list(dict.fromkeys(_env_allowed_hosts + _default_allowed_hosts))
+if '*' in _env_allowed_hosts and DEBUG:
+    ALLOWED_HOSTS = ['*']
+else:
+    ALLOWED_HOSTS = list(dict.fromkeys([h for h in _env_allowed_hosts if h != '*'] + _default_allowed_hosts))
 
 # Application definition
 
@@ -181,9 +184,16 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'api.authentication.JWTAuthenticationFromQueryParam',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-    )
+    ),
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': config('DRF_THROTTLE_ANON', default='120/minute'),
+        'user': config('DRF_THROTTLE_USER', default='600/minute'),
+    },
 }
 
 from datetime import timedelta
@@ -196,15 +206,17 @@ SIMPLE_JWT = {
 # CORS Configuration
 CORS_ALLOWED_ORIGINS_ENV = config('CORS_ALLOWED_ORIGINS', default='')
 _env_origins = [o.strip() for o in CORS_ALLOWED_ORIGINS_ENV.split(',') if o.strip()]
-_hardcoded_origins = [
+_production_origins = [
     'https://dash-admin-leadbook.vercel.app',
     'https://leadbook.com.ar',
     'https://www.leadbook.com.ar',
+]
+_local_origins = [
     'http://localhost:5173',
     'http://localhost:4173',
     'http://localhost:3000',
 ]
-CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_env_origins + _hardcoded_origins))
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_env_origins + _production_origins + (_local_origins if DEBUG else [])))
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-encoding', 'authorization', 'content-type', 'dnt',
@@ -214,6 +226,21 @@ CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 print(f"[STARTUP] CORS_ALLOWED_ORIGINS={CORS_ALLOWED_ORIGINS}")
 
 CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://dash-admin-leadbook.vercel.app').split(',')
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=not DEBUG, cast=bool)
+SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=not DEBUG, cast=bool)
+CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=not DEBUG, cast=bool)
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=(31536000 if not DEBUG else 0), cast=int)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = config('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=not DEBUG, cast=bool)
+SECURE_HSTS_PRELOAD = config('SECURE_HSTS_PRELOAD', default=not DEBUG, cast=bool)
+X_FRAME_OPTIONS = 'DENY'
+
+REMOTE_ASSET_ALLOWED_HOSTS = [
+    host.strip().lower()
+    for host in config('REMOTE_ASSET_ALLOWED_HOSTS', default='res.cloudinary.com,placehold.co').split(',')
+    if host.strip()
+]
 
 # Celery Configuration
 CELERY_BROKER_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
@@ -300,7 +327,7 @@ if EMAIL_HOST_USER and EMAIL_HOST_PASSWORD:
     EMAIL_USE_TLS = False
     EMAIL_USE_SSL = True
     DEFAULT_FROM_EMAIL = f'LeadBook <{EMAIL_HOST_USER}>'
-    print(f"[STARTUP] EMAIL_BACKEND=SMTP | host={EMAIL_HOST}:{EMAIL_PORT} | user={EMAIL_HOST_USER} | pass_len={len(EMAIL_HOST_PASSWORD)}")
+    print(f"[STARTUP] EMAIL_BACKEND=SMTP | host={EMAIL_HOST}:{EMAIL_PORT}")
 else:
     # Fallback de desarrollo: imprime los emails en la consola
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
@@ -320,4 +347,4 @@ CLOUDINARY_STORAGE = {
 
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 
-X_FRAME_OPTIONS = 'SAMEORIGIN'
+X_FRAME_OPTIONS = 'DENY'
