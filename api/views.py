@@ -2073,8 +2073,11 @@ class RegisterView(APIView):
         from datetime import timedelta
         from django.utils import timezone
         email = request.data.get('email', '').strip().lower()
+        signup_type = str(request.data.get('signup_type') or 'free').strip().lower()
+        if signup_type not in ('free', 'paid'):
+            signup_type = 'free'
         access_code_raw = str(request.data.get('access_code') or '').strip().upper()
-        if not re.fullmatch(r'[A-Z0-9]{6}', access_code_raw):
+        if signup_type == 'free' and not re.fullmatch(r'[A-Z0-9]{6}', access_code_raw):
             return Response({
                 "error": "access_code_required",
                 "message": "Necesitas un codigo de acceso valido para crear una cuenta free.",
@@ -2104,22 +2107,29 @@ class RegisterView(APIView):
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
             with transaction.atomic():
-                access_code = AccessCode.objects.select_for_update().filter(code=access_code_raw).first()
-                if not access_code or not access_code.can_redeem(email=email):
-                    return Response({
-                        "error": "access_code_invalid",
-                        "message": "El codigo de acceso no existe, ya fue usado o no esta disponible.",
-                    }, status=status.HTTP_400_BAD_REQUEST)
+                access_code = None
+                if signup_type == 'free':
+                    access_code = AccessCode.objects.select_for_update().filter(code=access_code_raw).first()
+                    if not access_code or not access_code.can_redeem(email=email):
+                        return Response({
+                            "error": "access_code_invalid",
+                            "message": "El codigo de acceso no existe, ya fue usado o no esta disponible.",
+                        }, status=status.HTTP_400_BAD_REQUEST)
 
                 user = serializer.save()
                 now_ts = timezone.now()
-                trial_ends_at = now_ts + timedelta(days=access_code.trial_days or 30)
-
                 user.plan_nombre = 'free'
-                user.plan_activo = True
-                user.plan_seleccionado = True
-                user.free_trial_started_at = now_ts
-                user.free_trial_ends_at = trial_ends_at
+                if signup_type == 'free':
+                    trial_ends_at = now_ts + timedelta(days=access_code.trial_days or 30)
+                    user.plan_activo = True
+                    user.plan_seleccionado = True
+                    user.free_trial_started_at = now_ts
+                    user.free_trial_ends_at = trial_ends_at
+                else:
+                    user.plan_activo = False
+                    user.plan_seleccionado = False
+                    user.free_trial_started_at = None
+                    user.free_trial_ends_at = None
                 user.last_login_ip = ip
                 user.last_login_user_agent = request.META.get('HTTP_USER_AGENT', '')
                 user.save(update_fields=[
@@ -2128,10 +2138,11 @@ class RegisterView(APIView):
                     'last_login_ip', 'last_login_user_agent', 'updated_at',
                 ])
 
-                access_code.is_active = False
-                access_code.redeemed_by = user
-                access_code.redeemed_at = now_ts
-                access_code.save(update_fields=['is_active', 'redeemed_by', 'redeemed_at', 'updated_at'])
+                if access_code:
+                    access_code.is_active = False
+                    access_code.redeemed_by = user
+                    access_code.redeemed_at = now_ts
+                    access_code.save(update_fields=['is_active', 'redeemed_by', 'redeemed_at', 'updated_at'])
 
                 # TAREA 3: Consumir el OTP para que no pueda reutilizarse
                 otp_usado = OTPCode.objects.filter(
@@ -2157,6 +2168,8 @@ class RegisterView(APIView):
                         'plan_seleccionado': user.plan_seleccionado,
                         'free_trial_started_at': user.free_trial_started_at,
                         'free_trial_ends_at': user.free_trial_ends_at,
+                        'signup_type': signup_type,
+                        'requires_payment': signup_type == 'paid',
                     },
                 }, status=status.HTTP_201_CREATED)
                 return _set_refresh_cookie(response, str(refresh))
