@@ -2067,6 +2067,32 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 pass
         return response
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def validate_access_code(request):
+    code = str(request.data.get('access_code') or '').strip().upper()
+    if not re.fullmatch(r'[A-Z0-9]{6}', code):
+        return Response({
+            "valid": False,
+            "error": "access_code_required",
+            "message": "Ingresá un codigo promocional valido de 6 caracteres.",
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    access_code = AccessCode.objects.filter(code=code).first()
+    if not access_code or not access_code.can_redeem():
+        return Response({
+            "valid": False,
+            "error": "access_code_invalid",
+            "message": "El codigo no existe, ya fue usado o no esta disponible.",
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({
+        "valid": True,
+        "access_code": code,
+        "trial_days": access_code.trial_days or 30,
+    })
+
+
 class RegisterView(APIView):
     permission_classes = [AllowAny]
     def post(self, request):
@@ -2649,6 +2675,7 @@ class PerfilView(APIView):
             "is_staff": user.is_staff,
             "plan_seleccionado": user.plan_seleccionado,
             "plan_activo": user.plan_activo,
+            "requires_payment": user.plan_activo is False,
         })
 
     def put(self, request):
@@ -5710,6 +5737,7 @@ def plan_status(request):
         "plan_nombre": plan,
         "plan_activo": user.plan_activo,
         "plan_seleccionado": user.plan_seleccionado,
+        "requires_payment": user.plan_activo is False,
         "trial_started_at": trial_status['trial_started_at'],
         "trial_ends_at": trial_status['trial_ends_at'],
         "trial_seconds_left": trial_status['trial_seconds_left'],
