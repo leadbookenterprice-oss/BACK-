@@ -6297,6 +6297,7 @@ def dashboard(request):
     ]
 
     plan = agent.plan_nombre or 'free'
+    trial_status = get_free_trial_status(agent)
     limites = LIMITES.get(plan, LIMITES['free'])
 
     # Uso actual del mes (via UsageLog)
