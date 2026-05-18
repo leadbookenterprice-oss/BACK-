@@ -1892,8 +1892,8 @@ LIMITES_PLAN = {
 
 def verificar_limite_plan(agent):
     from datetime import datetime
-    plan = getattr(agent, 'plan_nombre', 'free')
-    limite = LIMITES_PLAN.get(plan, LIMITES_PLAN['free'])
+    plan = getattr(agent, 'plan_nombre', 'starter')
+    limite = LIMITES_PLAN.get(plan, LIMITES_PLAN['starter'])
     
     ahora = datetime.now()
     listados_mes = Listado.objects.filter(
@@ -2106,7 +2106,7 @@ class RegisterView(APIView):
         if signup_type == 'free' and not re.fullmatch(r'[A-Z0-9]{6}', access_code_raw):
             return Response({
                 "error": "access_code_required",
-                "message": "Necesitas un codigo de acceso valido para crear una cuenta free.",
+                "message": "Necesitas un codigo de acceso valido para activar la prueba Starter.",
             }, status=status.HTTP_400_BAD_REQUEST)
         
         ip = get_client_ip(request)
@@ -2144,14 +2144,15 @@ class RegisterView(APIView):
 
                 user = serializer.save()
                 now_ts = timezone.now()
-                user.plan_nombre = 'free'
                 if signup_type == 'free':
+                    user.plan_nombre = 'starter'
                     trial_ends_at = now_ts + timedelta(days=access_code.trial_days or 30)
                     user.plan_activo = True
                     user.plan_seleccionado = True
                     user.free_trial_started_at = now_ts
                     user.free_trial_ends_at = trial_ends_at
                 else:
+                    user.plan_nombre = 'starter'
                     user.plan_activo = False
                     user.plan_seleccionado = False
                     user.free_trial_started_at = None
@@ -4053,7 +4054,7 @@ Requisitos obligatorios:
             request.user,
             'quota_agotada',
             'Alcanzaste el 100% de tu uso de IA',
-            'La API free respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
+            'La API compartida respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
         )
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception:
@@ -4708,7 +4709,7 @@ def generar_pdf(request):
             request.user,
             'quota_agotada',
             'Alcanzaste el 100% de tu uso de IA',
-            'La API free respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
+            'La API compartida respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
         )
         return Response({
             "error": "cuota_ia_agotada",
@@ -5553,7 +5554,12 @@ def _mp_process_payment(payment_data):
         agent.plan_nombre = plan
         agent.plan_activo = True
         agent.plan_seleccionado = True
-        agent.save(update_fields=['plan_nombre', 'plan_activo', 'plan_seleccionado'])
+        agent.free_trial_started_at = None
+        agent.free_trial_ends_at = None
+        agent.save(update_fields=[
+            'plan_nombre', 'plan_activo', 'plan_seleccionado',
+            'free_trial_started_at', 'free_trial_ends_at'
+        ])
         from .services.pool_service import assign_apis_to_agent
         assign_apis_to_agent(agent)
         _mp_notify(agent, 'pago_aprobado', 'Plan activado', f'Tu plan {plan} ya está activo.')
@@ -5725,9 +5731,9 @@ def plan_status(request):
     from .tracking import get_uploadpost_quota
 
     user = request.user
-    plan = user.plan_nombre or 'free'
+    plan = user.plan_nombre or 'starter'
     trial_status = get_free_trial_status(user)
-    limites = LIMITES.get(plan, LIMITES['free'])
+    limites = LIMITES.get(plan, LIMITES['starter'])
     now = timezone.now()
     listados_mes = UsageLog.objects.filter(agent=user, tipo='property', fecha__year=now.year, fecha__month=now.month).count()
     videos_used = UsageLog.objects.filter(agent=user, tipo='video', fecha__year=now.year, fecha__month=now.month).count()
@@ -5757,7 +5763,7 @@ def plan_status(request):
 def seleccionar_plan_free(request):
     return Response({
         "error": "access_code_required",
-        "message": "El plan free solo se activa con un codigo de acceso al crear la cuenta.",
+        "message": "La prueba Starter solo se activa con un codigo de acceso al crear la cuenta.",
     }, status=status.HTTP_403_FORBIDDEN)
 
 @api_view(['GET'])
@@ -5767,9 +5773,9 @@ def get_plan_info_mp(request):
     from .models import UsageLog
     from .tracking import get_uploadpost_quota
     agent = request.user
-    plan = agent.plan_nombre or 'free'
+    plan = agent.plan_nombre or 'starter'
     trial_status = get_free_trial_status(agent)
-    limites = LIMITES.get(plan, LIMITES['free'])
+    limites = LIMITES.get(plan, LIMITES['starter'])
     now = timezone.now()
     uploadpost_quota = get_uploadpost_quota(agent)
     ai_used = UsageLog.objects.filter(
@@ -6208,7 +6214,7 @@ def admin_stats(request):
         fecha_registro__gte=semana).count()
     
     distribucion = {}
-    for plan in ['free','starter','pro','scale','business']:
+    for plan in ['starter','pro','scale','business']:
         distribucion[plan] = Agent.objects.filter(
             plan_nombre=plan).count()
     
@@ -6255,7 +6261,7 @@ def admin_usuarios(request):
                 "email": a.email,
                 "nombre": getattr(a, 'nombre', ''),
                 "agencia": getattr(a, 'agencia', '') or getattr(a, 'nombre_inmobiliaria', ''),
-                "plan_nombre": getattr(a, 'plan_nombre', 'free'),
+                "plan_nombre": getattr(a, 'plan_nombre', 'starter'),
                 "plan_activo": getattr(a, 'plan_activo', True),
                 "fecha_registro": a.fecha_registro.strftime('%Y-%m-%d %H:%M') if a.fecha_registro else '',
                 "last_login": a.last_login.strftime('%Y-%m-%d %H:%M') if a.last_login else 'Nunca',
@@ -6291,7 +6297,7 @@ def admin_cambiar_plan(request, user_id):
         return Response({"error": "Forbidden"}, status=403)
     
     nuevo_plan = request.data.get('plan')
-    planes_validos = ['free','starter','pro','scale','business']
+    planes_validos = ['starter','pro','scale','business']
     
     if nuevo_plan not in planes_validos:
         return Response({"error": "Plan inválido"}, status=400)
@@ -6302,7 +6308,12 @@ def admin_cambiar_plan(request, user_id):
         agent.plan_nombre = nuevo_plan
         agent.plan_activo = True
         agent.plan_seleccionado = True
-        agent.save(update_fields=['plan_nombre', 'plan_activo', 'plan_seleccionado', 'updated_at'])
+        agent.free_trial_started_at = None
+        agent.free_trial_ends_at = None
+        agent.save(update_fields=[
+            'plan_nombre', 'plan_activo', 'plan_seleccionado',
+            'free_trial_started_at', 'free_trial_ends_at', 'updated_at'
+        ])
         return Response({
             "mensaje": f"Plan actualizado a {nuevo_plan}",
             "plan": nuevo_plan
@@ -6337,9 +6348,9 @@ def dashboard(request):
         for listado in listados.order_by('-creado_en')[:8]
     ]
 
-    plan = agent.plan_nombre or 'free'
+    plan = agent.plan_nombre or 'starter'
     trial_status = get_free_trial_status(agent)
-    limites = LIMITES.get(plan, LIMITES['free'])
+    limites = LIMITES.get(plan, LIMITES['starter'])
 
     # Uso actual del mes (via UsageLog)
     ai_used = UsageLog.objects.filter(
@@ -6570,7 +6581,7 @@ def conexiones_init(request):
                 print(f"[conexiones_init] Usando UPLOADPOST_API_KEY global para {user.email}", flush=True)
         
         if not api_key:
-            print(f"[conexiones_init] Sin key uploadpost para {user.email}. Plan={getattr(user, 'plan_nombre', 'free')}", flush=True)
+            print(f"[conexiones_init] Sin key uploadpost para {user.email}. Plan={getattr(user, 'plan_nombre', 'starter')}", flush=True)
             return Response({
                 "success": False,
                 "error": "Tu cuenta no tiene una API de publicación asignada. Contactá a soporte."

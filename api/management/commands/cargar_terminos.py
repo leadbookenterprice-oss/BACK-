@@ -14,7 +14,7 @@ class Command(BaseCommand):
 Términos y Condiciones de Uso
 Plataforma SaaS de Generación de Contenido con Inteligencia Artificial
 Versión 1.0 | Última actualización: 2025-01-20
-Aplicable a todos los planes: Free, Starter, Pro y Scale
+Aplicable a todos los planes: Starter, Pro y Scale
 
 Al registrarse o utilizar la plataforma LeadBook, el Usuario acepta quedar vinculado jurídicamente por estos Términos y Condiciones. Si el Usuario no está de acuerdo con alguno de los términos aquí establecidos, deberá abstenerse de utilizar la plataforma.
 

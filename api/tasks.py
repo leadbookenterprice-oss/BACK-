@@ -23,7 +23,7 @@ def _notify_free_pool_reset(user, now):
         usuario=user,
         tipo='reset_creditos',
         titulo='Ya podés generar contenido de nuevo',
-        mensaje='Las APIs free fueron reintentadas/resetadas. Si el proveedor ya renovó la cuota, podés generar contenido otra vez.',
+        mensaje='Las APIs compartidas fueron reintentadas/resetadas. Si el proveedor ya renovó la cuota, podés generar contenido otra vez.',
     )
 
 
@@ -235,7 +235,7 @@ def health_check_all_keys():
 
 @shared_task
 def reset_free_pool_counters():
-    """Reinicia contadores free cada 12 horas y notifica a usuarios afectados."""
+    """Reinicia contadores compartidos cada 12 horas y notifica a usuarios afectados."""
     now = timezone.now()
 
     affected_user_ids = set(

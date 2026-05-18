@@ -51,7 +51,6 @@ class Agent(AbstractBaseUser, PermissionsMixin):
     - agentes_asociados removido — reemplazado por tabla AgentAssociation
     """
     PLANES = [
-        ('free',     'Free'),
         ('starter',  'Starter'),
         ('pro',      'Pro'),
         ('scale',    'Scale'),
@@ -72,7 +71,7 @@ class Agent(AbstractBaseUser, PermissionsMixin):
     bio                    = models.TextField(null=True, blank=True)
 
     # Plan — UN SOLO campo, fuente de verdad
-    plan_nombre            = models.CharField(max_length=20, choices=PLANES, default='free')
+    plan_nombre            = models.CharField(max_length=20, choices=PLANES, default='starter')
     plan_activo            = models.BooleanField(default=True)
     plan_seleccionado      = models.BooleanField(default=False)
     free_trial_started_at  = models.DateTimeField(null=True, blank=True)
@@ -487,7 +486,6 @@ class Plan(models.Model):
     Incluye los límites de API por servicio para poder recalcular quotas al cambiar de plan.
     """
     PLAN_CHOICES = [
-        ('free',     'Free'),
         ('starter',  'Starter'),
         ('pro',      'Pro'),
         ('scale',    'Scale'),
@@ -522,7 +520,7 @@ class Suscripcion(models.Model):
     El uso real siempre se calcula desde UsageLog — sin duplicados.
     """
     STATUS = [
-        ('free',       'Free'),
+        ('free',       'Sin suscripcion'),
         ('active',     'Activa'),
         ('paused',     'Pausada'),
         ('cancelled',  'Cancelada'),
@@ -791,7 +789,7 @@ class UserAPIQuota(models.Model):
 
     def maybe_reset_daily(self):
         """
-        Reset lazy: las APIs free se resetean cada 12 horas; el resto, diario.
+        Reset lazy: las APIs compartidas se resetean cada 12 horas; el resto, diario.
         Es el fallback para cuando Celery está caído.
         Se llama al inicio de cada request antes de verificar la cuota.
         """
@@ -833,7 +831,7 @@ class UserAPIQuota(models.Model):
                             usuario=self.user,
                             tipo='reset_creditos',
                             titulo='Ya podés generar contenido de nuevo',
-                            mensaje='Las APIs free fueron reintentadas/resetadas. Si el proveedor ya renovó la cuota, podés generar contenido otra vez.',
+                            mensaje='Las APIs compartidas fueron reintentadas/resetadas. Si el proveedor ya renovó la cuota, podés generar contenido otra vez.',
                         )
 
     def maybe_reset_monthly(self):
@@ -1039,7 +1037,7 @@ class OTPCode(models.Model):
 
 
 class AccessCode(models.Model):
-    """Codigo de acceso de 6 caracteres para habilitar el trial free."""
+    """Codigo de acceso de 6 caracteres para habilitar el trial Starter."""
     code = models.CharField(max_length=6, unique=True, db_index=True)
     is_active = models.BooleanField(default=True)
     trial_days = models.PositiveSmallIntegerField(default=30)

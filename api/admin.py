@@ -48,7 +48,11 @@ def admin_stats_v2(request):
     inicio_mes = hoy.replace(day=1)
 
     total_users  = Agent.objects.filter(eliminado_en__isnull=True).count()
-    free_users   = Agent.objects.filter(plan_nombre='free', eliminado_en__isnull=True).count()
+    free_users   = Agent.objects.filter(
+        plan_nombre='starter',
+        free_trial_ends_at__isnull=False,
+        eliminado_en__isnull=True,
+    ).count()
     paid_users   = total_users - free_users
     active_apis  = APIKey.objects.filter(status='available').count()
     pending_alerts = AdminAlert.objects.filter(is_read=False).count()
@@ -89,7 +93,7 @@ def admin_stats_v2(request):
     # Distribución de planes
     plan_dist = {}
     for row in Agent.objects.filter(eliminado_en__isnull=True).values('plan_nombre').annotate(total=Count('id')):
-        plan_dist[row['plan_nombre'] or 'free'] = row['total']
+        plan_dist[row['plan_nombre'] or 'starter'] = row['total']
 
     # Top usuarios hoy
     top_users = []
@@ -837,9 +841,17 @@ def admin_usuario_cambiar_plan(request, pk):
     try:
         a = Agent.objects.get(id=pk)
         nuevo_plan = request.data.get('plan', a.plan_nombre)
+        if nuevo_plan not in ['starter', 'pro', 'scale', 'business']:
+            return Response({'error': 'Plan invalido'}, status=400)
         a.plan_nombre = nuevo_plan
         a.plan_activo = True
-        a.save()
+        a.plan_seleccionado = True
+        a.free_trial_started_at = None
+        a.free_trial_ends_at = None
+        a.save(update_fields=[
+            'plan_nombre', 'plan_activo', 'plan_seleccionado',
+            'free_trial_started_at', 'free_trial_ends_at', 'updated_at',
+        ])
         # Recalcular quotas automáticamente via signal en models.py
         return Response({'success': True, 'plan': a.plan_nombre})
     except Agent.DoesNotExist:

@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from decouple import config
+from django.db import transaction
 from django.utils.crypto import constant_time_compare
 from django.utils.timezone import now
 from datetime import timedelta
@@ -40,9 +41,31 @@ def _serialize_access_code(code):
         'redeemed_at': code.redeemed_at,
         'redeemed_by': redeemed_by.email if redeemed_by else None,
         'redeemed_by_id': redeemed_by.id if redeemed_by else None,
+        'redeemed_account_active': bool(redeemed_by and redeemed_by.is_active and not redeemed_by.eliminado_en),
+        'redeemed_account_deleted_at': redeemed_by.eliminado_en if redeemed_by else None,
+        'revocable_account': _is_revocable_starter_trial_account(redeemed_by),
         'trial_ends_at': getattr(redeemed_by, 'free_trial_ends_at', None) if redeemed_by else None,
         'status': 'usado' if code.redeemed_at else ('activo' if code.is_active else 'desactivado'),
     }
+
+
+def _is_revocable_starter_trial_account(user):
+    if not user or getattr(user, 'is_staff', False):
+        return False
+    if getattr(user, 'eliminado_en', None):
+        return False
+    return (
+        getattr(user, 'plan_nombre', None) == 'starter'
+        and bool(getattr(user, 'free_trial_ends_at', None))
+    )
+
+
+def _revoke_starter_trial_account(user):
+    user.plan_activo = False
+    user.plan_seleccionado = False
+    user.free_trial_started_at = None
+    user.free_trial_ends_at = None
+    user.soft_delete()
 
 
 @api_view(['GET', 'POST'])
@@ -96,13 +119,30 @@ def admin_access_code_detail(request, code_id):
     except AccessCode.DoesNotExist:
         return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    if code.redeemed_at:
+    if code.redeemed_at and request.method != 'DELETE':
         return Response({'error': 'El codigo ya fue usado y no se puede modificar.'}, status=status.HTTP_400_BAD_REQUEST)
 
     if request.method == 'DELETE':
-        code.is_active = False
-        code.save(update_fields=['is_active', 'updated_at'])
-        return Response({'ok': True, 'code': _serialize_access_code(code)})
+        account_revoked = False
+        with transaction.atomic():
+            code = AccessCode.objects.select_for_update().select_related('redeemed_by').get(id=code.id)
+            if code.redeemed_by_id:
+                if _is_revocable_starter_trial_account(code.redeemed_by):
+                    _revoke_starter_trial_account(code.redeemed_by)
+                    account_revoked = True
+                elif not getattr(code.redeemed_by, 'eliminado_en', None):
+                    return Response({
+                        'error': 'La cuenta asociada ya no es un trial Starter revocable.',
+                    }, status=status.HTTP_409_CONFLICT)
+
+            code.is_active = False
+            code.save(update_fields=['is_active', 'updated_at'])
+
+        return Response({
+            'ok': True,
+            'account_revoked': account_revoked,
+            'code': _serialize_access_code(code),
+        })
 
     if 'is_active' in request.data:
         code.is_active = bool(request.data.get('is_active'))
@@ -127,17 +167,17 @@ def admin_metricas(request):
 
     # MRR Estimado
     ingresos = 0
-    planes = Plan.objects.all()
+    planes = Plan.objects.exclude(nombre='free')
     for p in planes:
         count = Agent.objects.filter(plan_nombre=p.nombre, plan_activo=True).count()
         ingresos += (count * float(p.precio_ars_mensual or 0)) # v2 usa ARS
 
-    usuarios_por_plan = {"free": 0, "starter": 0, "pro": 0, "scale": 0, "business": 0}
+    usuarios_por_plan = {"starter": 0, "pro": 0, "scale": 0, "business": 0}
     stats_planes = Agent.objects.values('plan_nombre').annotate(total=Count('id'))
     for s in stats_planes:
-        nombre = s['plan_nombre']
+        nombre = 'starter' if s['plan_nombre'] == 'free' else s['plan_nombre']
         if nombre in usuarios_por_plan:
-            usuarios_por_plan[nombre] = s['total']
+            usuarios_por_plan[nombre] += s['total']
 
     return Response({
         "total_usuarios": total_usuarios,
@@ -438,13 +478,18 @@ def admin_usuario_restaurar(request, user_id):
 def admin_usuario_cambiar_plan(request, user_id):
     if not _is_staff_check(request): return Response({'error': 'Forbidden'}, status=403)
     plan = request.data.get('plan') or request.data.get('plan_nombre')
-    if plan not in ['free', 'starter', 'pro', 'scale', 'business']:
+    if plan not in ['starter', 'pro', 'scale', 'business']:
         return Response({'error': 'Plan invalido'}, status=400)
     u = Agent.objects.get(id=user_id)
     u.plan_nombre = plan
     u.plan_activo = True
     u.plan_seleccionado = True
-    u.save(update_fields=['plan_nombre', 'plan_activo', 'plan_seleccionado', 'updated_at'])
+    u.free_trial_started_at = None
+    u.free_trial_ends_at = None
+    u.save(update_fields=[
+        'plan_nombre', 'plan_activo', 'plan_seleccionado',
+        'free_trial_started_at', 'free_trial_ends_at', 'updated_at',
+    ])
     return Response({'ok': True, 'plan': plan})
 
 @api_view(['GET'])

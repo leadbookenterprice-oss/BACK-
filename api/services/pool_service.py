@@ -25,7 +25,7 @@ COMPATIBILITY_API_COUNTS = {'uploadpost': 1}
 
 def _desired_api_counts_for_plan(plan):
     counts = dict(COMPATIBILITY_API_COUNTS)
-    counts.update(PLAN_API_COUNTS.get(str(plan or 'free').lower(), PLAN_API_COUNTS['free']))
+    counts.update(PLAN_API_COUNTS.get(str(plan or 'starter').lower(), PLAN_API_COUNTS['starter']))
     return counts
 
 
@@ -62,7 +62,7 @@ class APIPoolService:
         Devuelve la lista de servicios que tienen al menos una key activa o fueron asignados.
         """
         asignados = []
-        desired_counts = _desired_api_counts_for_plan(getattr(user, 'plan_nombre', 'free'))
+        desired_counts = _desired_api_counts_for_plan(getattr(user, 'plan_nombre', 'starter'))
 
         for nombre_servicio, desired_count in desired_counts.items():
             servicio = Servicio.objects.filter(nombre=nombre_servicio, activo=True).first()
@@ -85,7 +85,7 @@ class APIPoolService:
                         'user_monthly_limit': servicio.default_monthly_limit,
                     }
                 )
-                quota.recalcular_limite(plan=getattr(user, 'plan_nombre', 'free'))
+                quota.recalcular_limite(plan=getattr(user, 'plan_nombre', 'starter'))
                 continue
 
             # IDs de keys ya usadas por este usuario en este servicio
@@ -135,7 +135,7 @@ class APIPoolService:
                     'user_monthly_limit': servicio.default_monthly_limit,
                 }
             )
-            quota.recalcular_limite(plan=getattr(user, 'plan_nombre', 'free'))
+            quota.recalcular_limite(plan=getattr(user, 'plan_nombre', 'starter'))
 
             if assigned_any:
                 asignados.append(nombre_servicio)

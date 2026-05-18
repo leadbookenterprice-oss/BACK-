@@ -5,12 +5,12 @@ from api.services.pool_service import APIPoolService
 
 
 class Command(BaseCommand):
-    help = 'Repara usuarios free con APIs faltantes usando el schema actual de asignaciones'
+    help = 'Repara usuarios Starter con APIs faltantes usando el schema actual de asignaciones'
 
     def handle(self, *args, **kwargs):
-        users = Agent.objects.filter(plan_nombre='free')
+        users = Agent.objects.filter(plan_nombre='starter')
         fixed = 0
-        self.stdout.write(self.style.SUCCESS(f'Iniciando revisión de {users.count()} usuarios free...'))
+        self.stdout.write(self.style.SUCCESS(f'Iniciando revisión de {users.count()} usuarios Starter...'))
 
         for user in users:
             repaired = APIPoolService.repair_user_apis(user)
