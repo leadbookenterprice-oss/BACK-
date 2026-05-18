@@ -10,7 +10,8 @@ from datetime import timedelta
 from django.db.models import Count, Sum, Q
 from .models import (
     Agent, Listado, Plan, APIKey, AdminAlert, Servicio, 
-    UserAPIAssignment, UserAPIQuota, VideoMusic, VideoSFX, ConfiguracionSistema
+    UserAPIAssignment, UserAPIQuota, VideoMusic, VideoSFX, ConfiguracionSistema,
+    AccessCode
 )
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
@@ -24,6 +25,91 @@ def _is_staff_check(request):
 
 def _forbidden():
     return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _serialize_access_code(code):
+    redeemed_by = code.redeemed_by
+    return {
+        'id': code.id,
+        'code': code.code,
+        'is_active': code.is_active,
+        'trial_days': code.trial_days,
+        'assigned_email': code.assigned_email or '',
+        'notes': code.notes or '',
+        'created_at': code.created_at,
+        'redeemed_at': code.redeemed_at,
+        'redeemed_by': redeemed_by.email if redeemed_by else None,
+        'redeemed_by_id': redeemed_by.id if redeemed_by else None,
+        'trial_ends_at': getattr(redeemed_by, 'free_trial_ends_at', None) if redeemed_by else None,
+        'status': 'usado' if code.redeemed_at else ('activo' if code.is_active else 'desactivado'),
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def admin_access_codes(request):
+    if not _is_staff_check(request):
+        return _forbidden()
+
+    if request.method == 'GET':
+        codes = AccessCode.objects.select_related('redeemed_by').order_by('-created_at')[:500]
+        return Response({'codes': [_serialize_access_code(code) for code in codes]})
+
+    try:
+        count = int(request.data.get('count') or 1)
+    except (TypeError, ValueError):
+        count = 1
+    count = max(1, min(count, 50))
+
+    try:
+        trial_days = int(request.data.get('trial_days') or 30)
+    except (TypeError, ValueError):
+        trial_days = 30
+    trial_days = max(1, min(trial_days, 365))
+
+    assigned_email = str(request.data.get('assigned_email') or '').strip().lower() or None
+    notes = str(request.data.get('notes') or '').strip()[:500]
+    created_by = request.user if request.user and request.user.is_authenticated else None
+
+    created = []
+    for _ in range(count):
+        code = AccessCode.objects.create(
+            code=AccessCode.generate_code(),
+            trial_days=trial_days,
+            assigned_email=assigned_email if count == 1 else None,
+            notes=notes,
+            created_by=created_by,
+        )
+        created.append(code)
+
+    return Response({'codes': [_serialize_access_code(code) for code in created]}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([AllowAny])
+def admin_access_code_detail(request, code_id):
+    if not _is_staff_check(request):
+        return _forbidden()
+
+    try:
+        code = AccessCode.objects.select_related('redeemed_by').get(id=code_id)
+    except AccessCode.DoesNotExist:
+        return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if code.redeemed_at:
+        return Response({'error': 'El codigo ya fue usado y no se puede modificar.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if request.method == 'DELETE':
+        code.is_active = False
+        code.save(update_fields=['is_active', 'updated_at'])
+        return Response({'ok': True, 'code': _serialize_access_code(code)})
+
+    if 'is_active' in request.data:
+        code.is_active = bool(request.data.get('is_active'))
+    if 'notes' in request.data:
+        code.notes = str(request.data.get('notes') or '').strip()[:500]
+    code.save(update_fields=['is_active', 'notes', 'updated_at'])
+    return Response({'ok': True, 'code': _serialize_access_code(code)})
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -95,8 +181,12 @@ def admin_usuarios_list(request):
         'email': u.email,
         'nombre': u.nombre,
         'plan': u.plan_nombre,
+        'plan_nombre': u.plan_nombre,
+        'plan_activo': u.plan_activo,
         'activo': u.is_active,
-        'fecha_registro': u.fecha_registro
+        'fecha_registro': u.fecha_registro,
+        'free_trial_started_at': u.free_trial_started_at,
+        'free_trial_ends_at': u.free_trial_ends_at,
     } for u in usuarios]
     return Response(data)
 
@@ -347,11 +437,15 @@ def admin_usuario_restaurar(request, user_id):
 @api_view(['POST'])
 def admin_usuario_cambiar_plan(request, user_id):
     if not _is_staff_check(request): return Response({'error': 'Forbidden'}, status=403)
-    plan = request.data.get('plan')
+    plan = request.data.get('plan') or request.data.get('plan_nombre')
+    if plan not in ['free', 'starter', 'pro', 'scale', 'business']:
+        return Response({'error': 'Plan invalido'}, status=400)
     u = Agent.objects.get(id=user_id)
     u.plan_nombre = plan
-    u.save()
-    return Response({'ok': True})
+    u.plan_activo = True
+    u.plan_seleccionado = True
+    u.save(update_fields=['plan_nombre', 'plan_activo', 'plan_seleccionado', 'updated_at'])
+    return Response({'ok': True, 'plan': plan})
 
 @api_view(['GET'])
 def admin_apikeys_resumen(request):

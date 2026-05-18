@@ -36,6 +36,7 @@ from .views_admin import (
     admin_bundles_asignar, admin_bundles_liberar, admin_bundles_stats,
     admin_audio_music, admin_audio_music_detail, admin_audio_sfx, admin_audio_sfx_detail,
     admin_apikeys_auto_repair, admin_branding_watermark,
+    admin_access_codes, admin_access_code_detail,
 )
 
 router = DefaultRouter()
@@ -148,6 +149,8 @@ urlpatterns = [
     path('admin/pool/listar/', admin_apikeys_pool), # Alias
     path('admin/alerts/<int:alert_id>/read/', admin_alerts_read),
     path('admin/health-check/', admin_health_check),
+    path('admin/access-codes/', admin_access_codes),
+    path('admin/access-codes/<int:code_id>/', admin_access_code_detail),
 
     # Conexiones Redes (UploadPost)
     path('conexiones/init/', views.conexiones_init),

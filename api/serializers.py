@@ -24,12 +24,14 @@ def _sanitize_custom_css(value):
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
+    access_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = Agent
-        fields = ('email', 'password', 'nombre', 'telefono', 'agencia')
+        fields = ('email', 'password', 'nombre', 'telefono', 'agencia', 'access_code')
 
     def create(self, validated_data):
+        validated_data.pop('access_code', None)
         user = Agent.objects.create_user(
             email=validated_data['email'],
             password=validated_data['password'],

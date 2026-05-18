@@ -75,6 +75,8 @@ class Agent(AbstractBaseUser, PermissionsMixin):
     plan_nombre            = models.CharField(max_length=20, choices=PLANES, default='free')
     plan_activo            = models.BooleanField(default=True)
     plan_seleccionado      = models.BooleanField(default=False)
+    free_trial_started_at  = models.DateTimeField(null=True, blank=True)
+    free_trial_ends_at     = models.DateTimeField(null=True, blank=True)
 
     # Social — TODO: usar EncryptedTextField de django-encrypted-model-fields
     meta_access_token          = models.TextField(null=True, blank=True)
@@ -1034,6 +1036,60 @@ class OTPCode(models.Model):
     class Meta:
         ordering = ['-creado_en']
         indexes = [models.Index(fields=['email', 'tipo', 'verified'])]
+
+
+class AccessCode(models.Model):
+    """Codigo de acceso de 6 caracteres para habilitar el trial free."""
+    code = models.CharField(max_length=6, unique=True, db_index=True)
+    is_active = models.BooleanField(default=True)
+    trial_days = models.PositiveSmallIntegerField(default=30)
+    assigned_email = models.EmailField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_access_codes',
+    )
+    redeemed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='redeemed_access_codes',
+    )
+    redeemed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+    @classmethod
+    def generate_code(cls):
+        import secrets
+        for _ in range(20):
+            code = ''.join(secrets.choice(cls.ALPHABET) for _ in range(6))
+            if not cls.objects.filter(code=code).exists():
+                return code
+        raise RuntimeError('No se pudo generar un codigo unico')
+
+    def can_redeem(self, email=None):
+        if not self.is_active or self.redeemed_at or self.redeemed_by_id:
+            return False
+        if self.assigned_email and email and self.assigned_email.lower() != email.lower():
+            return False
+        return True
+
+    def __str__(self):
+        return self.code
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['is_active', 'redeemed_at']),
+            models.Index(fields=['assigned_email']),
+        ]
 
 
 # ══════════════════════════════════════════════════════════════════════════════

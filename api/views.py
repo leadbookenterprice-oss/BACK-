@@ -20,6 +20,7 @@ import io
 import zipfile
 import html as html_lib
 import unicodedata
+from functools import wraps
 from api.services.almacenamiento import AlmacenamientoCloudinary
 import logging
 
@@ -30,7 +31,7 @@ from .models import (
     AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision, default_template_tokens,
     AgentAssociation, CRMClient,
-    TerminosCondiciones, PoliticaPrivacidad, UsageLog
+    TerminosCondiciones, PoliticaPrivacidad, UsageLog, AccessCode
 )
 from .serializers import (
     RegisterSerializer, GeneratedAssetSerializer,
@@ -44,7 +45,24 @@ from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuota
 from .utils import crear_notificacion
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
-from .plan_utils import puede_generar, incrementar_uso, registrar_uso
+from .plan_utils import puede_generar, incrementar_uso, registrar_uso, get_free_trial_status, get_plan_block_payload
+
+
+def require_active_plan(view_func):
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        block_payload = get_plan_block_payload(request.user)
+        if block_payload:
+            return Response(block_payload, status=status.HTTP_402_PAYMENT_REQUIRED)
+        return view_func(request, *args, **kwargs)
+    return wrapper
+
+
+def active_plan_block_response(request):
+    block_payload = get_plan_block_payload(request.user)
+    if block_payload:
+        return Response(block_payload, status=status.HTTP_402_PAYMENT_REQUIRED)
+    return None
 
 def actualizar_resultados_listado(listado, tipo, resultado):
     """
@@ -2055,6 +2073,12 @@ class RegisterView(APIView):
         from datetime import timedelta
         from django.utils import timezone
         email = request.data.get('email', '').strip().lower()
+        access_code_raw = str(request.data.get('access_code') or '').strip().upper()
+        if not re.fullmatch(r'[A-Z0-9]{6}', access_code_raw):
+            return Response({
+                "error": "access_code_required",
+                "message": "Necesitas un codigo de acceso valido para crear una cuenta free.",
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         ip = get_client_ip(request)
         if BannedIP.objects.filter(ip_address=ip).exists():
@@ -2079,39 +2103,63 @@ class RegisterView(APIView):
 
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()
+            with transaction.atomic():
+                access_code = AccessCode.objects.select_for_update().filter(code=access_code_raw).first()
+                if not access_code or not access_code.can_redeem(email=email):
+                    return Response({
+                        "error": "access_code_invalid",
+                        "message": "El codigo de acceso no existe, ya fue usado o no esta disponible.",
+                    }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Asignar plan free por defecto
-            user.plan_nombre = 'free'
-            user.plan_activo = True
-            user.plan_seleccionado = True
-            user.save()
+                user = serializer.save()
+                now_ts = timezone.now()
+                trial_ends_at = now_ts + timedelta(days=access_code.trial_days or 30)
 
-            # TAREA 3: Consumir el OTP para que no pueda reutilizarse
-            otp_usado = OTPCode.objects.filter(
-                email=email,
-                verified=True,
-                creado_en__gte=timezone.now() - timedelta(hours=1)
-            ).order_by('-creado_en').first()
-            if otp_usado:
-                otp_usado.verified = False
-                otp_usado.code_hash = 'USED'
-                otp_usado.save()
+                user.plan_nombre = 'free'
+                user.plan_activo = True
+                user.plan_seleccionado = True
+                user.free_trial_started_at = now_ts
+                user.free_trial_ends_at = trial_ends_at
+                user.last_login_ip = ip
+                user.last_login_user_agent = request.META.get('HTTP_USER_AGENT', '')
+                user.save(update_fields=[
+                    'plan_nombre', 'plan_activo', 'plan_seleccionado',
+                    'free_trial_started_at', 'free_trial_ends_at',
+                    'last_login_ip', 'last_login_user_agent', 'updated_at',
+                ])
 
-            user.last_login_ip = ip
-            user.last_login_user_agent = request.META.get('HTTP_USER_AGENT', '')
-            user.save(update_fields=['last_login_ip', 'last_login_user_agent'])
-            refresh = RefreshToken.for_user(user)
-            response = Response({
-                'access': str(refresh.access_token),
-                'user': {
-                    'id': user.id,
-                    'email': user.email,
-                    'nombre': user.nombre,
-                    'is_staff': user.is_staff,
-                },
-            }, status=status.HTTP_201_CREATED)
-            return _set_refresh_cookie(response, str(refresh))
+                access_code.is_active = False
+                access_code.redeemed_by = user
+                access_code.redeemed_at = now_ts
+                access_code.save(update_fields=['is_active', 'redeemed_by', 'redeemed_at', 'updated_at'])
+
+                # TAREA 3: Consumir el OTP para que no pueda reutilizarse
+                otp_usado = OTPCode.objects.filter(
+                    email=email,
+                    verified=True,
+                    creado_en__gte=timezone.now() - timedelta(hours=1)
+                ).order_by('-creado_en').first()
+                if otp_usado:
+                    otp_usado.verified = False
+                    otp_usado.code_hash = 'USED'
+                    otp_usado.save()
+
+                refresh = RefreshToken.for_user(user)
+                response = Response({
+                    'access': str(refresh.access_token),
+                    'user': {
+                        'id': user.id,
+                        'email': user.email,
+                        'nombre': user.nombre,
+                        'is_staff': user.is_staff,
+                        'plan_nombre': user.plan_nombre,
+                        'plan_activo': user.plan_activo,
+                        'plan_seleccionado': user.plan_seleccionado,
+                        'free_trial_started_at': user.free_trial_started_at,
+                        'free_trial_ends_at': user.free_trial_ends_at,
+                    },
+                }, status=status.HTTP_201_CREATED)
+                return _set_refresh_cookie(response, str(refresh))
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class LogoutView(APIView):
@@ -2149,6 +2197,7 @@ import concurrent.futures
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_guion(request):
     import json as _json
     data = request.data
@@ -2472,6 +2521,7 @@ Contenido original:
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_listado(request):
     # TODO: re-habilitar cuando el sistema de planes esté estable
     # if not puede_generar(request.user, 'ai'):
@@ -3474,6 +3524,7 @@ from django.conf import settings
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def publicar_instagram(request):
     try:
         data = request.data
@@ -3529,6 +3580,7 @@ def publicar_instagram(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def publicar_redes_sociales(request):
     """
     Endpoint unificado para publicar contenido en redes sociales vía Upload Post API.
@@ -3609,6 +3661,7 @@ def _extract_publish_images(payload):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def publicar_redes_todo(request):
     """
     Publica automáticamente en Instagram las tres piezas principales:
@@ -3709,6 +3762,7 @@ def publicar_redes_status(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_carrusel(request):
     """Genera carrusel narrativo con secciones editadas y galeria limpia."""
     try:
@@ -4067,6 +4121,9 @@ class ListadosView(APIView):
         return Response(data)
 
     def post(self, request):
+        block = active_plan_block_response(request)
+        if block:
+            return block
         from .models import Agent
         user = Agent.objects.get(id=request.user.id)
         
@@ -4230,6 +4287,9 @@ class ListadoDetalleView(APIView):
 
 
     def put(self, request, pk):
+        block = active_plan_block_response(request)
+        if block:
+            return block
         try:
             listado = Listado.objects.get(pk=pk)
         except Listado.DoesNotExist:
@@ -4274,6 +4334,7 @@ def generar_video_task(listado_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_video(request, pk):
     """Dispara la generación de video asincronamente"""
     try:
@@ -4476,6 +4537,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_pdf(request):
     # TODO: re-habilitar cuando el sistema de planes esté estable
     # if not puede_generar(request.user, 'property'):
@@ -4620,6 +4682,7 @@ def generar_pdf(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_imagen_post(request):
     """Genera imagen POST y la sube a Cloudinary"""
     try:
@@ -4778,6 +4841,7 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_imagen_story(request):
     """Genera imagen Story, la sube a Cloudinary y devuelve también Base64 como respaldo"""
     try:
@@ -4910,6 +4974,7 @@ def generar_imagen_story(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_caption_story(request):
     """Genera caption para Story solo cuando el usuario lo solicita."""
     try:
@@ -4962,6 +5027,7 @@ No des opciones, no uses títulos como "Opción 1", no expliques el caption, no 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_email(request):
     try:
         # TODO: re-habilitar cuando el sistema de planes esté estable
@@ -5620,6 +5686,7 @@ def plan_status(request):
 
     user = request.user
     plan = user.plan_nombre or 'free'
+    trial_status = get_free_trial_status(user)
     limites = LIMITES.get(plan, LIMITES['free'])
     now = timezone.now()
     listados_mes = UsageLog.objects.filter(agent=user, tipo='property', fecha__year=now.year, fecha__month=now.month).count()
@@ -5630,6 +5697,11 @@ def plan_status(request):
         "plan_nombre": plan,
         "plan_activo": user.plan_activo,
         "plan_seleccionado": user.plan_seleccionado,
+        "trial_started_at": trial_status['trial_started_at'],
+        "trial_ends_at": trial_status['trial_ends_at'],
+        "trial_seconds_left": trial_status['trial_seconds_left'],
+        "trial_expired": trial_status['trial_expired'],
+        "contact_whatsapp": "+542324581770",
         "properties_per_month": limites['properties'],
         "video_generations": limites['videos'],
         "auto_posts_per_month": limites.get('auto_posts'),
@@ -5642,12 +5714,10 @@ def plan_status(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def seleccionar_plan_free(request):
-    user = request.user
-    user.plan_nombre = 'free'
-    user.plan_activo = True
-    user.plan_seleccionado = True
-    user.save()
-    return Response({"ok": True, "plan": "free"})
+    return Response({
+        "error": "access_code_required",
+        "message": "El plan free solo se activa con un codigo de acceso al crear la cuenta.",
+    }, status=status.HTTP_403_FORBIDDEN)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -5657,6 +5727,7 @@ def get_plan_info_mp(request):
     from .tracking import get_uploadpost_quota
     agent = request.user
     plan = agent.plan_nombre or 'free'
+    trial_status = get_free_trial_status(agent)
     limites = LIMITES.get(plan, LIMITES['free'])
     now = timezone.now()
     uploadpost_quota = get_uploadpost_quota(agent)
@@ -5678,6 +5749,13 @@ def get_plan_info_mp(request):
     ).count()
     return Response({
         "plan_nombre": plan,
+        "plan_activo": agent.plan_activo,
+        "plan_seleccionado": agent.plan_seleccionado,
+        "trial_started_at": trial_status['trial_started_at'],
+        "trial_ends_at": trial_status['trial_ends_at'],
+        "trial_seconds_left": trial_status['trial_seconds_left'],
+        "trial_expired": trial_status['trial_expired'],
+        "contact_whatsapp": "+542324581770",
         "mp_public_key": _mp_public_key(),
         "mp_mode": _mp_mode(),
         "uso_actual": {
@@ -6181,7 +6259,9 @@ def admin_cambiar_plan(request, user_id):
     try:
         agent = Agent.objects.get(id=user_id)
         agent.plan_nombre = nuevo_plan
-        agent.save()
+        agent.plan_activo = True
+        agent.plan_seleccionado = True
+        agent.save(update_fields=['plan_nombre', 'plan_activo', 'plan_seleccionado', 'updated_at'])
         return Response({
             "mensaje": f"Plan actualizado a {nuevo_plan}",
             "plan": nuevo_plan
@@ -6240,6 +6320,12 @@ def dashboard(request):
         'auto_posts_used': auto_posts_used,
         'listados_recientes': listados_recientes,
         'plan': plan,
+        'plan_activo': agent.plan_activo,
+        'trial_started_at': trial_status['trial_started_at'],
+        'trial_ends_at': trial_status['trial_ends_at'],
+        'trial_seconds_left': trial_status['trial_seconds_left'],
+        'trial_expired': trial_status['trial_expired'],
+        'contact_whatsapp': '+542324581770',
         'plan_limites': {
             'properties_per_month': limites['properties'],
             'ai_generations': limites['ai'],
@@ -7307,6 +7393,7 @@ def generar_html(request, pk):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def generar_escena(request):
     """Regenera el texto de UNA escena específica usando el mismo tono/voz del usuario."""
     data = request.data
@@ -7370,6 +7457,7 @@ REQUISITOS:
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@require_active_plan
 def upload_fotos_listado(request):
     """
     Sube fotos de propiedad (portada y galería) a Cloudinary a través del pool del backend.
