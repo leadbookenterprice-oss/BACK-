@@ -1408,6 +1408,8 @@ def _resolve_branding_payload(data, user):
         or payload.get('agenteFotoUrl')
         or payload.get('agente_foto_url')
         or (default_profile.foto_url if default_profile else '')
+        or payload_logo
+        or getattr(user, 'logo_url', '')
         or ''
     )
 
