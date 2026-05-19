@@ -1323,6 +1323,71 @@ def _serialize_commercial_agent(profile):
     return ComercialAgentProfileSerializer(profile).data
 
 
+def _agency_name_clean_and_key(value):
+    import unicodedata
+
+    clean = re.sub(r'\s+', ' ', str(value or '').strip())
+    if not clean:
+        return None, None
+    folded = unicodedata.normalize('NFKD', clean).encode('ascii', 'ignore').decode('ascii')
+    return clean, folded.lower()
+
+
+def _website_clean_and_key(value):
+    from urllib.parse import urlparse
+
+    clean = str(value or '').strip()
+    if not clean:
+        return None, None
+
+    candidate = clean if re.match(r'^[a-z][a-z0-9+.-]*://', clean, re.I) else f'https://{clean}'
+    parsed = urlparse(candidate)
+    host = parsed.netloc or parsed.path.split('/')[0]
+    host = host.split('@')[-1].split(':')[0].strip().strip('.').lower()
+    if host.startswith('www.'):
+        host = host[4:]
+    return clean, host or clean.lower()
+
+
+def _extract_first_present(data, *keys):
+    for key in keys:
+        if key in data:
+            return True, data.get(key)
+    return False, None
+
+
+def _validate_unique_agency_identity(user, *, agency_name=None, website=None):
+    from .models import Agent
+
+    errors = {}
+    clean_name, agency_key = _agency_name_clean_and_key(agency_name)
+    clean_website, website_key = _website_clean_and_key(website)
+    candidates = Agent.objects.exclude(id=user.id).only('id', 'email', 'nombre_inmobiliaria', 'sitio_web')
+
+    if agency_key:
+        for candidate in candidates.exclude(nombre_inmobiliaria__isnull=True).exclude(nombre_inmobiliaria=''):
+            _, candidate_key = _agency_name_clean_and_key(candidate.nombre_inmobiliaria)
+            if candidate_key == agency_key:
+                errors['nombre_inmobiliaria'] = 'Ya existe una cuenta con ese nombre de inmobiliaria.'
+                break
+
+    if website_key:
+        for candidate in candidates.exclude(sitio_web__isnull=True).exclude(sitio_web=''):
+            _, candidate_key = _website_clean_and_key(candidate.sitio_web)
+            if candidate_key == website_key:
+                errors['sitio_web'] = 'Ya existe una cuenta con ese sitio web.'
+                break
+
+    if errors:
+        return Response({
+            'error': 'agency_identity_conflict',
+            'message': 'Ya existe una cuenta registrada con esa inmobiliaria o sitio web.',
+            'errors': errors,
+        }, status=status.HTTP_409_CONFLICT), clean_name, clean_website
+
+    return None, clean_name, clean_website
+
+
 def _resolve_branding_payload(data, user):
     payload = data if isinstance(data, dict) else {}
     default_profile = _get_default_commercial_agent(user)
@@ -2684,10 +2749,19 @@ class PerfilView(APIView):
         user = Agent.objects.get(id=request.user.id)
         data = request.data
 
-        if 'nombre_inmobiliaria' in data:
-            user.nombre_inmobiliaria = data['nombre_inmobiliaria']
-        elif 'nombreInmobiliaria' in data:
-            user.nombre_inmobiliaria = data['nombreInmobiliaria']
+        agency_present, agency_value = _extract_first_present(data, 'nombre_inmobiliaria', 'nombreInmobiliaria')
+        website_present, website_value = _extract_first_present(data, 'sitio_web', 'sitioWeb')
+        if agency_present or website_present:
+            conflict_response, clean_agency_name, clean_website = _validate_unique_agency_identity(
+                user,
+                agency_name=agency_value if agency_present else None,
+                website=website_value if website_present else None,
+            )
+            if conflict_response:
+                return conflict_response
+
+        if agency_present:
+            user.nombre_inmobiliaria = clean_agency_name
 
         if 'logo_url' in data:
             user.logo_url = data['logo_url']
@@ -2708,8 +2782,8 @@ class PerfilView(APIView):
             user.pais = data['pais']
         if 'nacionalidad' in data:
             user.nacionalidad = data['nacionalidad']
-        if 'sitio_web' in data:
-            user.sitio_web = data['sitio_web']
+        if website_present:
+            user.sitio_web = clean_website
         if 'bio' in data:
             user.bio = data['bio']
 
@@ -4085,11 +4159,20 @@ class OnboardingView(APIView):
     def put(self, request):
         user = request.user
         data = request.data
-        
-        if 'nombre_inmobiliaria' in data:
-            user.nombre_inmobiliaria = data['nombre_inmobiliaria']
-        elif 'nombreInmobiliaria' in data:
-            user.nombre_inmobiliaria = data['nombreInmobiliaria']
+
+        agency_present, agency_value = _extract_first_present(data, 'nombre_inmobiliaria', 'nombreInmobiliaria')
+        website_present, website_value = _extract_first_present(data, 'sitio_web', 'sitioWeb')
+        if agency_present or website_present:
+            conflict_response, clean_agency_name, clean_website = _validate_unique_agency_identity(
+                user,
+                agency_name=agency_value if agency_present else None,
+                website=website_value if website_present else None,
+            )
+            if conflict_response:
+                return conflict_response
+
+        if agency_present:
+            user.nombre_inmobiliaria = clean_agency_name
             
         if 'logo_url' in data:
             user.logo_url = data['logo_url']
@@ -4107,10 +4190,8 @@ class OnboardingView(APIView):
             user.agencia = data['agencia']
         if 'nacionalidad' in data:
             user.nacionalidad = data['nacionalidad']
-        if 'sitio_web' in data:
-            user.sitio_web = data['sitio_web']
-        elif 'sitioWeb' in data:
-            user.sitio_web = data['sitioWeb']
+        if website_present:
+            user.sitio_web = clean_website
         if 'bio' in data:
             user.bio = data['bio']
             
