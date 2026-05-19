@@ -1366,10 +1366,14 @@ def _validate_unique_agency_identity(user, *, agency_name=None, website=None, ac
     effective_account_type = str(account_type or getattr(user, 'agencia', '') or '').strip().lower()
 
     if agency_key and effective_account_type == 'agency':
-        agency_candidates = candidates.exclude(agencia='agent').exclude(nombre_inmobiliaria__isnull=True).exclude(nombre_inmobiliaria='')
+        agency_candidates = candidates.filter(agencia__iexact='agency').exclude(nombre_inmobiliaria__isnull=True).exclude(nombre_inmobiliaria='')
         for candidate in agency_candidates:
             _, candidate_key = _agency_name_clean_and_key(candidate.nombre_inmobiliaria)
             if candidate_key == agency_key:
+                logger.warning(
+                    '[AgencyIdentity] nombre_inmobiliaria conflict user=%s candidate=%s candidate_email=%s candidate_agencia=%s',
+                    getattr(user, 'id', None), candidate.id, candidate.email, candidate.agencia,
+                )
                 errors['nombre_inmobiliaria'] = 'Ya existe una cuenta de agencia con ese nombre de inmobiliaria.'
                 break
 
@@ -1377,6 +1381,10 @@ def _validate_unique_agency_identity(user, *, agency_name=None, website=None, ac
         for candidate in candidates.exclude(sitio_web__isnull=True).exclude(sitio_web=''):
             _, candidate_key = _website_clean_and_key(candidate.sitio_web)
             if candidate_key == website_key:
+                logger.warning(
+                    '[AgencyIdentity] sitio_web conflict user=%s candidate=%s candidate_email=%s candidate_agencia=%s',
+                    getattr(user, 'id', None), candidate.id, candidate.email, candidate.agencia,
+                )
                 errors['sitio_web'] = 'Ya existe una cuenta con ese sitio web.'
                 break
 
