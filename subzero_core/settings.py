@@ -317,6 +317,9 @@ FRONTEND_URL      = config('FRONTEND_URL', default='http://localhost:5173')
 
 # Email / SMTP Configuration
 # Si no hay GMAIL_APP_PASSWORD se usa el console backend (OTP impreso por stdout).
+EMAIL_PROVIDER      = config('EMAIL_PROVIDER', default='').strip().lower()
+RESEND_API_KEY     = config('RESEND_API_KEY', default='')
+RESEND_FROM        = config('RESEND_FROM', default='')
 EMAIL_HOST_USER     = config('GMAIL_USER', default='')
 EMAIL_HOST_PASSWORD = config('GMAIL_APP_PASSWORD', default='')
 

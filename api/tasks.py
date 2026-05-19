@@ -119,7 +119,12 @@ def send_otp_email_async(email, code):
     host_user = getattr(settings, "EMAIL_HOST_USER", "") or ""
     host_pass = getattr(settings, "EMAIL_HOST_PASSWORD", "") or ""
     backend   = getattr(settings, "EMAIL_BACKEND", "")
-    provider  = (os.environ.get("EMAIL_PROVIDER") or getattr(settings, "EMAIL_PROVIDER", "") or "gmail").strip().lower()
+    resend_key = os.environ.get("RESEND_API_KEY") or getattr(settings, "RESEND_API_KEY", "")
+    provider = (
+        os.environ.get("EMAIL_PROVIDER")
+        or getattr(settings, "EMAIL_PROVIDER", "")
+        or ("resend" if resend_key else "gmail")
+    ).strip().lower()
 
     print(f"[EMAIL] Intentando enviar a {email} (provider={provider})", flush=True)
     print(

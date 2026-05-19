@@ -5853,8 +5853,8 @@ def send_otp(request):
         expires_at=expires_at
     )
 
-    # Envío del OTP robusto: intenta Celery asíncrono; si falla o no hay broker,
-    # cae a envío síncrono en el request. Así funciona en Railway sin worker.
+    # En Railway no hay garantía de que exista un worker Celery consumiendo cola.
+    # Enviamos el OTP en el request para no reportar "enviado" cuando solo quedó encolado.
     import sys
     from django.conf import settings
 
@@ -5874,31 +5874,23 @@ def send_otp(request):
     try:
         from .tasks import send_otp_email_async
 
-        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', True):
-            # Eager: ejecutar la task sincronamente sin broker
-            send_otp_email_async(email, code)
-            sent_mode = 'sync-eager'
-        else:
-            # Intentar enviar al broker Celery (Redis)
-            send_otp_email_async.delay(email, code)
-            sent_mode = 'celery-queued'
-        print(f"[EMAIL] Enviado correctamente a {email} (mode={sent_mode})", flush=True)
-    except Exception as e_celery:
-        # Broker caído, sin Redis, o cualquier otro problema: fallback sync
-        print(f"[EMAIL] ERROR al enviar (celery path): {type(e_celery).__name__}: {str(e_celery)}", flush=True)
-        print(f"[EMAIL] Intentando fallback sync a {email}", flush=True)
-        try:
-            from .tasks import send_otp_email_async as _send_sync
-            _send_sync(email, code)
-            sent_mode = 'sync-fallback'
-            print(f"[EMAIL] Enviado correctamente a {email} (mode={sent_mode})", flush=True)
-        except Exception as e_sync:
-            print(f"[EMAIL] ERROR al enviar: {str(e_sync)}", flush=True)
-            import traceback
-            traceback.print_exc()
-            sent_mode = f'error:{type(e_sync).__name__}'
+        sent_mode = str(send_otp_email_async(email, code))
+        print(f"[EMAIL] Resultado envio OTP a {email}: {sent_mode}", flush=True)
+    except Exception as exc:
+        print(f"[EMAIL] ERROR al enviar OTP: {type(exc).__name__}: {str(exc)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sent_mode = f'error:{type(exc).__name__}'
 
     sys.stdout.flush()
+    if not str(sent_mode or '').startswith('sent:'):
+        return Response({
+            "error": "email_send_failed",
+            "message": "No se pudo enviar el codigo por email. Intentá de nuevo en unos minutos.",
+            "email": email,
+            "_mode": sent_mode,
+        }, status=502)
+
     return Response({"mensaje": "Código enviado", "email": email, "_mode": sent_mode})
 
 
@@ -5968,23 +5960,25 @@ def recuperar_password(request):
         tipo="recuperacion"
     )
 
-    # Envío robusto con fallback síncrono (idéntico a send_otp)
+    # Envío síncrono: no dependemos de worker Celery para entregar el código.
+    sent_mode = None
     try:
-        from django.conf import settings
         from .tasks import send_otp_email_async
-        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', True):
-            send_otp_email_async(email, code)
-        else:
-            send_otp_email_async.delay(email, code)
-    except Exception as e_celery:
-        print(f"[OTP-RECOV] Celery falló ({e_celery}). Fallback sync.")
-        try:
-            from .tasks import send_otp_email_async as _send_sync
-            _send_sync(email, code)
-        except Exception as e_sync:
-            print(f"[OTP-RECOV] ERROR envío síncrono: {e_sync}")
+        sent_mode = str(send_otp_email_async(email, code))
+        print(f"[OTP-RECOV] Resultado envio a {email}: {sent_mode}", flush=True)
+    except Exception as exc:
+        print(f"[OTP-RECOV] ERROR envio: {type(exc).__name__}: {exc}", flush=True)
+        sent_mode = f'error:{type(exc).__name__}'
 
-    return Response({"mensaje": "Código enviado", "email": email}, status=200)
+    if not str(sent_mode or '').startswith('sent:'):
+        return Response({
+            "error": "email_send_failed",
+            "message": "No se pudo enviar el codigo por email. Intentá de nuevo en unos minutos.",
+            "email": email,
+            "_mode": sent_mode,
+        }, status=502)
+
+    return Response({"mensaje": "Código enviado", "email": email, "_mode": sent_mode}, status=200)
 
 
 @api_view(['POST'])
