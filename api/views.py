@@ -5374,12 +5374,12 @@ from decimal import Decimal, InvalidOperation
 from django.db import transaction
 
 MP_TEST_PRICE = Decimal('1')
-MP_PRODUCTION_PRICE = Decimal('100000')
+MP_PRODUCTION_PRICE = Decimal('1')
 MP_PLAN_PRICES = {
-    'starter': Decimal('25000'),
-    'pro': Decimal('58000'),
-    'scale': Decimal('125000'),
-    'business': Decimal('125000'),
+    'starter': Decimal('1'),
+    'pro': Decimal('1'),
+    'scale': Decimal('1'),
+    'business': Decimal('1'),
 }
 
 MP_PLAN_LABELS = {
@@ -5390,16 +5390,10 @@ MP_PLAN_LABELS = {
 }
 
 MP_EXTRA_ITEMS = {
-    'gemini': {'nombre': 'Contenido IA — Adicional (+1500 créditos)'},
-    'elevenlabs': {'nombre': 'Voces Neurales — Adicional (+10.000 caracteres)'},
-    'uploadpost': {'nombre': 'Gestor de Redes — Adicional (+10 publicaciones)'},
-    'pack_completo': {'nombre': 'Pack Completo — Todos los recursos'},
+    'pack_completo': {'nombre': 'Pack Completo - Gemini, ElevenLabs y UploadPost'},
 }
 
 MP_EXTRA_SERVICES = {
-    'extra_gemini': ['gemini'],
-    'extra_elevenlabs': ['elevenlabs'],
-    'extra_uploadpost': ['uploadpost'],
     'extra_pack_completo': ['gemini', 'elevenlabs', 'uploadpost'],
 }
 
@@ -5717,7 +5711,7 @@ def mp_checkout(request):
 @permission_classes([IsAuthenticated])
 def mp_checkout_api_extra(request):
     """Genera link de pago para comprar una API adicional."""
-    servicio = request.data.get('servicio', 'gemini')
+    servicio = request.data.get('servicio', 'pack_completo')
 
     if servicio not in MP_EXTRA_ITEMS:
         return Response({"error": "Servicio inválido"}, status=400)
