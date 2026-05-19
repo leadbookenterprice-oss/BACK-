@@ -217,6 +217,12 @@ _local_origins = [
     'http://localhost:3000',
 ]
 CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_env_origins + _production_origins + (_local_origins if DEBUG else [])))
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r'^https://leadbook\.com\.ar$',
+    r'^https://www\.leadbook\.com\.ar$',
+    r'^https://[a-z0-9-]+\.vercel\.app$',
+    r'^https://[a-z0-9-]+\.up\.railway\.app$',
+]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-encoding', 'authorization', 'content-type', 'dnt',
@@ -225,7 +231,10 @@ CORS_ALLOW_HEADERS = [
 CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 print(f"[STARTUP] CORS_ALLOWED_ORIGINS={CORS_ALLOWED_ORIGINS}")
 
-CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://dash-admin-leadbook.vercel.app').split(',')
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(
+    [o.strip() for o in config('CSRF_TRUSTED_ORIGINS', default='https://dash-admin-leadbook.vercel.app').split(',') if o.strip()]
+    + _production_origins
+))
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=not DEBUG, cast=bool)
