@@ -1356,32 +1356,43 @@ def _extract_first_present(data, *keys):
     return False, None
 
 
-def _validate_unique_agency_identity(user, *, agency_name=None, website=None):
+def _validate_unique_agency_identity(user, *, agency_name=None, website=None, account_type=None):
     from .models import Agent
 
     errors = {}
     clean_name, agency_key = _agency_name_clean_and_key(agency_name)
     clean_website, website_key = _website_clean_and_key(website)
-    candidates = Agent.objects.exclude(id=user.id).only('id', 'email', 'nombre_inmobiliaria', 'sitio_web')
+    candidates = Agent.objects.exclude(id=user.id).only('id', 'email', 'agencia', 'nombre_inmobiliaria', 'sitio_web')
+    effective_account_type = str(account_type or getattr(user, 'agencia', '') or '').strip().lower()
 
-    if agency_key:
-        for candidate in candidates.exclude(nombre_inmobiliaria__isnull=True).exclude(nombre_inmobiliaria=''):
+    if agency_key and effective_account_type == 'agency':
+        agency_candidates = candidates.filter(agencia__iexact='agency').exclude(nombre_inmobiliaria__isnull=True).exclude(nombre_inmobiliaria='')
+        for candidate in agency_candidates:
             _, candidate_key = _agency_name_clean_and_key(candidate.nombre_inmobiliaria)
             if candidate_key == agency_key:
-                errors['nombre_inmobiliaria'] = 'Ya existe una cuenta con ese nombre de inmobiliaria.'
+                logger.warning(
+                    '[AgencyIdentity] nombre_inmobiliaria conflict user=%s candidate=%s candidate_email=%s candidate_agencia=%s',
+                    getattr(user, 'id', None), candidate.id, candidate.email, candidate.agencia,
+                )
+                errors['nombre_inmobiliaria'] = 'Ya existe una cuenta de agencia con ese nombre de inmobiliaria.'
                 break
 
     if website_key:
         for candidate in candidates.exclude(sitio_web__isnull=True).exclude(sitio_web=''):
             _, candidate_key = _website_clean_and_key(candidate.sitio_web)
             if candidate_key == website_key:
+                logger.warning(
+                    '[AgencyIdentity] sitio_web conflict user=%s candidate=%s candidate_email=%s candidate_agencia=%s',
+                    getattr(user, 'id', None), candidate.id, candidate.email, candidate.agencia,
+                )
                 errors['sitio_web'] = 'Ya existe una cuenta con ese sitio web.'
                 break
 
     if errors:
+        message = ' '.join(errors.values())
         return Response({
             'error': 'agency_identity_conflict',
-            'message': 'Ya existe una cuenta registrada con esa inmobiliaria o sitio web.',
+            'message': message or 'Ya existe una cuenta registrada con esa inmobiliaria o sitio web.',
             'errors': errors,
         }, status=status.HTTP_409_CONFLICT), clean_name, clean_website
 
@@ -2758,6 +2769,7 @@ class PerfilView(APIView):
                 user,
                 agency_name=agency_value if agency_present else None,
                 website=website_value if website_present else None,
+                account_type=data.get('agencia', getattr(user, 'agencia', '')),
             )
             if conflict_response:
                 return conflict_response
@@ -4169,6 +4181,7 @@ class OnboardingView(APIView):
                 user,
                 agency_name=agency_value if agency_present else None,
                 website=website_value if website_present else None,
+                account_type=data.get('agencia', getattr(user, 'agencia', '')),
             )
             if conflict_response:
                 return conflict_response

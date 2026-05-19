@@ -60,12 +60,44 @@ def _is_revocable_starter_trial_account(user):
     )
 
 
-def _revoke_starter_trial_account(user):
+def _blacklist_user_refresh_tokens(user):
+    try:
+        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+        for token in OutstandingToken.objects.filter(user_id=user.id):
+            BlacklistedToken.objects.get_or_create(token=token)
+    except Exception:
+        pass
+
+
+def _emit_account_revoked_event(user_id, access_code):
+    try:
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        async_to_sync(channel_layer.group_send)(
+            f'presence_{user_id}',
+            {
+                'type': 'account.revoked',
+                'reason': 'access_code_revoked',
+                'access_code': access_code,
+                'message': 'Tu token de prueba fue bloqueado. La cuenta fue cerrada.',
+            },
+        )
+    except Exception:
+        pass
+
+
+def _revoke_starter_trial_account(user, access_code=None):
+    user_id = user.id
+    _blacklist_user_refresh_tokens(user)
     user.plan_activo = False
     user.plan_seleccionado = False
     user.free_trial_started_at = None
     user.free_trial_ends_at = None
     user.soft_delete()
+    transaction.on_commit(lambda: _emit_account_revoked_event(user_id, access_code))
 
 
 @api_view(['GET', 'POST'])
@@ -135,7 +167,7 @@ def admin_access_code_detail(request, code_id):
 
             if redeemed_user:
                 if _is_revocable_starter_trial_account(redeemed_user):
-                    _revoke_starter_trial_account(redeemed_user)
+                    _revoke_starter_trial_account(redeemed_user, code.code)
                     account_revoked = True
                 elif not getattr(redeemed_user, 'eliminado_en', None):
                     return Response({
