@@ -24,6 +24,15 @@ class UserPresenceConsumer(AsyncWebsocketConsumer):
         except Exception:
             pass
 
+    async def account_revoked(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'account_revoked',
+            'reason': event.get('reason') or 'access_code_revoked',
+            'access_code': event.get('access_code') or '',
+            'message': event.get('message') or 'Tu cuenta fue cerrada.',
+        }))
+        await self.close(code=4001)
+
     @database_sync_to_async
     def update_last_seen(self):
         from api.models import Agent
