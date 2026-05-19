@@ -4225,6 +4225,8 @@ def video_status(request, listado_id):
             'none': 'idle',
         }
         normalized_status = status_map.get(listado.video_status, listado.video_status)
+        if listado.video_url:
+            normalized_status = 'done'
 
         return Response({
             "status": normalized_status,
