@@ -2392,6 +2392,56 @@ def generar_guion(request):
     contexto_extra = f"\nENFOQUE ADICIONAL: {contexto_adicional}" if contexto_adicional else ''
     scene_names_hint = ', '.join(rules['scene_names'])
 
+    def _fallback_escenas():
+        if tipo_video == 'tour':
+            if is_land:
+                return [
+                    {'nombre': 'Gancho', 'texto': f'Conocé este {tipo} en {ciudad}, una oportunidad para evaluar con calma por ubicación, superficie y potencial de desarrollo.', 'icono': '🌍'},
+                    {'nombre': 'Ubicación', 'texto': f'El entorno de {ciudad} permite pensar en un proyecto con buena conexión, servicios cercanos y proyección de valorización.', 'icono': '📍'},
+                    {'nombre': 'Superficie', 'texto': f'La superficie disponible abre posibilidades para construir, invertir o planificar un desarrollo adaptado a tus objetivos.', 'icono': '📐'},
+                    {'nombre': 'Potencial', 'texto': 'Es una alternativa interesante para quien busca tierra con margen de crecimiento y visión de mediano plazo.', 'icono': '🚀'},
+                    {'nombre': 'Inversión', 'texto': f'Con un valor de referencia de {moneda} {precio}, este terreno puede convertirse en una decisión estratégica.', 'icono': '💼'},
+                    {'nombre': 'Recorrido', 'texto': 'Recorrerlo permite entender mejor sus accesos, orientación, entorno inmediato y posibilidades reales de uso.', 'icono': '👁️'},
+                    {'nombre': 'Cierre', 'texto': 'Escribinos para recibir más información, resolver dudas y coordinar una visita personalizada al lugar.', 'icono': '📞'},
+                ]
+            return [
+                {'nombre': 'Gancho', 'texto': f'Bienvenido a esta {tipo} en {ciudad}, una propiedad pensada para disfrutarse desde el primer recorrido.', 'icono': '🏠'},
+                {'nombre': 'Fachada y entorno', 'texto': 'La primera impresión combina presencia, ubicación y una propuesta visual clara para vivir o invertir.', 'icono': '✨'},
+                {'nombre': 'Zona social', 'texto': 'Los espacios principales ofrecen amplitud, circulación cómoda y una atmósfera ideal para compartir cada día.', 'icono': '🛋️'},
+                {'nombre': 'Cocina y detalles', 'texto': 'La distribución acompaña una vida práctica, con detalles que elevan la experiencia y simplifican la rutina.', 'icono': '🍳'},
+                {'nombre': 'Habitaciones', 'texto': f'Cuenta con {recamaras or "varios"} dormitorios y {banos or "baños funcionales"}, pensados para descanso, privacidad y confort.', 'icono': '🛏️'},
+                {'nombre': 'Beneficio de inversion', 'texto': f'Por {moneda} {precio}, esta propiedad reúne ubicación, prestaciones y potencial de valorización.', 'icono': '💼'},
+                {'nombre': 'Cierre con CTA', 'texto': 'Contactanos para recibir la ficha completa y coordinar una visita personalizada.', 'icono': '📞'},
+            ]
+
+        if is_land:
+            return [
+                {'nombre': 'Gancho', 'texto': f'{tipo} en {ciudad}: una oportunidad concreta para invertir o desarrollar.', 'icono': '⚡'},
+                {'nombre': 'Potencial', 'texto': 'Superficie, ubicación y proyección se combinan para pensar un proyecto con valor futuro.', 'icono': '📐'},
+                {'nombre': 'Ubicación', 'texto': f'En {ciudad}, con entorno y conectividad para evaluar una decisión estratégica.', 'icono': '📍'},
+                {'nombre': 'CTA', 'texto': f'Valor de referencia {moneda} {precio}. Escribinos y coordinamos una visita.', 'icono': '📞'},
+            ]
+        return [
+            {'nombre': 'Gancho', 'texto': f'{tipo} en {ciudad}: una propiedad que destaca desde el primer vistazo.', 'icono': '⚡'},
+            {'nombre': 'Diferencial', 'texto': f'{recamaras or "Ambientes"} dormitorios, {banos or "baños"} y espacios pensados para vivir mejor.', 'icono': '🏠'},
+            {'nombre': 'Ubicación', 'texto': f'Ubicación práctica en {ciudad}, cerca de servicios y puntos clave.', 'icono': '📍'},
+            {'nombre': 'CTA', 'texto': f'Precio {moneda} {precio}. Consultanos hoy y coordinamos una visita.', 'icono': '📞'},
+        ]
+
+    def _fallback_response(reason):
+        escenas = _fallback_escenas()
+        return Response({
+            'escenas': escenas,
+            'tipo_video': tipo_video,
+            'source': 'fallback',
+            'meta': {
+                'reason': reason,
+                'required_scenes': rules['required_scenes'],
+                'actual_scenes': len(escenas),
+                'actual_total_words': sum(_count_words(e.get('texto', '')) for e in escenas),
+            },
+        }, status=status.HTTP_200_OK)
+
     prompt = f"""Sos copywriter inmobiliario experto en videos cortos para redes.
 Genera un guion para formato {tipo_video.upper()}.
 {'Enfocate en inversión, superficie, ubicación, potencial de desarrollo y valorización. No menciones recámaras ni ambientes si es terreno/lote.' if is_land else ''}
@@ -2563,10 +2613,10 @@ Contenido original:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
         logger.exception("Error llamando Gemini en generar_guion")
-        return Response({"error": "gemini_no_disponible", "detalle": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _fallback_response(f'gemini_no_disponible: {str(e)[:180]}')
 
     if not raw_response:
-        return Response({"error": "gemini_sin_respuesta"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _fallback_response('gemini_sin_respuesta')
 
     attempts = [str(raw_response).strip()]
     final_validation = None
@@ -2609,14 +2659,7 @@ Contenido original:
                 pass
 
     if not final_validation:
-        return Response(
-            {
-                "error": "respuesta_ia_invalida",
-                "detalle": final_reason,
-                "raw": attempts[-1][:900],
-            },
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
+        return _fallback_response(f'respuesta_ia_invalida: {final_reason}')
 
     escenas_finales = final_validation['escenas']
     total_words = final_validation['total_words']
@@ -4242,10 +4285,19 @@ def video_status(request, listado_id):
         normalized_status = status_map.get(listado.video_status, listado.video_status)
         if listado.video_url:
             normalized_status = 'done'
+        elif normalized_status in ('queued', 'processing'):
+            from django.conf import settings
+            stale_after = int(config('HYPERFRAMES_RENDER_TIMEOUT', default=420)) + 180
+            age_seconds = (timezone.now() - listado.updated_at).total_seconds() if listado.updated_at else 0
+            if age_seconds > stale_after:
+                listado.video_status = 'error'
+                listado.save(update_fields=['video_status'])
+                normalized_status = 'error'
 
         return Response({
             "status": normalized_status,
-            "video_url": listado.video_url
+            "video_url": listado.video_url,
+            "updated_at": listado.updated_at,
         }, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
