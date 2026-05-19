@@ -4536,17 +4536,20 @@ def generar_video(request, pk):
         listado.video_url = None
         listado.save(update_fields=['video_status', 'video_url'])
 
-        # En local/eager evitamos bloquear el request (Daphne timeout warnings)
-        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+        generation_mode = config('VIDEO_GENERATION_MODE', default='thread').strip().lower()
+
+        # Thread mantiene el comportamiento local: responde rápido y renderiza en segundo plano.
+        # Si hay worker dedicado, usar VIDEO_GENERATION_MODE=celery.
+        if generation_mode != 'celery' or getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
             threading.Thread(target=generar_video_task, args=(pk,), daemon=True).start()
         else:
-            # Dispara tarea Celery real
             generar_video_task.delay(pk)
 
         return Response({
             "status": "queued",
             "mensaje": "El video se está generando en segundo plano",
-            "id": pk
+            "id": pk,
+            "mode": generation_mode if generation_mode == 'celery' else 'thread',
         })
     except Listado.DoesNotExist:
         return Response({"error": "Listado no encontrado"}, status=404)
