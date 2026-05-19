@@ -125,12 +125,19 @@ def admin_access_code_detail(request, code_id):
     if request.method == 'DELETE':
         account_revoked = False
         with transaction.atomic():
-            code = AccessCode.objects.select_for_update().select_related('redeemed_by').get(id=code.id)
+            code = AccessCode.objects.select_for_update().get(id=code.id)
+            redeemed_user = None
             if code.redeemed_by_id:
-                if _is_revocable_starter_trial_account(code.redeemed_by):
-                    _revoke_starter_trial_account(code.redeemed_by)
+                redeemed_user = Agent.objects.all_including_deleted().select_for_update().filter(
+                    id=code.redeemed_by_id,
+                ).first()
+                code.redeemed_by = redeemed_user
+
+            if redeemed_user:
+                if _is_revocable_starter_trial_account(redeemed_user):
+                    _revoke_starter_trial_account(redeemed_user)
                     account_revoked = True
-                elif not getattr(code.redeemed_by, 'eliminado_en', None):
+                elif not getattr(redeemed_user, 'eliminado_en', None):
                     return Response({
                         'error': 'La cuenta asociada ya no es un trial Starter revocable.',
                     }, status=status.HTTP_409_CONFLICT)
