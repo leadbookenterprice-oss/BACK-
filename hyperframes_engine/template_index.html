@@ -210,13 +210,14 @@
 
   // ── FLASH CUTS ──────────────────────────────
   var cuts = [{{ cut_times }}];
+  var captionAnim = "{{ caption_anim }}";
   cuts.forEach(function (t) {
     tl.fromTo("#flash",
       { opacity: 0 },
-      { opacity: 0.62, duration: 0.06, ease: "power2.in", overwrite: "auto" },
+      { opacity: {{ cut_flash_opacity }}, duration: {{ cut_flash_duration }}, ease: "power2.inOut", overwrite: "auto" },
       t
     );
-    tl.to("#flash", { opacity: 0, duration: 0.14, ease: "power3.out", overwrite: "auto" }, t + 0.06);
+    tl.to("#flash", { opacity: 0, duration: {{ cut_fade_duration }}, ease: "power3.out", overwrite: "auto" }, t + {{ cut_flash_duration }});
   });
 
   // ── WORD-BY-WORD CAPTIONS ─────────────────────────────────────
@@ -232,7 +233,13 @@
 
     tl.set(el, { visibility: "visible", opacity: 0 }, start);
 
-    if (dur >= 0.12) {
+    if (captionAnim === "tour") {
+      tl.fromTo(el,
+        { opacity: 0, y: 18, scale: 0.98 },
+        { opacity: 1, y: 0, scale: 1, duration: 0.28, ease: "power2.out" },
+        start
+      );
+    } else if (dur >= 0.12) {
       tl.fromTo(el,
         { opacity: 0, scale: 0.82 },
         { opacity: 1, scale: 1, duration: 0.08, ease: "back.out(1.7)" },
@@ -243,7 +250,8 @@
     }
 
     if (dur >= 0.2) {
-      tl.to(el, { opacity: 0, scale: 0.94, duration: 0.06, ease: "power2.in" }, outEnd - 0.06);
+      var fadeDur = captionAnim === "tour" ? 0.2 : 0.06;
+      tl.to(el, { opacity: 0, scale: captionAnim === "tour" ? 1 : 0.94, duration: fadeDur, ease: "power2.in" }, outEnd - fadeDur);
     }
     tl.set(el, { opacity: 0, visibility: "hidden" }, outEnd);
   });

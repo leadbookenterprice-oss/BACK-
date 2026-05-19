@@ -28,6 +28,19 @@ cloudinary.config(
 def _cloudinary_ready():
     return bool(config('CLOUDINARY_CLOUD_NAME', default='').strip() and config('CLOUDINARY_API_KEY', default='').strip() and config('CLOUDINARY_API_SECRET', default='').strip())
 
+def _normalize_video_type(value):
+    raw = str(value or 'reel').strip().lower().replace(' ', '_')
+    aliases = {
+        'tour_narrado': 'tour',
+        'tour-narrado': 'tour',
+        'tour': 'tour',
+        'reel_rapido': 'reel',
+        'reel_rápido': 'reel',
+        'reel-rápido': 'reel',
+        'reel': 'reel',
+    }
+    return aliases.get(raw, 'tour' if 'tour' in raw else 'reel')
+
 def _detect_ffmpeg_bin_dir():
     ffmpeg_bin = config('FFMPEG_BIN', default='').strip()
     if ffmpeg_bin and os.path.isdir(ffmpeg_bin):
@@ -408,7 +421,7 @@ def generar_video_listado(listado_id):
         audio_filename = f'audio_{listado.id}.mp3'
         audio_path = os.path.join(settings.MEDIA_ROOT, 'assets', audio_filename)
         
-        tipo_video = datos.get('tipoVideo', 'reel').lower()
+        tipo_video = _normalize_video_type(datos.get('tipoVideo') or datos.get('tipo_video') or 'reel')
         tipo_propiedad_raw = str(datos.get('tipoPropiedad') or datos.get('tipo_propiedad') or listado.tipo_propiedad or '').lower()
         is_land = any(x in tipo_propiedad_raw for x in ['terreno', 'lote', 'lot', 'land'])
         quality_profile = get_video_profile(tipo_video=tipo_video, is_land=is_land)
@@ -416,7 +429,7 @@ def generar_video_listado(listado_id):
         tono_seleccionado = datos.get('tono', 'profesional')
         visual_theme = get_visual_theme(is_land=is_land, tone=tono_seleccionado)
         contexto_adicional = datos.get('contextoAdicional', '')
-        is_tour = 'tour' in tipo_video
+        is_tour = tipo_video == 'tour'
         
         # Parámetros según el estilo
         vo_duration = 0.0
@@ -433,12 +446,20 @@ def generar_video_listado(listado_id):
             # SI EL USUARIO EDITÓ EL GUION EN EL PASO 5, USAR ESO Y NO REGENERAR
             if is_land:
                 dim_text = f"Cuenta con una superficie aproximada de {superficie_terreno} metros cuadrados. " if superficie_terreno else ""
-                script_vo = (
-                    f"Presentamos este terreno en {listado.ciudad}, una excelente oportunidad de inversión. "
-                    f"{dim_text}"
-                    f"Ideal para desarrollo residencial o comercial, con gran potencial de valorización. "
-                    f"Precio: {price_voice}. Contactanos para más información y coordinar una visita."
-                )
+                if is_tour:
+                    script_vo = (
+                        f"Presentamos este terreno en {listado.ciudad}, una oportunidad para recorrer con calma y evaluar su potencial. "
+                        f"{dim_text}"
+                        f"Su ubicación, entorno y posibilidades de desarrollo lo convierten en una alternativa interesante para inversión o proyecto propio. "
+                        f"El valor es {price_voice}. Contactanos para recibir más información y coordinar una visita al lugar."
+                    )
+                else:
+                    script_vo = (
+                        f"Presentamos este terreno en {listado.ciudad}, una excelente oportunidad de inversión. "
+                        f"{dim_text}"
+                        f"Ideal para desarrollo residencial o comercial, con gran potencial de valorización. "
+                        f"Precio: {price_voice}. Contactanos para más información y coordinar una visita."
+                    )
             elif escenas and isinstance(escenas, list) and len(escenas) > 0:
                 script_vo = _build_property_script(datos, listado, price_voice)
             else:
@@ -556,10 +577,14 @@ No incluyas preámbulos, solo el texto en español neutro."""
             start_str = f"{start:.3f}".rstrip('0').rstrip('.')
             duration_str = f"{duration:.3f}".rstrip('0').rstrip('.')
             images_html += f'<img id="img{i}" class="scene-img clip" data-start="{start_str}" data-duration="{duration_str}" data-track-index="{track_index}" src="{url}" />\n'
-            ken_burns_js += f'tl.fromTo("#img{i}", {{ scale: 1.000 }}, {{ scale: 1.03, duration: {duration_str}, ease: "none" }}, {start_str});\n'
+            zoom_scale = float(quality_profile['zoom_scale'])
+            ken_burns_js += f'tl.fromTo("#img{i}", {{ scale: 1.000 }}, {{ scale: {zoom_scale:.3f}, duration: {duration_str}, ease: "none" }}, {start_str});\n'
 
-            if i > 0 and sfx_camera_url:
-                sfx_camera_html += f'<audio class="clip" data-start="{start_str}" data-duration="1" data-track-index="2" data-volume="0.65" src="{sfx_camera_url}"></audio>\n'
+            camera_volume = float(quality_profile['camera_sfx_volume'])
+            if i > 0 and sfx_camera_url and camera_volume > 0:
+                sfx_camera_html += f'<audio class="clip" data-start="{start_str}" data-duration="1" data-track-index="2" data-volume="{camera_volume}" src="{sfx_camera_url}"></audio>\n'
+                cut_times.append(start_str)
+            elif i > 0:
                 cut_times.append(start_str)
 
         # Build Captions
@@ -760,7 +785,11 @@ No incluyas preámbulos, solo el texto en español neutro."""
             '{{ contact_cta }}': 'Escribinos para coordinar visita',
             '{{ ken_burns_js }}': ken_burns_js,
             '{{ cut_times }}': ",".join(cut_times),
-            '{{ words_js }}': words_js
+            '{{ words_js }}': words_js,
+            '{{ cut_flash_opacity }}': str(quality_profile['cut_flash_opacity']),
+            '{{ cut_flash_duration }}': str(quality_profile['cut_flash_duration']),
+            '{{ cut_fade_duration }}': str(quality_profile['cut_fade_duration']),
+            '{{ caption_anim }}': quality_profile['caption_anim'],
         }
 
         agent_name = str(datos.get('agenteNombre') or datos.get('agente_nombre') or '').strip()
