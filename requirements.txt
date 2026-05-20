@@ -107,4 +107,5 @@ django-ratelimit==4.1.0
 openai-whisper
 playwright==1.42.0
 openai
+twilio==9.5.1
 

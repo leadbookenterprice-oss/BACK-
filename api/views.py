@@ -2147,6 +2147,61 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+def request_trial_token(request):
+    from django.conf import settings
+    telefono = str(request.data.get('telefono') or '').strip()
+    digits_only = re.sub(r'\D', '', telefono)
+
+    if len(digits_only) < 10:
+        return Response({
+            "error": "invalid_phone",
+            "message": "Ingresá un número de teléfono válido con al menos 10 dígitos.",
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # Normalizar: +54 prefijo si no lo tiene
+    if not telefono.startswith('+'):
+        if digits_only.startswith('54'):
+            telefono_normalizado = '+' + digits_only
+        else:
+            telefono_normalizado = '+54' + digits_only
+    else:
+        telefono_normalizado = telefono
+
+    # Verificar que el teléfono no esté ya registrado
+    if Agent.objects.filter(telefono=telefono_normalizado).exists():
+        return Response({
+            "error": "phone_taken",
+            "message": "Este número de teléfono ya está asociado a una cuenta existente.",
+        }, status=status.HTTP_409_CONFLICT)
+
+    # Generar código de acceso
+    code = AccessCode.generate_code()
+    trial_days = 30
+    access_code_obj = AccessCode.objects.create(
+        code=code,
+        trial_days=trial_days,
+        assigned_phone=telefono_normalizado,
+        notes=f"Solicitado por WhatsApp para {telefono_normalizado}",
+    )
+
+    # Enviar por WhatsApp
+    from .services.whatsapp_service import send_trial_token
+    sent = send_trial_token(telefono_normalizado, code)
+
+    response_data = {
+        "sent": sent,
+        "message": "Código enviado por WhatsApp." if sent else "Código generado. No se pudo enviar por WhatsApp.",
+        "trial_days": trial_days,
+    }
+
+    if settings.DEBUG:
+        response_data["code"] = code
+
+    return Response(response_data)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
 def validate_access_code(request):
     code = str(request.data.get('access_code') or '').strip().upper()
     if not re.fullmatch(r'[A-Z0-9]{6}', code):
@@ -2199,6 +2254,24 @@ class RegisterView(APIView):
         # Validar email duplicado
         if Agent.objects.filter(email=email).exists():
             return Response({"error": "Este email ya está registrado. ¿Olvidaste tu contraseña?"}, status=400)
+
+        # Validar teléfono duplicado (si se envía)
+        telefono_raw = str(request.data.get('telefono') or '').strip()
+        if telefono_raw:
+            digits_only = re.sub(r'\D', '', telefono_raw)
+            if digits_only:
+                if not telefono_raw.startswith('+') and digits_only.startswith('54'):
+                    telefono_normalizado = '+' + digits_only
+                elif not telefono_raw.startswith('+'):
+                    telefono_normalizado = '+54' + digits_only
+                else:
+                    telefono_normalizado = telefono_raw
+
+                if Agent.objects.filter(telefono=telefono_normalizado).exists():
+                    return Response({
+                        "error": "phone_taken",
+                        "message": "Este número de teléfono ya está asociado a una cuenta existente.",
+                    }, status=status.HTTP_409_CONFLICT)
 
         otp_verificado = OTPCode.objects.filter(
             email=email,
@@ -4536,7 +4609,8 @@ def generar_video(request, pk):
         listado.video_url = None
         listado.save(update_fields=['video_status', 'video_url'])
 
-        generation_mode = config('VIDEO_GENERATION_MODE', default='thread').strip().lower()
+        default_generation_mode = 'thread' if settings.DEBUG else 'celery'
+        generation_mode = config('VIDEO_GENERATION_MODE', default=default_generation_mode).strip().lower()
 
         # Thread mantiene el comportamiento local: responde rápido y renderiza en segundo plano.
         # Si hay worker dedicado, usar VIDEO_GENERATION_MODE=celery.

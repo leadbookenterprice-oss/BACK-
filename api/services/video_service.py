@@ -827,7 +827,8 @@ No incluyas preámbulos, solo el texto en español neutro."""
             "render",
             ".", # Render the current (temp) directory
             "--output", output_path,
-            "--quality", config('HYPERFRAMES_QUALITY', default='high')
+            "--quality", config('HYPERFRAMES_QUALITY', default='standard'),
+            "--workers", str(config('HYPERFRAMES_WORKERS', default=1, cast=int)),
         ]
 
         render_timeout_seconds = int(config('HYPERFRAMES_RENDER_TIMEOUT', default=420))

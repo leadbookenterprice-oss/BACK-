@@ -1042,6 +1042,7 @@ class AccessCode(models.Model):
     is_active = models.BooleanField(default=True)
     trial_days = models.PositiveSmallIntegerField(default=30)
     assigned_email = models.EmailField(null=True, blank=True)
+    assigned_phone = models.CharField(max_length=50, null=True, blank=True)
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
