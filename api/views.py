@@ -5502,13 +5502,13 @@ from decouple import config
 from decimal import Decimal, InvalidOperation
 from django.db import transaction
 
-MP_TEST_PRICE = Decimal('1')
-MP_PRODUCTION_PRICE = Decimal('1')
+MP_TEST_PRICE = Decimal('100')
+MP_PRODUCTION_PRICE = Decimal('100')
 MP_PLAN_PRICES = {
-    'starter': Decimal('1'),
-    'pro': Decimal('1'),
-    'scale': Decimal('1'),
-    'business': Decimal('1'),
+    'starter': Decimal('100'),
+    'pro': Decimal('100'),
+    'scale': Decimal('100'),
+    'business': Decimal('100'),
 }
 
 MP_PLAN_LABELS = {
