@@ -2149,6 +2149,33 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 @permission_classes([AllowAny])
 def request_trial_token(request):
     from django.conf import settings
+
+    def _normalize_whatsapp_phone(raw_phone):
+        digits = re.sub(r'\D', '', str(raw_phone or '').strip())
+        if not digits:
+            return ''
+
+        # Quitar prefijo local 0 si viene (ej: 011..., 02324...)
+        if digits.startswith('0'):
+            digits = digits.lstrip('0')
+
+        # Argentina: preferir E.164 móvil para WhatsApp (+549...)
+        if digits.startswith('549'):
+            return '+' + digits
+
+        if digits.startswith('54'):
+            rest = digits[2:]
+            if rest.startswith('9'):
+                return '+' + digits
+            return '+549' + rest
+
+        # Si viene formato local (10 dígitos), asumir móvil AR
+        if len(digits) == 10:
+            return '+549' + digits
+
+        # Fallback legado
+        return '+54' + digits
+
     telefono = str(request.data.get('telefono') or '').strip()
     digits_only = re.sub(r'\D', '', telefono)
     logger.info("[WHATSAPP] request_trial_token solicitado telefono_raw=%s", telefono)
@@ -2159,14 +2186,7 @@ def request_trial_token(request):
             "message": "Ingresá un número de teléfono válido con al menos 10 dígitos.",
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    # Normalizar: +54 prefijo si no lo tiene
-    if not telefono.startswith('+'):
-        if digits_only.startswith('54'):
-            telefono_normalizado = '+' + digits_only
-        else:
-            telefono_normalizado = '+54' + digits_only
-    else:
-        telefono_normalizado = telefono
+    telefono_normalizado = _normalize_whatsapp_phone(telefono)
 
     # Verificar que el teléfono no esté ya registrado
     if Agent.objects.filter(telefono=telefono_normalizado).exists():
@@ -2187,11 +2207,12 @@ def request_trial_token(request):
 
     # Enviar por WhatsApp
     from .services.whatsapp_service import send_trial_token
-    sent, send_error = send_trial_token(telefono_normalizado, code)
+    sent, send_error, message_sid = send_trial_token(telefono_normalizado, code)
     logger.info(
-        "[WHATSAPP] intento_envio telefono=%s sent=%s error=%s",
+        "[WHATSAPP] intento_envio telefono=%s sent=%s sid=%s error=%s",
         telefono_normalizado,
         sent,
+        message_sid,
         send_error,
     )
 
@@ -2199,6 +2220,8 @@ def request_trial_token(request):
         "sent": sent,
         "message": "Código enviado por WhatsApp." if sent else "Código generado. No se pudo enviar por WhatsApp.",
         "trial_days": trial_days,
+        "to": telefono_normalizado,
+        "message_sid": message_sid,
     }
 
     if send_error:
@@ -2211,6 +2234,47 @@ def request_trial_token(request):
         return Response(response_data, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     return Response(response_data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def whatsapp_message_status(request, sid):
+    sid = str(sid or '').strip()
+    if not sid:
+        return Response({"error": "sid_required", "message": "SID requerido"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        from twilio.rest import Client
+        account_sid = config('TWILIO_ACCOUNT_SID', default='')
+        auth_token = config('TWILIO_AUTH_TOKEN', default='')
+        if not account_sid or not auth_token:
+            return Response({
+                "error": "twilio_not_configured",
+                "message": "Faltan credenciales de Twilio",
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        client = Client(account_sid, auth_token)
+        msg = client.messages(sid).fetch()
+
+        return Response({
+            "sid": msg.sid,
+            "status": msg.status,
+            "to": msg.to,
+            "from": msg.from_,
+            "error_code": msg.error_code,
+            "error_message": msg.error_message,
+            "date_created": str(msg.date_created) if msg.date_created else None,
+            "date_sent": str(msg.date_sent) if msg.date_sent else None,
+            "date_updated": str(msg.date_updated) if msg.date_updated else None,
+            "direction": msg.direction,
+            "price": msg.price,
+            "price_unit": msg.price_unit,
+        })
+    except Exception as e:
+        return Response({
+            "error": "twilio_fetch_failed",
+            "message": str(e),
+        }, status=status.HTTP_502_BAD_GATEWAY)
 
 
 @api_view(['POST'])

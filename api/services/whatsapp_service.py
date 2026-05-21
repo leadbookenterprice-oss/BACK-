@@ -20,7 +20,7 @@ def send_whatsapp_message(to_phone, message):
             reason,
             to_phone,
         )
-        return False, reason
+        return False, reason, None
     try:
         from twilio.rest import Client
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -34,11 +34,11 @@ def send_whatsapp_message(to_phone, message):
             to=f'whatsapp:{to_phone}',
         )
         logger.info("[WHATSAPP] Enviado a %s — SID: %s", to_phone, msg.sid)
-        return True, None
+        return True, None, msg.sid
     except Exception as e:
         reason = str(e)
         logger.error("[WHATSAPP] Error enviando a %s: %s", to_phone, reason)
-        return False, reason
+        return False, reason, None
 
 
 def send_trial_token(phone, token):
