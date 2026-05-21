@@ -2187,14 +2187,22 @@ def request_trial_token(request):
 
     # Enviar por WhatsApp
     from .services.whatsapp_service import send_trial_token
-    sent = send_trial_token(telefono_normalizado, code)
-    logger.info("[WHATSAPP] intento_envio telefono=%s sent=%s", telefono_normalizado, sent)
+    sent, send_error = send_trial_token(telefono_normalizado, code)
+    logger.info(
+        "[WHATSAPP] intento_envio telefono=%s sent=%s error=%s",
+        telefono_normalizado,
+        sent,
+        send_error,
+    )
 
     response_data = {
         "sent": sent,
         "message": "Código enviado por WhatsApp." if sent else "Código generado. No se pudo enviar por WhatsApp.",
         "trial_days": trial_days,
     }
+
+    if send_error:
+        response_data["send_error"] = send_error
 
     if settings.DEBUG:
         response_data["code"] = code

@@ -11,12 +11,16 @@ WHATSAPP_ENABLED = config('WHATSAPP_ENABLED', default=False, cast=bool)
 
 def send_whatsapp_message(to_phone, message):
     if not WHATSAPP_ENABLED or not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-        logger.warning(
-            "[WHATSAPP] Twilio no configurado (WHATSAPP_ENABLED=%s). "
-            "Mensaje no enviado a %s: %s",
-            WHATSAPP_ENABLED, to_phone, message,
+        reason = (
+            "Twilio no configurado: revisá WHATSAPP_ENABLED, "
+            "TWILIO_ACCOUNT_SID y TWILIO_AUTH_TOKEN"
         )
-        return False
+        logger.warning(
+            "[WHATSAPP] %s | to=%s",
+            reason,
+            to_phone,
+        )
+        return False, reason
     try:
         from twilio.rest import Client
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -30,10 +34,11 @@ def send_whatsapp_message(to_phone, message):
             to=f'whatsapp:{to_phone}',
         )
         logger.info("[WHATSAPP] Enviado a %s — SID: %s", to_phone, msg.sid)
-        return True
+        return True, None
     except Exception as e:
-        logger.error("[WHATSAPP] Error enviando a %s: %s", to_phone, e)
-        return False
+        reason = str(e)
+        logger.error("[WHATSAPP] Error enviando a %s: %s", to_phone, reason)
+        return False, reason
 
 
 def send_trial_token(phone, token):
