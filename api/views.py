@@ -2151,6 +2151,7 @@ def request_trial_token(request):
     from django.conf import settings
     telefono = str(request.data.get('telefono') or '').strip()
     digits_only = re.sub(r'\D', '', telefono)
+    logger.info("[WHATSAPP] request_trial_token solicitado telefono_raw=%s", telefono)
 
     if len(digits_only) < 10:
         return Response({
@@ -2187,6 +2188,7 @@ def request_trial_token(request):
     # Enviar por WhatsApp
     from .services.whatsapp_service import send_trial_token
     sent = send_trial_token(telefono_normalizado, code)
+    logger.info("[WHATSAPP] intento_envio telefono=%s sent=%s", telefono_normalizado, sent)
 
     response_data = {
         "sent": sent,
@@ -2196,6 +2198,9 @@ def request_trial_token(request):
 
     if settings.DEBUG:
         response_data["code"] = code
+
+    if not sent:
+        return Response(response_data, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     return Response(response_data)
 
