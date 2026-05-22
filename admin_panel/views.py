@@ -20,6 +20,36 @@ from django.utils.crypto import constant_time_compare
 ADMIN_KEY = config('ADMIN_KEY', default='')
 
 
+def _service_defaults(nombre):
+    descripcion = {
+        'gemini': 'Google Gemini',
+        'elevenlabs': 'ElevenLabs',
+        'uploadpost': 'UploadPost',
+        'groq': 'Groq',
+        'nvidia': 'NVIDIA',
+    }.get(nombre, nombre.title())
+    return {
+        'descripcion': descripcion,
+        'activo': True,
+        'default_daily_limit': 1500,
+        'extra_increment': 10 if nombre == 'uploadpost' else 1500,
+    }
+
+
+def _get_or_create_service(nombre):
+    normalized = str(nombre or '').strip().lower()
+    if not normalized:
+        return None
+    servicio = Servicio.objects.filter(nombre__iexact=normalized).first()
+    if servicio:
+        return servicio
+    servicio, _ = Servicio.objects.get_or_create(
+        nombre=normalized,
+        defaults=_service_defaults(normalized),
+    )
+    return servicio
+
+
 def _check_admin(request):
     supplied_key = request.headers.get('X-Admin-Key', '')
     if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
@@ -135,13 +165,13 @@ def admin_api_keys_list(request):
 def admin_api_keys_create(request):
     if not _check_admin(request):
         return Response({'error': 'Forbidden'}, status=403)
-    servicio_nombre = (request.data.get('service') or request.data.get('servicio') or '').lower()
-    api_key_str = request.data.get('api_key', '')
+    servicio_nombre = (request.data.get('service') or request.data.get('servicio') or '').strip().lower()
+    api_key_str = str(request.data.get('api_key') or '').strip()
     limit = request.data.get('daily_limit', 1500)
     label_str = request.data.get('label', '')
     if not servicio_nombre or not api_key_str:
         return Response({'error': 'service y api_key son requeridos'}, status=400)
-    servicio = Servicio.objects.filter(nombre=servicio_nombre).first()
+    servicio = _get_or_create_service(servicio_nombre)
     if not servicio:
         disponibles = list(Servicio.objects.values_list('nombre', flat=True))
         return Response({'error': f'Servicio "{servicio_nombre}" no existe. Disponibles: {disponibles}'}, status=400)
@@ -188,7 +218,7 @@ def admin_api_keys_bulk_create(request):
 
         servicio = service_cache.get(servicio_nombre)
         if servicio is None:
-            servicio = Servicio.objects.filter(nombre__iexact=servicio_nombre).first()
+            servicio = _get_or_create_service(servicio_nombre)
             service_cache[servicio_nombre] = servicio
 
         if not servicio:
