@@ -4632,6 +4632,21 @@ def generar_video(request, pk):
             from api.tasks import generar_video_task
             generar_video_task.delay(pk)
 
+            # Fallback opcional: si no hay worker vivo, usar thread para no dejar el video clavado en queued.
+            # Mantener desactivado por defecto en prod para evitar OOM del contenedor web.
+            fallback_thread = config('VIDEO_FALLBACK_TO_THREAD_IF_NO_WORKER', default=False, cast=bool)
+            if fallback_thread:
+                try:
+                    from subzero_core.celery import app as celery_app
+                    inspect = celery_app.control.inspect(timeout=1)
+                    pings = inspect.ping() or {}
+                    if not pings:
+                        logger.warning("[VIDEO] No Celery workers responded to ping; using thread fallback listado_id=%s", pk)
+                        threading.Thread(target=generar_video_task, args=(pk,), daemon=True).start()
+                except Exception as ping_err:
+                    logger.warning("[VIDEO] Worker ping failed (%s); using thread fallback listado_id=%s", ping_err, pk)
+                    threading.Thread(target=generar_video_task, args=(pk,), daemon=True).start()
+
         return Response({
             "status": "queued",
             "mensaje": "El video se está generando en segundo plano",
