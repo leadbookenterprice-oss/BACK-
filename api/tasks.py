@@ -3,6 +3,7 @@ from django.utils import timezone
 from django.db.models import F, Q
 from django.core.cache import cache
 from datetime import timedelta
+import time
 from .models import APIKey, Agent, Notificacion, UserAPIAssignment, UserAPIQuota
 from .services.pool_service import APIPoolService
 import requests
@@ -95,6 +96,7 @@ def process_video_queue(max_jobs=None):
     attempted = 0
     processed = 0
     failed = 0
+    run_started = time.time()
     max_jobs = max_jobs if max_jobs is not None else config('VIDEO_QUEUE_JOBS_PER_RUN', default=1, cast=int)
     max_jobs = max(1, int(max_jobs or 1))
     try:
@@ -105,6 +107,7 @@ def process_video_queue(max_jobs=None):
             listado, metadata = claimed
             attempted += 1
             provider = metadata.get('provider') or _default_video_provider()
+            job_started = time.time()
             logger.info(
                 "[VIDEO_QUEUE] Procesando listado_id=%s provider=%s priority=%s plan=%s",
                 listado.id,
@@ -116,12 +119,33 @@ def process_video_queue(max_jobs=None):
             if success:
                 _finalize_successful_video(listado.id)
                 processed += 1
+                logger.info(
+                    "[VIDEO_QUEUE] OK listado_id=%s provider=%s elapsed=%.2fs",
+                    listado.id,
+                    resolved_provider,
+                    (time.time() - job_started),
+                )
             else:
                 failed += 1
                 Listado.objects.filter(id=listado.id).update(video_status='error')
+                logger.warning(
+                    "[VIDEO_QUEUE] FAIL listado_id=%s provider=%s elapsed=%.2fs",
+                    listado.id,
+                    resolved_provider,
+                    (time.time() - job_started),
+                )
 
         remaining = Listado.objects.filter(video_status='queued').count()
-        return {'status': 'ok', 'processed': processed, 'failed': failed, 'remaining': remaining}
+        total_elapsed = round(time.time() - run_started, 2)
+        logger.info(
+            "[VIDEO_QUEUE] Run fin processed=%s failed=%s remaining=%s attempted=%s elapsed=%.2fs",
+            processed,
+            failed,
+            remaining,
+            attempted,
+            total_elapsed,
+        )
+        return {'status': 'ok', 'processed': processed, 'failed': failed, 'remaining': remaining, 'elapsed_seconds': total_elapsed}
     finally:
         if cache.get(_queue_lock_key()) == token:
             cache.delete(_queue_lock_key())
@@ -287,8 +311,8 @@ def send_otp_email_async(email, code):
         ok, detalle = _send_via_resend(email, subject, text_body, html_body)
         if ok:
             return detalle
-        # si Resend falla, dejamos caer el código en logs y no seguimos a Gmail
-        print(f"[EMAIL-FALLBACK] OTP para {email}: {code} (solo visible en logs)", flush=True)
+        if getattr(settings, 'DEBUG', False):
+            print(f"[EMAIL-FALLBACK] OTP para {email}: {code} (solo visible en logs locales)", flush=True)
         return detalle
 
     # --- Path Gmail SMTP (default) ---
@@ -297,7 +321,8 @@ def send_otp_email_async(email, code):
     if not host_user or not host_pass:
         print("=" * 60, flush=True)
         print(f"[EMAIL] ERROR al enviar: faltan GMAIL_USER o GMAIL_APP_PASSWORD en env vars", flush=True)
-        print(f"[EMAIL-FALLBACK] OTP para {email}: {code} (solo visible en logs)", flush=True)
+        if getattr(settings, 'DEBUG', False):
+            print(f"[EMAIL-FALLBACK] OTP para {email}: {code} (solo visible en logs locales)", flush=True)
         print("=" * 60, flush=True)
         sys.stdout.flush()
         return f"console:{email}"
@@ -329,8 +354,8 @@ def send_otp_email_async(email, code):
     except Exception as e:
         print(f"[EMAIL] ERROR al enviar: {type(e).__name__}: {str(e)}", flush=True)
         traceback.print_exc()
-        # Mostrar el código para no bloquear diagnóstico
-        print(f"[EMAIL-FALLBACK] OTP para {email}: {code}", flush=True)
+        if getattr(settings, 'DEBUG', False):
+            print(f"[EMAIL-FALLBACK] OTP para {email}: {code}", flush=True)
         sys.stdout.flush()
         return f"error:{type(e).__name__}:{str(e)[:120]}"
 

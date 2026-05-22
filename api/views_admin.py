@@ -24,6 +24,68 @@ def _is_staff_check(request):
     return request.user and request.user.is_authenticated and request.user.is_staff
 
 
+def _normalize_api_key_value(value):
+    return str(value or '').strip()
+
+
+def _normalize_service_name(value):
+    return str(value or '').strip().lower()
+
+
+def _api_key_has_history(key):
+    if UserAPIAssignment.objects.filter(apikey=key).exists():
+        return True
+    if key.logs.exists():
+        return True
+    counters = [key.requests_today, key.requests_this_month, key.total_requests, key.error_count]
+    return bool(key.last_used_at or any(int(value or 0) > 0 for value in counters))
+
+
+def _cleanup_duplicate_api_keys(service_names=None):
+    services = [_normalize_service_name(name) for name in (service_names or []) if _normalize_service_name(name)]
+    keys = APIKey.objects.select_related('servicio').order_by('servicio_id', 'api_key', 'id')
+    if services:
+        keys = keys.filter(servicio__nombre__in=services)
+
+    grouped = {}
+    for key in keys:
+        normalized_key = _normalize_api_key_value(key.api_key)
+        if not normalized_key:
+            continue
+        grouped.setdefault((key.servicio_id, normalized_key), []).append(key)
+
+    deleted = 0
+    protected = 0
+    groups_found = 0
+    for duplicates in grouped.values():
+        if len(duplicates) <= 1:
+            continue
+
+        groups_found += 1
+        keep = sorted(
+            duplicates,
+            key=lambda item: (0 if _api_key_has_history(item) else 1, item.id),
+        )[0]
+
+        for duplicate in duplicates:
+            if duplicate.id == keep.id:
+                continue
+            if _api_key_has_history(duplicate):
+                protected += 1
+                continue
+            try:
+                duplicate.delete()
+                deleted += 1
+            except Exception:
+                protected += 1
+
+    return {
+        'duplicates_deleted': deleted,
+        'duplicates_protected': protected,
+        'duplicate_groups': groups_found,
+    }
+
+
 def _forbidden():
     return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
 
@@ -342,11 +404,31 @@ def admin_apikeys_pool(request):
 @api_view(['POST'])
 def admin_apikeys_pool_crear(request):
     if not _is_staff_check(request): return Response({'error': 'Forbidden'}, status=403)
-    svc_name = request.data.get('servicio')
-    key_val = request.data.get('api_key')
+    svc_name = _normalize_service_name(request.data.get('servicio') or request.data.get('service'))
+    key_val = _normalize_api_key_value(request.data.get('api_key') or request.data.get('key'))
+    if not svc_name or not key_val:
+        return Response({'error': 'Faltan servicio/api_key'}, status=400)
+
     svc, _ = Servicio.objects.get_or_create(nombre=svc_name)
-    k = APIKey.objects.create(servicio=svc, api_key=key_val, label=request.data.get('label'))
-    return Response({'id': k.id})
+    with transaction.atomic():
+        cleanup = _cleanup_duplicate_api_keys([svc.nombre])
+        existing = APIKey.objects.filter(servicio=svc, api_key=key_val).order_by('id').first()
+        if existing:
+            return Response({
+                'id': existing.id,
+                'status': 'exists',
+                'duplicates_existing': 1,
+                **cleanup,
+            }, status=200)
+
+        k = APIKey.objects.create(
+            servicio=svc,
+            api_key=key_val,
+            label=request.data.get('label'),
+            google_daily_limit=request.data.get('daily_limit', 1500),
+            status='available',
+        )
+    return Response({'id': k.id, 'status': 'created', **cleanup}, status=201)
 
 @api_view(['POST'])
 def admin_apikeys_pool_bulk(request):

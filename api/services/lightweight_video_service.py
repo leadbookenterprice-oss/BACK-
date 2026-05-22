@@ -1,14 +1,20 @@
 import io
+import ipaddress
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
+import glob
+import random
+from urllib.parse import urlparse
 
 import requests
 from decouple import config
+from django.conf import settings
 from django.utils import timezone
 from PIL import Image, ImageOps
 
@@ -82,6 +88,101 @@ def _probe_duration(path):
     except Exception:
         pass
     return 0.0
+
+
+def _clamp(value, minimum, maximum):
+    return max(minimum, min(maximum, value))
+
+
+def _safe_float(value, fallback):
+    try:
+        return float(value)
+    except Exception:
+        return float(fallback)
+
+
+def _get_load_snapshot():
+    try:
+        from api.models import Listado
+        return {
+            'processing': int(Listado.objects.filter(video_status='processing').count()),
+            'queued': int(Listado.objects.filter(video_status='queued').count()),
+        }
+    except Exception:
+        return {'processing': 0, 'queued': 0}
+
+
+def _resolve_render_profile(tipo_video):
+    profile_name = (config('LIGHT_VIDEO_PROFILE', default='IG_PRO_MAX').strip() or 'IG_PRO_MAX').upper()
+    is_reel = tipo_video == 'reel'
+
+    if profile_name == 'IG_PRO_MAX':
+        defaults = {
+            'width': 1080,
+            'height': 1920,
+            'fps': 60,
+            'crf': 20,
+            'preset': 'fast',
+            'max_photos': 6,
+            'max_seconds': 32 if is_reel else 42,
+            'min_seconds': 18 if is_reel else 26,
+        }
+    else:
+        defaults = {
+            'width': 720,
+            'height': 1280,
+            'fps': 24,
+            'crf': 26,
+            'preset': 'veryfast',
+            'max_photos': 8,
+            'max_seconds': 28 if is_reel else 38,
+            'min_seconds': 16 if is_reel else 24,
+        }
+
+    width = int(_clamp(config('LIGHT_VIDEO_WIDTH', default=defaults['width'], cast=int), 540, 2160))
+    height = int(_clamp(config('LIGHT_VIDEO_HEIGHT', default=defaults['height'], cast=int), 960, 3840))
+    fps = int(_clamp(config('LIGHT_VIDEO_FPS', default=defaults['fps'], cast=int), 24, 60))
+    crf = int(_clamp(config('LIGHT_VIDEO_CRF', default=defaults['crf'], cast=int), 16, 30))
+    preset = config('LIGHT_VIDEO_PRESET', default=defaults['preset']).strip() or defaults['preset']
+    max_photos = int(_clamp(config('LIGHT_VIDEO_MAX_PHOTOS', default=defaults['max_photos'], cast=int), 1, 12))
+    max_seconds = int(_clamp(config('LIGHT_VIDEO_MAX_SECONDS', default=defaults['max_seconds'], cast=int), 12, 70))
+    min_seconds = int(_clamp(config('LIGHT_VIDEO_MIN_SECONDS', default=defaults['min_seconds'], cast=int), 8, max_seconds))
+
+    load = _get_load_snapshot()
+    fallback_applied = False
+    fallback_reason = ''
+    fallback_enabled = config('LIGHT_VIDEO_LOAD_FALLBACK_ENABLED', default=True, cast=bool)
+    fallback_fps = int(_clamp(config('LIGHT_VIDEO_LOAD_FALLBACK_FPS', default=30, cast=int), 24, 30))
+    fallback_crf = int(_clamp(config('LIGHT_VIDEO_LOAD_FALLBACK_CRF', default=max(crf, 21), cast=int), crf, 30))
+    fallback_preset = config('LIGHT_VIDEO_LOAD_FALLBACK_PRESET', default='veryfast').strip() or 'veryfast'
+    fallback_queue = max(1, config('LIGHT_VIDEO_LOAD_FALLBACK_QUEUE', default=3, cast=int))
+    fallback_processing = max(1, config('LIGHT_VIDEO_LOAD_FALLBACK_ACTIVE', default=2, cast=int))
+
+    if fallback_enabled and fps > fallback_fps:
+        if load['queued'] >= fallback_queue or load['processing'] >= fallback_processing:
+            fallback_applied = True
+            fallback_reason = (
+                f"load queued={load['queued']} processing={load['processing']} "
+                f"(thresholds queued>={fallback_queue} active>={fallback_processing})"
+            )
+            fps = fallback_fps
+            crf = fallback_crf
+            preset = fallback_preset
+
+    return {
+        'profile': profile_name,
+        'width': width,
+        'height': height,
+        'fps': fps,
+        'crf': crf,
+        'preset': preset,
+        'max_photos': max_photos,
+        'max_seconds': max_seconds,
+        'min_seconds': min_seconds,
+        'fallback_applied': fallback_applied,
+        'fallback_reason': fallback_reason,
+        'load': load,
+    }
 
 
 def _ordered_scene_texts(datos):
@@ -178,9 +279,34 @@ def _generate_voice_file(listado, temp_dir, script):
 def _download_image(url, timeout=(10, 40)):
     if str(url or '').startswith('data:'):
         raise LightweightVideoError('No se aceptan imagenes base64 para video')
-    response = requests.get(url, timeout=timeout)
+    parsed = urlparse(str(url or '').strip())
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise LightweightVideoError('URL de imagen no permitida para video')
+    hostname = parsed.hostname.lower().rstrip('.')
+    allowed = {
+        str(host).lower().rstrip('.')
+        for host in getattr(settings, 'REMOTE_ASSET_ALLOWED_HOSTS', ['res.cloudinary.com'])
+        if str(host).strip()
+    }
+    if allowed and not any(hostname == host or hostname.endswith(f'.{host}') for host in allowed):
+        raise LightweightVideoError('Host de imagen no permitido para video')
+    for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+        ip = ipaddress.ip_address(sockaddr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise LightweightVideoError('IP de imagen no permitida para video')
+
+    response = requests.get(url, timeout=timeout, stream=True, allow_redirects=False)
     response.raise_for_status()
-    return response.content
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=8192):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > 10 * 1024 * 1024:
+            raise LightweightVideoError('Imagen remota demasiado grande')
+        chunks.append(chunk)
+    return b''.join(chunks)
 
 
 def _prepare_image(url, output_path, width, height):
@@ -193,8 +319,8 @@ def _prepare_image(url, output_path, width, height):
     return output_path
 
 
-def _prepare_images(listado, temp_dir, width, height):
-    max_photos = max(1, min(8, config('LIGHT_VIDEO_MAX_PHOTOS', default=8, cast=int)))
+def _prepare_images(listado, temp_dir, width, height, max_photos):
+    max_photos = max(1, min(12, int(max_photos or 1)))
     urls = _collect_photo_urls(listado)[:max_photos]
     if not urls:
         raise LightweightVideoError('El listado no tiene fotos publicas para generar video')
@@ -215,15 +341,47 @@ def _prepare_images(listado, temp_dir, width, height):
     return paths, used_urls
 
 
-def _render_image_segment(image_path, output_path, duration, width, height, fps, crf):
-    frames = max(1, int(duration * fps))
-    zoom_delta = config('LIGHT_VIDEO_ZOOM_DELTA', default=0.055, cast=float)
-    zoom_step = zoom_delta / max(1, frames)
-    vf = (
-        f"zoompan=z='min(1+on*{zoom_step:.8f},{1 + zoom_delta:.4f})':"
-        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps},"
+def _resolve_motion_patterns():
+    raw = config('LIGHT_VIDEO_MOTION_PATTERNS', default='in,out,drift')
+    allowed = {'in', 'out', 'drift'}
+    patterns = [piece.strip().lower() for piece in str(raw or '').split(',') if piece.strip()]
+    patterns = [pattern for pattern in patterns if pattern in allowed]
+    return patterns or ['in', 'out', 'drift']
+
+
+def _build_zoompan_filter(pattern, frames, width, height, fps):
+    base_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA', default=0.080, cast=float), 0.010, 0.220)
+    in_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA_IN', default=base_delta, cast=float), 0.010, 0.250)
+    out_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA_OUT', default=max(0.010, base_delta * 0.90), cast=float), 0.010, 0.250)
+    drift_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA_DRIFT', default=max(0.010, base_delta * 0.65), cast=float), 0.010, 0.160)
+    drift_strength = _clamp(config('LIGHT_VIDEO_DRIFT_STRENGTH', default=20, cast=int), 6, 50)
+    total = max(1, frames - 1)
+
+    if pattern == 'out':
+        z_expr = f"max({1.0 + out_delta:.5f}-({out_delta:.5f}*on/{total}),1.0)"
+        x_expr = 'iw/2-(iw/zoom/2)'
+        y_expr = 'ih/2-(ih/zoom/2)'
+    elif pattern == 'drift':
+        z_expr = f"min(1.0+({drift_delta:.5f}*on/{total}),{1.0 + drift_delta:.5f})"
+        x_expr = f"iw/2-(iw/zoom/2)+sin(on*2*PI/{max(2, total)})*{drift_strength}"
+        y_expr = f"ih/2-(ih/zoom/2)+cos(on*2*PI/{max(2, total)})*{max(4, int(drift_strength * 0.6))}"
+    else:
+        z_expr = f"min(1.0+({in_delta:.5f}*on/{total}),{1.0 + in_delta:.5f})"
+        x_expr = 'iw/2-(iw/zoom/2)'
+        y_expr = 'ih/2-(ih/zoom/2)'
+
+    return (
+        f"scale=iw*1.10:ih*1.10:flags=lanczos,"
+        f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':d=1:s={width}x{height}:fps={fps},"
         'format=yuv420p'
     )
+
+
+def _render_image_segment(image_path, output_path, duration, width, height, fps, crf, preset, scene_index):
+    frames = max(1, int(duration * fps))
+    patterns = _resolve_motion_patterns()
+    pattern = patterns[scene_index % len(patterns)]
+    vf = _build_zoompan_filter(pattern, frames=frames, width=width, height=height, fps=fps)
     _run(
         [
             _ffmpeg_bin(),
@@ -247,7 +405,7 @@ def _render_image_segment(image_path, output_path, duration, width, height, fps,
             '-c:v',
             'libx264',
             '-preset',
-            config('LIGHT_VIDEO_PRESET', default='veryfast'),
+            preset,
             '-crf',
             str(crf),
             '-pix_fmt',
@@ -285,8 +443,199 @@ def _concat_segments(segment_paths, output_path):
     )
 
 
-def _mux_audio(video_path, audio_path, output_path):
-    if not audio_path:
+def _normalize_path(value):
+    if not value:
+        return ''
+    path = str(value).strip().strip('"').strip("'")
+    if not path:
+        return ''
+    return os.path.abspath(path) if os.path.exists(path) else ''
+
+
+def _pick_music_track(datos):
+    if not config('LIGHT_VIDEO_MUSIC_ENABLED', default=True, cast=bool):
+        return ''
+    custom = _normalize_path(config('LIGHT_VIDEO_MUSIC_FILE', default=''))
+    if custom:
+        return custom
+
+    music_dir = os.path.join(os.path.dirname(__file__), 'musica_videos')
+    tracks = sorted(glob.glob(os.path.join(music_dir, '*.mp3')))
+    if not tracks:
+        return ''
+
+    tone = str(_value(datos, 'tono', default='profesional') or 'profesional').strip().lower()
+    if tone == 'energetico':
+        preferred = [
+            track for track in tracks
+            if any(key in os.path.basename(track).lower() for key in ('snapshots', 'city', 'bonita', 'indigo'))
+        ]
+    elif tone == 'lujo':
+        preferred = [
+            track for track in tracks
+            if any(key in os.path.basename(track).lower() for key in ('elevated', 'selfless', 'phases'))
+        ]
+    else:
+        preferred = [
+            track for track in tracks
+            if any(key in os.path.basename(track).lower() for key in ('butterflies', 'galanthus', 'phases'))
+        ]
+    pool = preferred or tracks
+    return random.choice(pool)
+
+
+def _resolve_sfx_inputs(cut_times):
+    if not cut_times or not config('LIGHT_VIDEO_SFX_ENABLED', default=True, cast=bool):
+        return []
+    limit = max(0, min(12, config('LIGHT_VIDEO_SFX_MAX_EVENTS', default=8, cast=int)))
+    if not limit:
+        return []
+    whoosh_custom = _normalize_path(config('LIGHT_VIDEO_SFX_WHOOSH_FILE', default=''))
+    impact_custom = _normalize_path(config('LIGHT_VIDEO_SFX_IMPACT_FILE', default=''))
+    whoosh_duration = _clamp(config('LIGHT_VIDEO_SFX_WHOOSH_SECONDS', default=0.34, cast=float), 0.18, 1.50)
+    impact_duration = _clamp(config('LIGHT_VIDEO_SFX_IMPACT_SECONDS', default=0.20, cast=float), 0.10, 1.00)
+    sfx_inputs = []
+
+    for idx, cut_time in enumerate(cut_times[:limit]):
+        if idx % 2 == 0:
+            if whoosh_custom:
+                sfx_inputs.append({'mode': 'file', 'path': whoosh_custom, 'delay': float(cut_time), 'type': 'whoosh'})
+            else:
+                sfx_inputs.append({
+                    'mode': 'lavfi',
+                    'src': f"anoisesrc=color=white:r=48000:d={whoosh_duration:.3f},highpass=f=300,lowpass=f=5400,afade=t=out:st={max(0.05, whoosh_duration - 0.10):.3f}:d=0.10",
+                    'delay': float(cut_time),
+                    'type': 'whoosh',
+                })
+        else:
+            if impact_custom:
+                sfx_inputs.append({'mode': 'file', 'path': impact_custom, 'delay': float(cut_time), 'type': 'impact'})
+            else:
+                sfx_inputs.append({
+                    'mode': 'lavfi',
+                    'src': f"sine=frequency=120:sample_rate=48000:duration={impact_duration:.3f},afade=t=out:st={max(0.05, impact_duration - 0.08):.3f}:d=0.08",
+                    'delay': float(cut_time),
+                    'type': 'impact',
+                })
+    return sfx_inputs
+
+
+def _build_audio_mix(voice_path, music_path, cut_times, duration, output_path):
+    target_duration = max(2.0, float(duration or 0))
+    music_volume = _clamp(config('LIGHT_VIDEO_MUSIC_VOLUME', default=0.30, cast=float), 0.0, 1.2)
+    voice_volume = _clamp(config('LIGHT_VIDEO_VOICE_VOLUME', default=1.00, cast=float), 0.1, 2.0)
+    sfx_volume = _clamp(config('LIGHT_VIDEO_SFX_VOLUME', default=0.11, cast=float), 0.0, 1.5)
+    threshold = _safe_float(config('LIGHT_VIDEO_DUCKING_THRESHOLD', default='0.040'), 0.040)
+    ratio = _safe_float(config('LIGHT_VIDEO_DUCKING_RATIO', default='10'), 10)
+    attack = _safe_float(config('LIGHT_VIDEO_DUCKING_ATTACK', default='25'), 25)
+    release = _safe_float(config('LIGHT_VIDEO_DUCKING_RELEASE', default='320'), 320)
+
+    cmd = [
+        _ffmpeg_bin(),
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'lavfi',
+        '-t',
+        f'{target_duration:.3f}',
+        '-i',
+        'anullsrc=channel_layout=stereo:sample_rate=48000',
+    ]
+    input_labels = {'silence': 0}
+    next_input = 1
+
+    if voice_path:
+        cmd.extend(['-i', voice_path])
+        input_labels['voice'] = next_input
+        next_input += 1
+
+    if music_path:
+        cmd.extend(['-stream_loop', '-1', '-t', f'{target_duration:.3f}', '-i', music_path])
+        input_labels['music'] = next_input
+        next_input += 1
+
+    sfx_inputs = _resolve_sfx_inputs(cut_times)
+    sfx_indexes = []
+    for sfx in sfx_inputs:
+        if sfx['mode'] == 'file':
+            cmd.extend(['-i', sfx['path']])
+        else:
+            cmd.extend(['-f', 'lavfi', '-i', sfx['src']])
+        sfx_indexes.append((next_input, sfx))
+        next_input += 1
+
+    filters = ['[0:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=0.0[silence]']
+
+    has_voice = 'voice' in input_labels
+    has_music = 'music' in input_labels
+    if has_voice:
+        filters.append(
+            f"[{input_labels['voice']}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"acompressor=threshold=0.12:ratio=2.2:attack=6:release=120,volume={voice_volume:.3f}[voice]"
+        )
+    if has_music:
+        filters.append(
+            f"[{input_labels['music']}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"volume={music_volume:.3f}[music]"
+        )
+
+    if has_voice and has_music:
+        filters.append(
+            f"[music][voice]sidechaincompress=threshold={threshold:.5f}:ratio={ratio:.3f}:attack={attack:.1f}:release={release:.1f}[ducked]"
+        )
+        filters.append('[ducked][voice]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[bed]')
+    elif has_voice:
+        filters.append('[voice]anull[bed]')
+    elif has_music:
+        filters.append('[music]anull[bed]')
+    else:
+        filters.append('[silence]anull[bed]')
+
+    sfx_labels = []
+    for idx, (stream_index, sfx) in enumerate(sfx_indexes):
+        delay_ms = max(0, int(float(sfx.get('delay') or 0) * 1000))
+        label = f'sfx{idx}'
+        filters.append(
+            f"[{stream_index}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"volume={sfx_volume:.3f},adelay={delay_ms}|{delay_ms}[{label}]"
+        )
+        sfx_labels.append(label)
+
+    if sfx_labels:
+        mix_inputs = '[silence][bed]' + ''.join(f'[{label}]' for label in sfx_labels)
+        filters.append(
+            f"{mix_inputs}amix=inputs={2 + len(sfx_labels)}:duration=longest:dropout_transition=0:normalize=0,"
+            'alimiter=limit=0.94[mix]'
+        )
+    else:
+        filters.append('[silence][bed]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.94[mix]')
+
+    filters.append('[mix]atrim=duration={:.3f},asetpts=PTS-STARTPTS[aout]'.format(target_duration))
+
+    cmd.extend(
+        [
+            '-filter_complex',
+            ';'.join(filters),
+            '-map',
+            '[aout]',
+            '-c:a',
+            'aac',
+            '-b:a',
+            config('LIGHT_VIDEO_AUDIO_BITRATE', default='192k'),
+            '-ac',
+            '2',
+            '-ar',
+            '48000',
+            output_path,
+        ]
+    )
+    _run(cmd, timeout=180)
+
+
+def _mux_audio(video_path, mixed_audio_path, output_path):
+    if not mixed_audio_path or not os.path.exists(mixed_audio_path):
         shutil.copy2(video_path, output_path)
         return
     _run(
@@ -299,13 +648,17 @@ def _mux_audio(video_path, audio_path, output_path):
             '-i',
             video_path,
             '-i',
-            audio_path,
+            mixed_audio_path,
             '-c:v',
             'copy',
             '-c:a',
             'aac',
             '-b:a',
-            config('LIGHT_VIDEO_AUDIO_BITRATE', default='128k'),
+            config('LIGHT_VIDEO_AUDIO_BITRATE', default='192k'),
+            '-ac',
+            '2',
+            '-ar',
+            '48000',
             '-shortest',
             output_path,
         ],
@@ -327,7 +680,7 @@ def _write_srt(script, duration, output_path):
     if not words or duration <= 1:
         return False
 
-    chunk_size = config('LIGHT_VIDEO_CAPTION_WORDS', default=5, cast=int)
+    chunk_size = int(_clamp(config('LIGHT_VIDEO_CAPTION_WORDS', default=4, cast=int), 2, 14))
     chunks = [' '.join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
     usable = max(1.0, duration - 0.8)
     per_chunk = usable / max(1, len(chunks))
@@ -350,12 +703,69 @@ def _subtitle_filter_path(path):
     return normalized.replace(':', '\\:').replace("'", "\\'")
 
 
-def _burn_subtitles(video_path, srt_path, output_path, crf):
+def _ass_color_from_hex(value, default='#FFFFFF', opacity=1.0):
+    raw = str(value or default).strip()
+    if raw.startswith('0x'):
+        raw = raw[2:]
+    if raw.startswith('#'):
+        raw = raw[1:]
+    if len(raw) == 3:
+        raw = ''.join(ch * 2 for ch in raw)
+    if len(raw) != 6 or not all(ch in '0123456789abcdefABCDEF' for ch in raw):
+        raw = default.replace('#', '')
+    r = int(raw[0:2], 16)
+    g = int(raw[2:4], 16)
+    b = int(raw[4:6], 16)
+    opacity = _clamp(float(opacity), 0.0, 1.0)
+    alpha = int(round((1.0 - opacity) * 255.0))
+    return f'&H{alpha:02X}{b:02X}{g:02X}{r:02X}'
+
+
+def _resolve_caption_alignment():
+    raw = str(config('LIGHT_VIDEO_CAPTION_ALIGN', default='2') or '2').strip().lower()
+    aliases = {
+        'bottom_center': 2,
+        'bottom': 2,
+        'center_bottom': 2,
+        'top_center': 8,
+        'top': 8,
+        'middle_center': 5,
+        'middle': 5,
+        'left_bottom': 1,
+        'right_bottom': 3,
+    }
+    if raw.isdigit():
+        value = int(raw)
+        return value if 1 <= value <= 9 else 2
+    return aliases.get(raw, 2)
+
+
+def _subtitle_style_for_dimensions(height):
+    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='Montserrat').strip() or 'Montserrat'
+    base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=54, cast=int)
+    size = int(_clamp(base_size * (height / 1920.0), 28, 92))
+    margin_v = config('LIGHT_VIDEO_CAPTION_MARGIN_V', default=320, cast=int)
+    margin_v = int(_clamp(margin_v * (height / 1920.0), 110, int(height * 0.40)))
+    text_color = _ass_color_from_hex(config('LIGHT_VIDEO_CAPTION_TEXT_COLOR', default='#FFFFFF'), default='#FFFFFF', opacity=1.0)
+    outline_color = _ass_color_from_hex(config('LIGHT_VIDEO_CAPTION_OUTLINE_COLOR', default='#000000'), default='#000000', opacity=0.74)
+    bg_color = str(config('LIGHT_VIDEO_CAPTION_BG_COLOR', default='#000000') or '#000000')
+    bg_opacity = _clamp(config('LIGHT_VIDEO_CAPTION_BG_ALPHA', default=0.58, cast=float), 0.0, 1.0)
+    back_color = _ass_color_from_hex(bg_color, default='#000000', opacity=bg_opacity)
+    alignment = _resolve_caption_alignment()
+    bold = 1 if config('LIGHT_VIDEO_CAPTION_BOLD', default=True, cast=bool) else 0
+    outline = _clamp(config('LIGHT_VIDEO_CAPTION_OUTLINE', default=2.0, cast=float), 0.5, 4.0)
+
     style = (
-        'FontName=Arial,FontSize=14,PrimaryColour=&H00FFFFFF,'
-        'OutlineColour=&HAA000000,BackColour=&H66000000,'
-        'BorderStyle=4,Outline=1,Shadow=0,MarginV=120,Alignment=2,Bold=1'
+        f'FontName={font_name},FontSize={size},PrimaryColour={text_color},'
+        f'OutlineColour={outline_color},BackColour={back_color},'
+        f'BorderStyle=4,Outline={outline:.1f},Shadow=0,'
+        f'MarginV={margin_v},Alignment={alignment},Bold={bold}'
     )
+    return style
+
+
+def _burn_subtitles(video_path, srt_path, output_path, crf, preset, height):
+    style = _subtitle_style_for_dimensions(height=height)
     vf = f"subtitles='{_subtitle_filter_path(srt_path)}':force_style='{style}'"
     _run(
         [
@@ -371,7 +781,7 @@ def _burn_subtitles(video_path, srt_path, output_path, crf):
             '-c:v',
             'libx264',
             '-preset',
-            config('LIGHT_VIDEO_PRESET', default='veryfast'),
+            preset,
             '-crf',
             str(crf),
             '-c:a',
@@ -385,6 +795,7 @@ def _burn_subtitles(video_path, srt_path, output_path, crf):
 def generar_video_listado_liviano(listado_id):
     listado = None
     temp_dir = ''
+    started_at = time.time()
     try:
         from api.models import Listado
 
@@ -395,15 +806,34 @@ def generar_video_listado_liviano(listado_id):
 
         datos = listado.datos or {}
         tipo_video = _normalize_video_type(_value(datos, 'tipoVideo', 'tipo_video', default='reel'))
-        width = config('LIGHT_VIDEO_WIDTH', default=720, cast=int)
-        height = config('LIGHT_VIDEO_HEIGHT', default=1280, cast=int)
-        fps = config('LIGHT_VIDEO_FPS', default=24, cast=int)
-        crf = config('LIGHT_VIDEO_CRF', default=26, cast=int)
-        max_seconds = config('LIGHT_VIDEO_MAX_SECONDS', default=28 if tipo_video == 'reel' else 38, cast=int)
-        min_seconds = config('LIGHT_VIDEO_MIN_SECONDS', default=16 if tipo_video == 'reel' else 24, cast=int)
+        render_profile = _resolve_render_profile(tipo_video=tipo_video)
+        width = render_profile['width']
+        height = render_profile['height']
+        fps = render_profile['fps']
+        crf = render_profile['crf']
+        preset = render_profile['preset']
+        max_seconds = render_profile['max_seconds']
+        min_seconds = render_profile['min_seconds']
+        max_photos = render_profile['max_photos']
+
+        logger.info(
+            '[LIGHT_VIDEO] Inicio listado_id=%s profile=%s %sx%s@%sfps crf=%s preset=%s queued=%s processing=%s fallback=%s',
+            listado.id,
+            render_profile['profile'],
+            width,
+            height,
+            fps,
+            crf,
+            preset,
+            render_profile['load']['queued'],
+            render_profile['load']['processing'],
+            render_profile['fallback_applied'],
+        )
+        if render_profile['fallback_applied']:
+            logger.warning('[LIGHT_VIDEO] Fallback por carga listado_id=%s: %s', listado.id, render_profile['fallback_reason'])
 
         temp_dir = tempfile.mkdtemp(prefix=f'leadbook_video_{listado.id}_')
-        image_paths, used_urls = _prepare_images(listado, temp_dir, width, height)
+        image_paths, used_urls = _prepare_images(listado, temp_dir, width, height, max_photos=max_photos)
         script = _build_voice_script(listado, max_seconds=max_seconds)
         audio_path, audio_duration = _generate_voice_file(listado, temp_dir, script)
 
@@ -413,16 +843,57 @@ def generar_video_listado_liviano(listado_id):
         target_duration = scene_duration * len(image_paths)
 
         segment_paths = []
+        cut_times = []
         for index, image_path in enumerate(image_paths):
             segment_path = os.path.join(temp_dir, f'segment_{index:02d}.mp4')
-            _render_image_segment(image_path, segment_path, scene_duration, width, height, fps, crf)
+            if index > 0:
+                cut_times.append(round(index * scene_duration, 3))
+            _render_image_segment(
+                image_path=image_path,
+                output_path=segment_path,
+                duration=scene_duration,
+                width=width,
+                height=height,
+                fps=fps,
+                crf=crf,
+                preset=preset,
+                scene_index=index,
+            )
             segment_paths.append(segment_path)
 
         visual_path = os.path.join(temp_dir, 'visual.mp4')
         _concat_segments(segment_paths, visual_path)
 
+        music_path = _pick_music_track(datos)
+        mixed_audio_path = os.path.join(temp_dir, 'mix.m4a')
+        mix_strategy = 'pro_mix'
+        logger.info(
+            '[LIGHT_VIDEO] Audio plan listado_id=%s voice=%s music=%s cuts=%s sfx=%s',
+            listado.id,
+            bool(audio_path),
+            os.path.basename(music_path) if music_path else 'none',
+            len(cut_times),
+            config('LIGHT_VIDEO_SFX_ENABLED', default=True, cast=bool),
+        )
+        try:
+            _build_audio_mix(
+                voice_path=audio_path,
+                music_path=music_path,
+                cut_times=cut_times,
+                duration=target_duration,
+                output_path=mixed_audio_path,
+            )
+        except Exception as mix_exc:
+            logger.warning('[LIGHT_VIDEO] Mezcla pro fallo listado_id=%s: %s', listado.id, mix_exc)
+            if audio_path:
+                shutil.copy2(audio_path, mixed_audio_path)
+                mix_strategy = 'voice_only_fallback'
+            else:
+                mixed_audio_path = ''
+                mix_strategy = 'silent_fallback'
+
         voiced_path = os.path.join(temp_dir, 'voiced.mp4')
-        _mux_audio(visual_path, audio_path, voiced_path)
+        _mux_audio(visual_path, mixed_audio_path, voiced_path)
 
         final_path = voiced_path
         if config('LIGHT_VIDEO_BURN_CAPTIONS', default=True, cast=bool) and script:
@@ -430,7 +901,7 @@ def generar_video_listado_liviano(listado_id):
             if _write_srt(script, target_duration, srt_path):
                 subtitled_path = os.path.join(temp_dir, 'final.mp4')
                 try:
-                    _burn_subtitles(voiced_path, srt_path, subtitled_path, crf)
+                    _burn_subtitles(voiced_path, srt_path, subtitled_path, crf=crf, preset=preset, height=height)
                     final_path = subtitled_path
                 except Exception as exc:
                     logger.warning('[LIGHT_VIDEO] No se pudieron quemar subtitulos listado_id=%s: %s', listado.id, exc)
@@ -448,9 +919,36 @@ def generar_video_listado_liviano(listado_id):
         datos['video_reference_photos'] = used_urls
         datos['video_reference_photo_count'] = len(used_urls)
         datos['video_voice_enabled'] = bool(audio_path)
+        datos['video_music_enabled'] = bool(music_path)
+        if music_path:
+            datos['video_music_track'] = os.path.basename(music_path)
+        datos['video_sfx_enabled'] = config('LIGHT_VIDEO_SFX_ENABLED', default=True, cast=bool)
+        datos['video_audio_mix_strategy'] = mix_strategy
         datos['video_voice_choice'] = normalize_elevenlabs_voice_choice(_value(datos, 'voz', default='femenina'))
         datos['video_voice_script'] = script
         datos['video_duration_seconds'] = round(target_duration, 2)
+        datos['video_resolution'] = f'{width}x{height}'
+        datos['video_fps'] = fps
+        datos['video_crf'] = crf
+        datos['video_preset'] = preset
+        datos['video_profile'] = render_profile['profile']
+        datos['video_render_fallback_applied'] = render_profile['fallback_applied']
+        if render_profile['fallback_reason']:
+            datos['video_render_fallback_reason'] = render_profile['fallback_reason']
+        datos['video_queue_snapshot'] = render_profile['load']
+        datos['video_cut_points'] = cut_times
+        datos['video_audio_mix'] = {
+            'music_volume': _clamp(config('LIGHT_VIDEO_MUSIC_VOLUME', default=0.30, cast=float), 0.0, 1.2),
+            'voice_volume': _clamp(config('LIGHT_VIDEO_VOICE_VOLUME', default=1.00, cast=float), 0.1, 2.0),
+            'sfx_volume': _clamp(config('LIGHT_VIDEO_SFX_VOLUME', default=0.11, cast=float), 0.0, 1.5),
+            'ducking': {
+                'threshold': _safe_float(config('LIGHT_VIDEO_DUCKING_THRESHOLD', default='0.040'), 0.040),
+                'ratio': _safe_float(config('LIGHT_VIDEO_DUCKING_RATIO', default='10'), 10),
+                'attack': _safe_float(config('LIGHT_VIDEO_DUCKING_ATTACK', default='25'), 25),
+                'release': _safe_float(config('LIGHT_VIDEO_DUCKING_RELEASE', default='320'), 320),
+            },
+        }
+        datos['video_generation_seconds'] = round(time.time() - started_at, 2)
         datos['video_generated_at'] = timezone.now().isoformat()
 
         listado.datos = datos
@@ -458,6 +956,13 @@ def generar_video_listado_liviano(listado_id):
         listado.video_status = 'done'
         listado.videos_creados = (listado.videos_creados or 0) + 1
         listado.save(update_fields=['datos_extra', 'video_url', 'video_status', 'videos_creados', 'updated_at'])
+        logger.info(
+            '[LIGHT_VIDEO] OK listado_id=%s dur=%.2fs render=%.2fs output=%s',
+            listado.id,
+            target_duration,
+            (time.time() - started_at),
+            video_url,
+        )
         return True
     except Exception as exc:
         logger.exception('[LIGHT_VIDEO] Error generando video listado_id=%s', listado_id)
