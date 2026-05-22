@@ -23,7 +23,7 @@ import cloudinary.api
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-print(f"[STARTUP] APP_ROLE={os.environ.get('APP_ROLE', 'unset')}")
+print(f"[STARTUP] APP_ROLE={os.environ.get('APP_ROLE', 'unset')} RAILWAY_SERVICE_NAME={os.environ.get('RAILWAY_SERVICE_NAME', 'unset')}")
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
