@@ -2391,6 +2391,26 @@ class CookieTokenRefreshView(TokenRefreshView):
             data['refresh'] = request.COOKIES.get(REFRESH_COOKIE_NAME, '')
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
+
+        refresh_token = data.get('refresh')
+        try:
+            token = RefreshToken(refresh_token)
+            user_id = token.payload.get('user_id')
+            user = Agent.objects.all_including_deleted().filter(id=user_id).first()
+            if not user or getattr(user, 'eliminado_en', None) or not getattr(user, 'is_active', False):
+                try:
+                    token.blacklist()
+                except Exception:
+                    pass
+                code = 'account_deleted' if not user or getattr(user, 'eliminado_en', None) else 'account_inactive'
+                response = Response({
+                    'detail': 'La cuenta fue eliminada o ya no esta activa.',
+                    'code': code,
+                }, status=status.HTTP_401_UNAUTHORIZED)
+                return _delete_refresh_cookie(response)
+        except Exception:
+            pass
+
         response = Response(serializer.validated_data, status=status.HTTP_200_OK)
         refresh = response.data.get('refresh') if getattr(response, 'data', None) else None
         if refresh:

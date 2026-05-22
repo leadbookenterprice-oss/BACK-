@@ -704,7 +704,10 @@ def admin_usuario_eliminar(request, user_id):
     if not _is_staff_check(request): return Response({'error': 'Forbidden'}, status=403)
     try:
         u = Agent.objects.get(id=user_id)
+        _blacklist_user_refresh_tokens(u)
+        revoked_user_id = u.id
         u.soft_delete()
+        transaction.on_commit(lambda: _emit_account_revoked_event(revoked_user_id, None))
         return Response({'ok': True})
     except Agent.DoesNotExist: return Response(status=404)
 
