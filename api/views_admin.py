@@ -433,7 +433,79 @@ def admin_apikeys_pool_crear(request):
 @api_view(['POST'])
 def admin_apikeys_pool_bulk(request):
     if not _is_staff_check(request): return _forbidden()
-    return Response({'message': 'Bulk upload not implemented in v2 stub'})
+    keys_data = request.data.get('keys', [])
+    if not isinstance(keys_data, list) or not keys_data:
+        return Response({'error': 'No se enviaron keys'}, status=400)
+
+    seen_in_request = set()
+    new_keys = []
+    errors = []
+    counts = {}
+    affected_services = set()
+    duplicates_in_request = 0
+    duplicates_existing = 0
+
+    with transaction.atomic():
+        for index, data in enumerate(keys_data, start=1):
+            if not isinstance(data, dict):
+                errors.append({'index': index, 'error': 'Formato invalido'})
+                continue
+
+            service_name = _normalize_service_name(data.get('service') or data.get('servicio'))
+            api_key_str = _normalize_api_key_value(data.get('api_key') or data.get('key'))
+            limit = data.get('daily_limit', 1500)
+            label = data.get('label')
+
+            if not service_name or not api_key_str:
+                errors.append({'index': index, 'error': 'Faltan service o api_key'})
+                continue
+
+            servicio = Servicio.objects.filter(nombre=service_name).first()
+            if not servicio:
+                errors.append({'index': index, 'service': service_name, 'error': f'Servicio "{service_name}" no existe'})
+                continue
+
+            affected_services.add(servicio.nombre)
+            fingerprint = (servicio.id, api_key_str)
+            if fingerprint in seen_in_request:
+                duplicates_in_request += 1
+                continue
+            seen_in_request.add(fingerprint)
+
+            if APIKey.objects.filter(servicio=servicio, api_key=api_key_str).exists():
+                duplicates_existing += 1
+                continue
+
+            new_keys.append(APIKey(
+                servicio=servicio,
+                api_key=api_key_str,
+                google_daily_limit=limit,
+                label=label,
+                status='available',
+            ))
+
+        if new_keys:
+            APIKey.objects.bulk_create(new_keys)
+            for key in new_keys:
+                service = key.servicio.nombre
+                counts[service] = counts.get(service, 0) + 1
+
+        cleanup = _cleanup_duplicate_api_keys(affected_services)
+
+    return Response({
+        'status': 'created' if new_keys else 'ok',
+        'received': len(keys_data),
+        'created': len(new_keys),
+        'count': len(new_keys),
+        'counts_by_service': counts,
+        'ignored': duplicates_in_request + duplicates_existing,
+        'duplicates_in_request': duplicates_in_request,
+        'duplicates_existing': duplicates_existing,
+        'duplicates_deleted': cleanup['duplicates_deleted'],
+        'duplicates_protected': cleanup['duplicates_protected'],
+        'duplicate_groups': cleanup['duplicate_groups'],
+        'errores': errors,
+    }, status=201 if new_keys else 200)
 
 @api_view(['GET', 'PUT', 'DELETE'])
 def admin_apikeys_pool_detail(request, pk):
