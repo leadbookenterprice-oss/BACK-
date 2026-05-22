@@ -831,11 +831,22 @@ No incluyas preámbulos, solo el texto en español neutro."""
             "--workers", str(config('HYPERFRAMES_WORKERS', default=1, cast=int)),
         ]
 
+        # En entornos tipo Railway conviene evitar GPU hardware para Chromium.
+        browser_gpu_mode = config(
+            'HYPERFRAMES_BROWSER_GPU_MODE',
+            default='auto' if settings.DEBUG else 'software'
+        ).strip().lower()
+        if browser_gpu_mode:
+            render_cmd.extend(["--browser-gpu-mode", browser_gpu_mode])
+
         render_timeout_seconds = int(config('HYPERFRAMES_RENDER_TIMEOUT', default=420))
 
         render_env = os.environ.copy()
         if ffmpeg_bin_dir and os.path.isdir(ffmpeg_bin_dir):
             render_env['PATH'] = ffmpeg_bin_dir + os.pathsep + render_env.get('PATH', '')
+        # Más robusto en contenedores para Chromium/Playwright.
+        render_env.setdefault('PLAYWRIGHT_BROWSERS_PATH', '0')
+        render_env.setdefault('CHROME_DISABLE_GPU', '1')
 
         try:
             process = subprocess.run(
