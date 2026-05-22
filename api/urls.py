@@ -25,6 +25,7 @@ from .views import (
     brand_template_set_default, brand_template_revisions_collection,
     brand_template_publish_revision, brand_template_preview, brand_template_chat,
     brand_template_draft_preview, brand_template_draft_chat, CookieTokenRefreshView,
+    cambiar_password, logout_all,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -49,6 +50,8 @@ urlpatterns = [
     path('auth/login/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
     path('auth/token/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh_alt'),
     path('auth/logout/', LogoutView.as_view(), name='auth_logout'),
+    path('auth/logout-all/', logout_all, name='auth_logout_all'),
+    path('auth/cambiar-password/', cambiar_password, name='auth_cambiar_password'),
     path('auth/perfil/', PerfilView.as_view(), name='auth_perfil'),
     path('auth/onboarding/', OnboardingView.as_view(), name='auth_onboarding'),
     path('auth/agentes-comerciales/', commercial_agents_collection, name='commercial_agents_collection'),

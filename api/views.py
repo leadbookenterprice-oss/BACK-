@@ -2396,6 +2396,57 @@ class LogoutView(APIView):
         response = Response(status=status.HTTP_205_RESET_CONTENT)
         return _delete_refresh_cookie(response)
 
+
+def _blacklist_refresh_tokens_for_user(user):
+    try:
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+    except Exception:
+        return 0
+
+    blacklisted = 0
+    for token in OutstandingToken.objects.filter(user=user):
+        _, created = BlacklistedToken.objects.get_or_create(token=token)
+        if created:
+            blacklisted += 1
+    return blacklisted
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def cambiar_password(request):
+    current_password = request.data.get('current_password') or ''
+    new_password = request.data.get('new_password') or ''
+
+    if not current_password or not new_password:
+        return Response({"error": "Contraseña actual y nueva contraseña requeridas"}, status=status.HTTP_400_BAD_REQUEST)
+    if not request.user.check_password(current_password):
+        return Response({"error": "La contraseña actual no es correcta"}, status=status.HTTP_400_BAD_REQUEST)
+    if len(new_password) < 8:
+        return Response({"error": "La nueva contraseña debe tener al menos 8 caracteres"}, status=status.HTTP_400_BAD_REQUEST)
+    if current_password == new_password:
+        return Response({"error": "La nueva contraseña debe ser distinta a la actual"}, status=status.HTTP_400_BAD_REQUEST)
+
+    request.user.set_password(new_password)
+    request.user.save(update_fields=['password', 'updated_at'])
+
+    # Invalidamos refresh tokens anteriores y emitimos uno nuevo para mantener esta sesión activa.
+    blacklisted = _blacklist_refresh_tokens_for_user(request.user)
+    refresh = RefreshToken.for_user(request.user)
+    response = Response({
+        "mensaje": "Contraseña actualizada correctamente",
+        "access": str(refresh.access_token),
+        "sessions_closed": blacklisted,
+    }, status=status.HTTP_200_OK)
+    return _set_refresh_cookie(response, str(refresh))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def logout_all(request):
+    blacklisted = _blacklist_refresh_tokens_for_user(request.user)
+    response = Response({"mensaje": "Sesiones cerradas", "sessions_closed": blacklisted}, status=status.HTTP_200_OK)
+    return _delete_refresh_cookie(response)
+
 class PropertyViewSet(viewsets.ModelViewSet):
     """Stub — Property fue eliminado en v2.0. Se mantiene para compatibilidad con el router."""
     permission_classes = [IsAuthenticated]
