@@ -1,22 +1,36 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
-from decouple import config
-from django.utils.crypto import constant_time_compare
+from channels.db import database_sync_to_async
+from urllib.parse import parse_qs
 from django.utils import timezone
 
-ADMIN_KEY = config('ADMIN_KEY', default='')
+
+@database_sync_to_async
+def _staff_user_from_token(token):
+    if not token:
+        return None
+    try:
+        from rest_framework_simplejwt.tokens import AccessToken
+        from api.models import Agent
+        validated = AccessToken(token)
+        user = Agent.objects.filter(id=validated.get('user_id'), is_active=True, is_staff=True).first()
+        return user
+    except Exception:
+        return None
 
 class AdminDashboardConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        # Auth via query param: wss://...?key=ADMIN_KEY
-        query_string = self.scope.get('query_string', b'').decode()
-        params = dict(qc.split('=') for qc in query_string.split('&') if '=' in qc)
-        provided_key = params.get('key', '')
+        user = self.scope.get('user')
+        if not getattr(user, 'is_authenticated', False) or not getattr(user, 'is_staff', False):
+            query = parse_qs(self.scope.get('query_string', b'').decode())
+            token = (query.get('token') or [''])[0]
+            user = await _staff_user_from_token(token)
 
-        if not ADMIN_KEY or not provided_key or not constant_time_compare(provided_key, ADMIN_KEY):
+        if not user:
             await self.close(code=4003)
             return
 
+        self.user = user
         self.group_name = "admin_dashboard"
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()

@@ -5,11 +5,22 @@ from api.services.pool_service import APIPoolService
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
 
 
-def _key_usage_ratio(key):
+def _resolve_usage_window(key, servicio_nombre):
+    svc = str(servicio_nombre or '').strip().lower()
+    if svc == 'elevenlabs':
+        limit = key.google_monthly_limit or 10000
+        usage = key.requests_this_month or 0
+        return usage, limit
     limit = key.google_daily_limit or 0
+    usage = key.requests_today or 0
+    return usage, limit
+
+
+def _key_usage_ratio(key, servicio_nombre):
+    usage, limit = _resolve_usage_window(key, servicio_nombre)
     if limit <= 0:
         return 0
-    return key.requests_today / limit
+    return usage / limit
 
 
 def get_next_available_api(agente, servicio):
@@ -35,8 +46,8 @@ def get_next_available_api(agente, servicio):
             if not key:
                 continue
 
-            limit = key.google_daily_limit or 0
-            if limit and key.requests_today >= limit:
+            usage, limit = _resolve_usage_window(key, servicio_nombre)
+            if limit and usage >= limit:
                 key.status = 'exhausted'
                 key.save(update_fields=['status', 'updated_at'])
                 continue
@@ -53,8 +64,8 @@ def get_next_available_api(agente, servicio):
         selected = min(
             candidates,
             key=lambda asig: (
-                asig.apikey.requests_today,
-                _key_usage_ratio(asig.apikey),
+                _resolve_usage_window(asig.apikey, servicio_nombre)[0],
+                _key_usage_ratio(asig.apikey, servicio_nombre),
                 asig.apikey.last_used_at or asig.assigned_at,
                 asig.apikey_id,
             ),
@@ -85,6 +96,7 @@ def liberar_bundle(agente):
 
 def marcar_agotada(agente, servicio, is_monthly=False):
     """Marca la key del servicio como agotada."""
+    servicio_nombre = str(servicio or '').strip().lower()
     keys = APIKey.objects.filter(
         assignments__user=agente,
         assignments__activo=True,
@@ -95,7 +107,8 @@ def marcar_agotada(agente, servicio, is_monthly=False):
     for k in keys:
         k.status = 'exhausted'
         if is_monthly:
-            k.requests_this_month = k.google_monthly_limit or max(k.requests_this_month, k.google_daily_limit)
+            monthly_limit = k.google_monthly_limit or (10000 if servicio_nombre == 'elevenlabs' else k.google_daily_limit)
+            k.requests_this_month = max(k.requests_this_month, monthly_limit or 0)
             k.save(update_fields=['status', 'requests_this_month', 'updated_at'])
         else:
             k.save(update_fields=['status', 'updated_at'])

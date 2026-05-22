@@ -22,6 +22,7 @@ from api.models import (
 )
 from api.services.pool_service import APIPoolService
 from decouple import config
+from django.conf import settings
 from django.utils.crypto import constant_time_compare
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
@@ -29,9 +30,18 @@ ADMIN_KEY = config('ADMIN_KEY', default='')
 
 def _check_admin(request):
     supplied_key = request.headers.get('X-Admin-Key', '')
-    if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
+    if getattr(settings, 'ALLOW_ADMIN_KEY_AUTH', False) and ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
         return True
     return request.user and request.user.is_authenticated and request.user.is_staff
+
+
+def _mask_secret(value, head=4, tail=4):
+    value = str(value or '')
+    if not value:
+        return ''
+    if len(value) <= head + tail:
+        return '*' * len(value)
+    return f'{value[:head]}...{value[-tail:]}'
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -165,8 +175,8 @@ def admin_api_keys_list(request):
             'servicio':         k.servicio.nombre,
             'service':          k.servicio.nombre,
             'status':           k.status,
-            'api_key':          k.api_key,
-            'key_masked':       k.api_key[:10] + '...' if k.api_key else '',
+            'api_key':          _mask_secret(k.api_key),
+            'key_masked':       _mask_secret(k.api_key),
             'label':            k.label,
             'assigned_to':      asig.user.email if asig else None,
             'assigned_to_email':asig.user.email if asig else None,

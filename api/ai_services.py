@@ -564,12 +564,92 @@ def _get_groq_key():
 # Los views la capturan y devuelven HTTP 429 con mensaje canonico.
 class GeminiQuotaExhaustedError(Exception):
     """Cuota mensual/diaria de Gemini agotada. No tiene solución con reintentos."""
-    pass
+    def __init__(
+        self,
+        message=LIMIT_REACHED_MESSAGE,
+        *,
+        provider='gemini',
+        scope='provider',
+        quota_state='hard_exhausted',
+        retry_after_seconds=None,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.scope = scope
+        self.quota_state = quota_state
+        self.retry_after_seconds = retry_after_seconds
+
+
+class GeminiRateLimitedError(Exception):
+    """Rate limit/saturación transitoria de Gemini."""
+    def __init__(
+        self,
+        message="Servicio de IA temporalmente saturado. Reintentá en unos minutos.",
+        *,
+        provider='gemini',
+        scope='provider',
+        quota_state='soft_rate_limited',
+        retry_after_seconds=60,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.scope = scope
+        self.quota_state = quota_state
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ElevenLabsQuotaExhaustedError(Exception):
+    """Cuota real agotada de ElevenLabs."""
+    def __init__(
+        self,
+        message=LIMIT_REACHED_MESSAGE,
+        *,
+        provider='elevenlabs',
+        scope='provider',
+        quota_state='hard_exhausted',
+        retry_after_seconds=None,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.scope = scope
+        self.quota_state = quota_state
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ElevenLabsRateLimitedError(Exception):
+    """Rate limit/saturación transitoria de ElevenLabs."""
+    def __init__(
+        self,
+        message="Servicio de voz temporalmente saturado. Reintentá en unos minutos.",
+        *,
+        provider='elevenlabs',
+        scope='provider',
+        quota_state='soft_rate_limited',
+        retry_after_seconds=60,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.scope = scope
+        self.quota_state = quota_state
+        self.retry_after_seconds = retry_after_seconds
 
 
 class APIKeyUnavailableError(Exception):
     """El usuario no tiene una API key asignada o el pool no tiene stock disponible."""
-    pass
+    def __init__(
+        self,
+        message=API_KEY_UNAVAILABLE_MESSAGE,
+        *,
+        provider='generic',
+        scope='pool',
+        quota_state='hard_exhausted',
+        retry_after_seconds=None,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.scope = scope
+        self.quota_state = quota_state
+        self.retry_after_seconds = retry_after_seconds
 
 @track_api_call(service='gemini')
 def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
@@ -712,6 +792,8 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
             raise
         except GeminiQuotaExhaustedError:
             raise
+        except GeminiRateLimitedError:
+            raise
         except Exception as e:
             print(f"Gemini attempt {attempt+1}/{retries} failed: {str(e)}")
             if attempt < retries - 1:
@@ -736,7 +818,11 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina', voice_id=None, v
                 key = fallback_env_key
             else:
                 print("[ERROR] No hay ElevenLabs API Key asignada para el usuario en el Pool.")
-                raise Exception(LIMIT_REACHED_MESSAGE)
+                raise APIKeyUnavailableError(
+                    API_KEY_UNAVAILABLE_MESSAGE,
+                    provider='elevenlabs',
+                    scope='pool',
+                )
     elif fallback_env_key:
         key = fallback_env_key
 
@@ -745,7 +831,11 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina', voice_id=None, v
 
     if not key:
         print("[ERROR] No hay ElevenLabs API Key disponible.")
-        return None
+        raise APIKeyUnavailableError(
+            API_KEY_UNAVAILABLE_MESSAGE,
+            provider='elevenlabs',
+            scope='pool',
+        )
 
     voice_choice, filtered_candidates, resolved_voice_settings = resolve_elevenlabs_voice_profile(
         voz=voz,
@@ -785,36 +875,54 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina', voice_id=None, v
 
             print(f"[ERROR] ElevenLabs API failed ({response.status_code}): {response.text}")
             if agente and response.status_code in [401, 429]:
+                response_text = str(response.text or '').lower()
+                hard_quota_terms = (
+                    'quota',
+                    'credits',
+                    'insufficient',
+                    'exceeded',
+                    'monthly',
+                    'payment',
+                    'balance',
+                )
+                is_hard_quota = any(term in response_text for term in hard_quota_terms) or response.status_code == 401
                 try:
                     from api.models import APIKey
                     k = APIKey.objects.filter(api_key=key, servicio__nombre__iexact='elevenlabs').first()
-                    if k:
+                    if k and is_hard_quota:
                         k.status = 'exhausted'
-                        k.requests_this_month = k.google_monthly_limit or max(k.requests_this_month, k.google_daily_limit)
+                        k.requests_this_month = k.google_monthly_limit or max(k.requests_this_month, k.google_daily_limit, 10000)
                         k.save(update_fields=['status', 'requests_this_month', 'updated_at'])
                 except Exception as e:
                     logger.error(f"Error marcando ElevenLabs como agotada: {e}")
-                raise Exception(LIMIT_REACHED_MESSAGE)
+                if is_hard_quota:
+                    raise ElevenLabsQuotaExhaustedError(
+                        LIMIT_REACHED_MESSAGE,
+                        provider='elevenlabs',
+                        scope='provider',
+                        quota_state='hard_exhausted',
+                    )
+                raise ElevenLabsRateLimitedError(
+                    "Servicio de voz temporalmente saturado. Reintentá en unos minutos.",
+                    provider='elevenlabs',
+                    scope='provider',
+                    quota_state='soft_rate_limited',
+                    retry_after_seconds=60,
+                )
 
         return None
     except Exception as e:
         print(f"[ERROR] Exception in ElevenLabs call: {str(e)}")
-        if str(e) == LIMIT_REACHED_MESSAGE:
+        if isinstance(e, (ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError)):
             raise
         return None
 
 
-def _get_leadbook_watermark_b64():
-    """Retorna el logo de LeadBook como data-URL base64 para embed en HTML."""
-    import base64
-    import os
-    logo_path = os.path.join(os.path.dirname(__file__), 'leadbook_logo.png')
-    try:
-        with open(logo_path, 'rb') as f:
-            b64 = base64.b64encode(f.read()).decode('utf-8')
-        return f"data:image/png;base64,{b64}"
-    except Exception:
-        return None
+def _get_leadbook_watermark_url():
+    configured = _settings_or_env('LEADBOOK_WATERMARK_URL')
+    if configured.startswith('http'):
+        return configured
+    return 'https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark'
 
 
 def _mark_gemini_exhausted(agente, key_str, is_monthly=False):
@@ -886,7 +994,10 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                     
                     # Si no hay agente o no hay más llaves, lanzar error definitivo
                     raise GeminiQuotaExhaustedError(
-                        LIMIT_REACHED_MESSAGE
+                        LIMIT_REACHED_MESSAGE,
+                        provider='gemini',
+                        scope='provider',
+                        quota_state='hard_exhausted',
                     )
                 
                 if is_minute or '429' in error_msg:
@@ -895,6 +1006,13 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                         logger.warning(f"Rate limit de Gemini (minuto) alcanzado. Esperando 60s... (Intento {attempt+1})")
                         time.sleep(60)
                         continue
+                    raise GeminiRateLimitedError(
+                        "Servicio de IA temporalmente saturado. Reintentá en unos minutos.",
+                        provider='gemini',
+                        scope='provider',
+                        quota_state='soft_rate_limited',
+                        retry_after_seconds=60,
+                    )
             
             # Otros errores no relacionados a cuota
             raise e
@@ -906,7 +1024,6 @@ def generar_html_gemini(context, agente):
       Paso 1 - gemini-2.5-flash-lite: genera un prompt creativo de diseño (sin imágenes)
       Paso 2 - Cascada de modelos (2.5 Pro -> 2.5 Flash -> 3 Flash -> ...): genera el HTML final
     """
-    import base64
     from google.genai import types
     from django.conf import settings
     from google import genai
@@ -1008,34 +1125,23 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
         contents_step2 = []
         portada_url = context.get('portada_url')
         
-        # Obtenemos la imagen de portada para Gemini
+        # Solo usamos URL remota para referencias visuales (sin data/base64).
         try:
-            # Si la portada ya es base64, la usamos. Si no, Gemini en el paso 2 la ignorará 
-            # (ya que los modelos NIM usan la URL directamente vía call_nim_model)
-            if portada_url and (portada_url.startswith('data:image') or portada_url.startswith('https://')):
-                # Nota: Si es HTTPS, los modelos NIM la procesan nativamente. 
-                # Para Gemini, solo adjuntamos si podemos decodificarla (base64)
-                if portada_url.startswith('data:image'):
-                    contents_step2.append(types.Part.from_bytes(
-                        data=base64.b64decode(portada_url.split(',')[1]),
-                        mime_type="image/png"
-                    ))
-                    print(f"[HTML] ▶ Paso 2 - Imagen de portada (base64) adjunta para Gemini.")
-                else:
-                    print(f"[HTML] ▶ Paso 2 - Imagen de portada (URL) disponible para modelos NIM.")
+            if portada_url and str(portada_url).startswith('https://'):
+                print(f"[HTML] ▶ Paso 2 - Imagen de portada (URL) disponible para modelos NIM/Gemini.")
         except Exception as e:
             print(f"[HTML] ⚠️ Error procesando imagen de portada para el prompt: {e}")
 
         # QR embed
         qr_code = context.get('qr_code', '')
-        qr_img_tag = f'<img src="data:image/png;base64,{qr_code}" style="width:80px;height:80px;" alt="QR WhatsApp">' if qr_code else ''
+        qr_img_tag = f'<img src="{qr_code}" style="width:80px;height:80px;" alt="QR WhatsApp">' if qr_code else ''
         
         # URLs crudas (evitar enviar base64 enorme en el prompt de texto)
         logo_url_str = context.get('agencia_logo_url', '') or context.get('logo_url', '')
         watermark_html = context.get('watermark_html', '')
 
         fotos_recorrido = context.get('fotos_recorrido_raw', [])
-        fotos_limpias = [f for f in fotos_recorrido if not f.startswith('data:')]
+        fotos_limpias = [f for f in fotos_recorrido if str(f or '').startswith('http')]
         fotos_galeria_str = "\n".join(fotos_limpias[:5])
 
         prompt_step2 = f"""CRÍTICO: GENERÁ EL HTML COMPLETO DE ARRIBA HACIA ABAJO SIN OMITIR NINGUNA SECCIÓN. 

@@ -33,6 +33,8 @@ SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
+ALLOW_ADMIN_KEY_AUTH = config('ALLOW_ADMIN_KEY_AUTH', default=DEBUG, cast=bool)
+ALLOW_DEBUG_ENDPOINTS = config('ALLOW_DEBUG_ENDPOINTS', default=DEBUG, cast=bool)
 
 ALLOWED_HOSTS_ENV = config('ALLOWED_HOSTS', default='')
 _env_allowed_hosts = [h.strip() for h in ALLOWED_HOSTS_ENV.split(',') if h.strip()]
@@ -229,17 +231,12 @@ _local_origins = [
     'http://localhost:3000',
 ]
 CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_env_origins + _production_origins + (_local_origins if DEBUG else [])))
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r'^https://leadbook\.com\.ar$',
-    r'^https://www\.leadbook\.com\.ar$',
-    r'^https://[a-z0-9-]+\.vercel\.app$',
-    r'^https://[a-z0-9-]+\.up\.railway\.app$',
-]
+CORS_ALLOWED_ORIGIN_REGEXES = []
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-encoding', 'authorization', 'content-type', 'dnt',
-    'origin', 'user-agent', 'x-csrftoken', 'x-requested-with', 'x-admin-key',
-]
+    'origin', 'user-agent', 'x-csrftoken', 'x-requested-with',
+] + (['x-admin-key'] if ALLOW_ADMIN_KEY_AUTH else [])
 CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 print(f"[STARTUP] CORS_ALLOWED_ORIGINS={CORS_ALLOWED_ORIGINS}")
 

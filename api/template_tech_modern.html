@@ -113,7 +113,7 @@ body { font-family: 'Space Grotesk', sans-serif; background: #080c10; color: #e8
       <a href="mailto:{{AGENTE_EMAIL}}">{{AGENTE_EMAIL}}</a>
     </div>
   </div>
-  {{#if QR_CODE}}<div class="qr-container"><img src="data:image/png;base64,{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
+  {{#if QR_CODE}}<div class="qr-container"><img src="{{QR_CODE}}" alt="QR"><div class="qr-label">WhatsApp</div></div>{{/if}}
 </div>
 <div class="watermark">Generado con LeadBook</div>
 </body>

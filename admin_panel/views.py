@@ -15,6 +15,7 @@ from api.models import (
 )
 from api.services.pool_service import APIPoolService
 from decouple import config
+from django.conf import settings
 from django.utils.crypto import constant_time_compare
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
@@ -52,9 +53,29 @@ def _get_or_create_service(nombre):
 
 def _check_admin(request):
     supplied_key = request.headers.get('X-Admin-Key', '')
-    if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
+    if getattr(settings, 'ALLOW_ADMIN_KEY_AUTH', False) and ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
         return True
     return request.user and request.user.is_authenticated and request.user.is_staff
+
+
+def _mask_secret(value, head=4, tail=4):
+    value = str(value or '')
+    if not value:
+        return ''
+    if len(value) <= head + tail:
+        return '*' * len(value)
+    return f'{value[:head]}...{value[-tail:]}'
+
+
+def _mask_global_key(item):
+    if not isinstance(item, dict):
+        return item
+    masked = item.copy()
+    raw = masked.get('api_key') or masked.get('key') or ''
+    masked['api_key'] = _mask_secret(raw)
+    masked['key_masked'] = _mask_secret(raw)
+    masked.pop('key', None)
+    return masked
 
 
 def _get_cfg(clave, default=None):
@@ -134,8 +155,9 @@ def admin_api_keys_list(request):
             comprada_en = comprada_en or asig.assigned_at
         data.append({
             'id': k.id, 'servicio': k.servicio.nombre, 'service': k.servicio.nombre,
-            'status': k.status, 'api_key': k.api_key,
-            'key_masked': k.api_key[:10] + '...' if k.api_key else '',
+            'status': k.status, 'api_key': _mask_secret(k.api_key),
+            'key': _mask_secret(k.api_key),
+            'key_masked': _mask_secret(k.api_key),
             'label': k.label,
             'is_primary': asig.is_primary if asig else True,
             'usuario_id': asig.user.id if asig else None,
@@ -442,7 +464,7 @@ def admin_pool_key_toggle(request, pk):
 @permission_classes([AllowAny])
 def admin_global_keys_list(request):
     if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
-    return Response(_get_cfg('global_keys').datos or [])
+    return Response([_mask_global_key(item) for item in (_get_cfg('global_keys').datos or [])])
 
 
 @api_view(['POST'])

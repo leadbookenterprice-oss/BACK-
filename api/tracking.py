@@ -18,6 +18,25 @@ FREE_POOL_SERVICES = {'gemini', 'elevenlabs'}
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
 UPLOADPOST_LIMIT_REACHED_MESSAGE = "Límite de publicaciones automáticas alcanzado. Podés actualizar tu plan para publicar más."
 
+HARD_QUOTA_EXCEPTIONS = {
+    'GeminiQuotaExhaustedError',
+    'ElevenLabsQuotaExhaustedError',
+}
+SOFT_RATE_LIMIT_EXCEPTIONS = {
+    'GeminiRateLimitedError',
+    'ElevenLabsRateLimitedError',
+}
+
+
+def _compute_usage_delta(service, args, kwargs):
+    service_name = str(service or '').strip().lower()
+    if service_name == 'elevenlabs':
+        text_value = kwargs.get('text')
+        if text_value is None and args:
+            text_value = args[0]
+        return max(len(str(text_value or '')), 0)
+    return 1
+
 
 def _get_uploadpost_service():
     servicio = Servicio.objects.filter(nombre__iexact='uploadpost').first()
@@ -305,17 +324,22 @@ def _mark_service_monthly_exhausted(agente, servicio, quota, key_obj=None, reaso
 
 
 def _raise_service_exhausted(service, message):
-    if str(service or '').lower() == 'gemini':
+    service_name = str(service or '').lower()
+    if service_name == 'gemini':
         from api.ai_services import GeminiQuotaExhaustedError
         raise GeminiQuotaExhaustedError(message)
+    if service_name == 'elevenlabs':
+        from api.ai_services import ElevenLabsQuotaExhaustedError
+        raise ElevenLabsQuotaExhaustedError(message)
     raise Exception(message)
 
 
 def _raise_api_key_unavailable(service):
     message = f"No hay API key asignada para {service}. El admin debe cargar stock o reparar el pool."
-    if str(service or '').lower() == 'gemini':
+    service_name = str(service or '').lower()
+    if service_name in {'gemini', 'elevenlabs'}:
         from api.ai_services import APIKeyUnavailableError
-        raise APIKeyUnavailableError(message)
+        raise APIKeyUnavailableError(message, provider=service_name, scope='pool')
     raise Exception(message)
 
 
@@ -431,11 +455,22 @@ def track_api_call(service, action=''):
             status_code = None
             error_msg = None
             response_payload = None
+            usage_delta = _compute_usage_delta(service, args, kwargs)
 
             try:
                 response = func(*args, **kwargs)
                 response_payload = response
-                success = not (isinstance(response, dict) and response.get('success') is False)
+                service_name = str(service or '').strip().lower()
+                if isinstance(response, dict):
+                    success = response.get('success') is not False
+                elif response is None:
+                    success = False
+                elif service_name == 'elevenlabs':
+                    success = isinstance(response, (bytes, bytearray)) and len(response) > 0
+                elif isinstance(response, (str, bytes, bytearray, list, tuple, set)):
+                    success = bool(response)
+                else:
+                    success = True
                 status_code = 200 if success else 400
                 if not success and isinstance(response, dict):
                     error_msg = str(response.get('error') or response.get('message') or '')[:500]
@@ -444,9 +479,11 @@ def track_api_call(service, action=''):
                 error_msg = str(e)
                 status_code = 500
 
-                is_quota_exception = e.__class__.__name__ == 'GeminiQuotaExhaustedError'
+                exc_name = e.__class__.__name__
+                is_hard_quota_exception = exc_name in HARD_QUOTA_EXCEPTIONS
+                is_soft_rate_limit_exception = exc_name in SOFT_RATE_LIMIT_EXCEPTIONS
 
-                if is_quota_exception and not soft_exhaustion:
+                if is_hard_quota_exception and not soft_exhaustion:
                     _mark_service_exhausted(
                         agente,
                         servicio,
@@ -454,11 +491,11 @@ def track_api_call(service, action=''):
                         key_obj,
                         reason='Gemini devolvió cuota agotada',
                     )
-                elif is_quota_exception and key_obj:
+                elif is_hard_quota_exception and key_obj:
                     key_obj.status = 'exhausted'
                     key_obj.save(update_fields=['status', 'updated_at'])
 
-                if key_obj and not is_quota_exception:
+                if key_obj and not is_hard_quota_exception and not is_soft_rate_limit_exception:
                     key_obj.error_count += 1
                     if key_obj.error_count >= 10:
                         APIPoolService.mark_key_dead(key_obj)
@@ -467,7 +504,7 @@ def track_api_call(service, action=''):
                 raise
             finally:
                 elapsed_ms = int((time.time() - start_time) * 1000)
-                should_count_usage = success or not is_uploadpost
+                should_count_usage = bool(success)
 
                 if is_uploadpost:
                     payload = {
@@ -502,14 +539,14 @@ def track_api_call(service, action=''):
                         error_message=error_msg,
                     )
                 elif should_count_usage:
-                    quota.requests_today += 1
-                    quota.requests_this_month += 1
+                    quota.requests_today += usage_delta
+                    quota.requests_this_month += usage_delta
                     quota.save(update_fields=['requests_today', 'requests_this_month', 'updated_at'])
 
                 if key_obj:
                     if should_count_usage:
-                        key_obj.requests_today += 1
-                        key_obj.requests_this_month += 1
+                        key_obj.requests_today += usage_delta
+                        key_obj.requests_this_month += usage_delta
                         key_obj.total_requests += 1
                         key_obj.last_used_at = timezone.now()
                         key_obj.save(
@@ -522,19 +559,26 @@ def track_api_call(service, action=''):
                             ]
                         )
 
-                    limit = key_obj.google_daily_limit or 0
-                    if should_count_usage and limit and key_obj.requests_today >= limit:
+                    service_name = str(service or '').strip().lower()
+                    if service_name == 'elevenlabs':
+                        limit = key_obj.google_monthly_limit or 10000
+                        current_usage = key_obj.requests_this_month
+                    else:
+                        limit = key_obj.google_daily_limit or 0
+                        current_usage = key_obj.requests_today
+
+                    if should_count_usage and limit and current_usage >= limit:
                         key_obj.status = 'exhausted'
                         key_obj.save(update_fields=['status', 'updated_at'])
 
-                    if should_count_usage and limit and key_obj.requests_today >= int(limit * 0.8):
+                    if should_count_usage and limit and current_usage >= int(limit * 0.8):
                         AdminAlert.objects.get_or_create(
                             tipo='quota_warning',
                             severidad='warning',
                             related_api_key=key_obj,
                             creado_en__date=timezone.now().date(),
                             defaults={
-                                'titulo': f"Key al {int((key_obj.requests_today / limit) * 100)}% de uso diario",
+                                'titulo': f"Key al {int((current_usage / limit) * 100)}% de uso",
                                 'mensaje': f"La key de {service} para {agente.email} está por agotarse.",
                             },
                         )
@@ -548,6 +592,7 @@ def track_api_call(service, action=''):
                         success=success,
                         status_code=status_code,
                         response_time_ms=elapsed_ms,
+                        tokens_used=usage_delta,
                         error_message=error_msg,
                     )
 
@@ -562,6 +607,7 @@ def track_api_call(service, action=''):
                             'action': action,
                             'success': success,
                             'time_ms': elapsed_ms,
+                            'usage_delta': usage_delta,
                             'timestamp': timezone.now().isoformat(),
                         },
                     }

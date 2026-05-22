@@ -1,10 +1,13 @@
 import base64
 import io
+import ipaddress
 import logging
 import mimetypes
 import re
+import socket
 import time
 import uuid
+from urllib.parse import urlparse
 
 import cloudinary.uploader
 import requests
@@ -71,6 +74,45 @@ def _truthy(value, default=True):
 
 def _max_video_photos():
     return max(1, min(8, config('VIDEO_MAX_REFERENCE_PHOTOS', default=8, cast=int)))
+
+
+def _is_safe_video_asset_url(url):
+    try:
+        parsed = urlparse(str(url or '').strip())
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+            return False
+        hostname = parsed.hostname.lower().rstrip('.')
+        allowed = {
+            str(host).lower().rstrip('.')
+            for host in getattr(settings, 'REMOTE_ASSET_ALLOWED_HOSTS', ['res.cloudinary.com'])
+            if str(host).strip()
+        }
+        if allowed and not any(hostname == host or hostname.endswith(f'.{host}') for host in allowed):
+            return False
+        for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _download_video_asset(url, timeout=(10, 35), max_bytes=10 * 1024 * 1024):
+    if not _is_safe_video_asset_url(url):
+        raise GeminiVideoError('URL de imagen no permitida para video')
+    response = requests.get(url, timeout=timeout, stream=True, allow_redirects=False)
+    response.raise_for_status()
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=8192):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise GeminiVideoError('Imagen remota demasiado grande')
+        chunks.append(chunk)
+    return b''.join(chunks), (response.headers.get('content-type') or '')
 
 
 def _ordered_media_items(items):
@@ -155,14 +197,15 @@ def _fetch_image_bytes(url):
     if url.startswith('data:'):
         header, payload = url.split(',', 1)
         mime = header.split(';')[0].replace('data:', '') or 'image/jpeg'
+        if len(payload) > 10 * 1024 * 1024:
+            raise GeminiVideoError('Imagen base64 demasiado grande')
         return base64.b64decode(payload), mime
 
-    response = requests.get(url, timeout=(10, 35))
-    response.raise_for_status()
-    mime = (response.headers.get('content-type') or '').split(';')[0].strip()
+    content, content_type = _download_video_asset(url)
+    mime = (content_type or '').split(';')[0].strip()
     if not mime or not mime.startswith('image/'):
         mime = mimetypes.guess_type(url)[0] or 'image/jpeg'
-    return response.content, mime
+    return content, mime
 
 
 def _prepare_reference_image(photo_urls):

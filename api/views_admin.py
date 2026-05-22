@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from decouple import config
+from django.conf import settings
 from django.db import transaction
 from django.utils.crypto import constant_time_compare
 from django.utils.timezone import now
@@ -19,9 +20,18 @@ ADMIN_KEY = config('ADMIN_KEY', default='')
 
 def _is_staff_check(request):
     supplied_key = request.headers.get('X-Admin-Key', '')
-    if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
+    if getattr(settings, 'ALLOW_ADMIN_KEY_AUTH', False) and ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
         return True
     return request.user and request.user.is_authenticated and request.user.is_staff
+
+
+def _mask_secret(value, head=4, tail=4):
+    value = str(value or '')
+    if not value:
+        return ''
+    if len(value) <= head + tail:
+        return '*' * len(value)
+    return f'{value[:head]}...{value[-tail:]}'
 
 
 def _normalize_api_key_value(value):
@@ -30,6 +40,30 @@ def _normalize_api_key_value(value):
 
 def _normalize_service_name(value):
     return str(value or '').strip().lower()
+
+
+ELEVENLABS_MONTHLY_DEFAULT = 10000
+
+
+def _key_window_usage(key):
+    service_name = _normalize_service_name(getattr(getattr(key, 'servicio', None), 'nombre', ''))
+    if service_name == 'elevenlabs':
+        limit = key.google_monthly_limit or ELEVENLABS_MONTHLY_DEFAULT
+        usage = key.requests_this_month or 0
+        unit = 'characters'
+        window = 'month'
+    else:
+        limit = key.google_daily_limit or 1500
+        usage = key.requests_today or 0
+        unit = 'requests'
+        window = 'day'
+    return {
+        'service': service_name,
+        'usage': int(usage or 0),
+        'limit': int(limit or 0),
+        'unit': unit,
+        'window': window,
+    }
 
 
 def _api_key_has_history(key):
@@ -378,8 +412,9 @@ def admin_apikeys_pool(request):
     
     data = []
     for k in keys:
-        limite = k.google_daily_limit or 1500
-        consumo = k.requests_today or 0
+        usage = _key_window_usage(k)
+        limite = usage['limit']
+        consumo = usage['usage']
         porcentaje = min(100, int((consumo / limite) * 100)) if limite else 0
         
         # Encontrar quién la tiene asignada (como primaria)
@@ -393,6 +428,12 @@ def admin_apikeys_pool(request):
             'status': k.status,
             'consumo_hoy': consumo,
             'limite_hoy': limite,
+            'consumo_mes': k.requests_this_month or 0,
+            'limite_mes': k.google_monthly_limit,
+            'usage_unit': usage['unit'],
+            'usage_window': usage['window'],
+            'usage_current': consumo,
+            'usage_limit': limite,
             'porcentaje': porcentaje,
             'error_count': k.error_count,
             'asignada_a': asig_primaria.user.email if asig_primaria else None,
@@ -421,11 +462,16 @@ def admin_apikeys_pool_crear(request):
                 **cleanup,
             }, status=200)
 
+        service_name = _normalize_service_name(svc.nombre)
+        daily_limit = request.data.get('daily_limit', 1500)
+        monthly_limit = request.data.get('monthly_limit', ELEVENLABS_MONTHLY_DEFAULT if service_name == 'elevenlabs' else None)
+
         k = APIKey.objects.create(
             servicio=svc,
             api_key=key_val,
             label=request.data.get('label'),
-            google_daily_limit=request.data.get('daily_limit', 1500),
+            google_daily_limit=daily_limit,
+            google_monthly_limit=monthly_limit,
             status='available',
         )
     return Response({'id': k.id, 'status': 'created', **cleanup}, status=201)
@@ -464,6 +510,10 @@ def admin_apikeys_pool_bulk(request):
             if not servicio:
                 errors.append({'index': index, 'service': service_name, 'error': f'Servicio "{service_name}" no existe'})
                 continue
+            monthly_limit = data.get(
+                'monthly_limit',
+                ELEVENLABS_MONTHLY_DEFAULT if service_name == 'elevenlabs' else None,
+            )
 
             affected_services.add(servicio.nombre)
             fingerprint = (servicio.id, api_key_str)
@@ -480,6 +530,7 @@ def admin_apikeys_pool_bulk(request):
                 servicio=servicio,
                 api_key=api_key_str,
                 google_daily_limit=limit,
+                google_monthly_limit=monthly_limit,
                 label=label,
                 status='available',
             ))
@@ -512,7 +563,7 @@ def admin_apikeys_pool_detail(request, pk):
     if not _is_staff_check(request): return Response({'error': 'Forbidden'}, status=403)
     k = APIKey.objects.get(pk=pk)
     if request.method == 'GET':
-        return Response({'id': k.id, 'key': k.api_key, 'status': k.status})
+        return Response({'id': k.id, 'key': _mask_secret(k.api_key), 'key_masked': _mask_secret(k.api_key), 'status': k.status})
     elif request.method == 'PUT':
         # Update logic...
         k.save()

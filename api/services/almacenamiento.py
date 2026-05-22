@@ -369,6 +369,41 @@ class AlmacenamientoCloudinary:
             return None
 
     @classmethod
+    def guardar_foto_propiedad_file(
+        cls,
+        file_obj,
+        user_id: int,
+        listado_id: int | None = None,
+        tipo_foto: str = 'portada',
+        indice: int = 0,
+    ) -> dict | None:
+        if not file_obj:
+            return None
+        try:
+            metadata = cls.subir(
+                file_obj,
+                TIPO_FOTO_PROPIEDAD,
+                user_id=user_id,
+                listado_id=listado_id,
+                sufijo=f'_{tipo_foto}_{indice}',
+                return_metadata=True,
+            )
+            if not metadata:
+                return None
+            return {
+                **metadata,
+                "url": metadata.get("url") or metadata.get("secure_url"),
+                "secure_url": metadata.get("secure_url") or metadata.get("url"),
+                "cloudinary_account": metadata.get("cloudinary_account") or metadata.get("cloud_name", ""),
+                "resource_type": metadata.get("resource_type") or "image",
+                "role": tipo_foto,
+                "order": 0 if tipo_foto == 'portada' else indice + 1,
+            }
+        except Exception as exc:
+            logger.error(f'[Almacenamiento] Error guardando foto de propiedad (file): {exc}')
+            return None
+
+    @classmethod
     def obtener_url_foto(cls, foto_dict: dict) -> str | None:
         """
         Recibe un diccionario {"cloudinary_account": "...", "public_id": "..."}

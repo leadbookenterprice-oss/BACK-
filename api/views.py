@@ -42,7 +42,17 @@ from .serializers import (
     UserContentPreferenceSerializer, CRMClientSerializer,
 )
 from .tasks import run_asset_generation
-from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError, APIKeyUnavailableError, normalize_elevenlabs_voice_choice
+from .ai_services import (
+    APIKeyUnavailableError,
+    ElevenLabsQuotaExhaustedError,
+    ElevenLabsRateLimitedError,
+    GeminiQuotaExhaustedError,
+    GeminiRateLimitedError,
+    call_gemini_api,
+    call_groq_api,
+    normalize_elevenlabs_voice_choice,
+    smart_call,
+)
 from .utils import crear_notificacion
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
@@ -70,6 +80,38 @@ def _is_data_url(value):
     return isinstance(value, str) and value.strip().lower().startswith('data:')
 
 
+def _allow_legacy_base64_media():
+    return config('ALLOW_LEGACY_BASE64_MEDIA', default=False, cast=bool)
+
+
+def _is_hard_quota_error(exc):
+    return str(getattr(exc, 'quota_state', '')).strip().lower() == 'hard_exhausted'
+
+
+def _quota_error_response(exc, fallback_status=status.HTTP_429_TOO_MANY_REQUESTS):
+    quota_state = str(getattr(exc, 'quota_state', '') or 'hard_exhausted').strip().lower()
+    provider = str(getattr(exc, 'provider', '') or 'generic').strip().lower()
+    scope = str(getattr(exc, 'scope', '') or 'provider').strip().lower()
+    retry_after_seconds = getattr(exc, 'retry_after_seconds', None)
+
+    error_code = 'cuota_ia_agotada' if quota_state == 'hard_exhausted' else 'ia_rate_limited'
+    payload = {
+        'error': error_code,
+        'mensaje': str(exc),
+        'quota_state': quota_state,
+        'provider': provider,
+        'scope': scope,
+        'retry_after_seconds': retry_after_seconds,
+    }
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    if isinstance(exc, APIKeyUnavailableError):
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif fallback_status:
+        status_code = fallback_status
+    return Response(payload, status=status_code)
+
+
 def _safe_persisted_media_url(value):
     """Nunca devolver blobs data: desde campos persistidos."""
     if _is_data_url(value):
@@ -77,9 +119,49 @@ def _safe_persisted_media_url(value):
     return value
 
 
+def _find_blocked_media_data_uri(value, path='payload'):
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered.startswith(('data:image', 'data:video', 'data:audio', 'data:application/pdf')):
+            return path
+        return None
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            found = _find_blocked_media_data_uri(item, f'{path}[{index}]')
+            if found:
+                return found
+        return None
+    if isinstance(value, dict):
+        for key, item in value.items():
+            found = _find_blocked_media_data_uri(item, f'{path}.{key}')
+            if found:
+                return found
+        return None
+    return None
+
+
+def _reject_blocked_media_data_uri(payload, payload_label='payload'):
+    if _allow_legacy_base64_media():
+        return None
+    blocked_path = _find_blocked_media_data_uri(payload, payload_label)
+    if not blocked_path:
+        return None
+    return Response(
+        {
+            'error': 'invalid_media_payload',
+            'mensaje': 'Formato data: no permitido. Subi archivo o URL remota.',
+            'blocked_path': blocked_path,
+            'allow_legacy_base64_media': False,
+        },
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
 def _upload_profile_data_image(value, user_id):
     if not _is_data_url(value):
         return value
+    if not _allow_legacy_base64_media():
+        return None
     try:
         header, payload = value.split(',', 1)
         if not header.lower().startswith('data:image'):
@@ -121,7 +203,7 @@ def _notify_admin_trial_token_request(access_code_obj, email):
             tipo='trial_token_request',
             severidad='info',
             titulo='Nuevo token solicitado',
-            mensaje=f'Se solicitó un token de acceso para {email}.',
+            mensaje=f'Se solicitÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ un token de acceso para {email}.',
         )
 
         payload = {
@@ -1292,14 +1374,14 @@ def _looks_like_property_image(value):
     return any(marker in normalized for marker in property_markers)
 
 
-def _resolve_brand_asset_url(value, allow_data_url=False):
+def _resolve_brand_asset_url(value):
     if not value or _looks_like_property_image(value):
         return ''
 
     if isinstance(value, str):
         cleaned = value.strip()
-        if allow_data_url and cleaned.startswith('data:image'):
-            return cleaned
+        if cleaned.startswith('data:'):
+            return ''
         if cleaned.startswith('http'):
             return re.sub(r's--[^/]+--/', '', cleaned)
         return ''
@@ -1383,7 +1465,7 @@ def _collect_property_images(data):
 
     excluded = set()
     for key in ('logoAgenciaUrl', 'logo_url', 'logoUrl', 'agencyLogo', 'agenteFotoUrl', 'agente_foto_url'):
-        resolved_brand = _resolve_brand_asset_url(data.get(key), allow_data_url=True) if isinstance(data, dict) else ''
+        resolved_brand = _resolve_brand_asset_url(data.get(key)) if isinstance(data, dict) else ''
         if resolved_brand:
             excluded.add(resolved_brand)
 
@@ -1473,7 +1555,7 @@ def _build_agent_contact_html(phone, email):
             f'<a href="mailto:{html_lib.escape(email_value)}">{html_lib.escape(email_value)}</a>'
         )
 
-    return ' &nbsp;·&nbsp; '.join(parts)
+    return ' &nbsp;ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·&nbsp; '.join(parts)
 
 
 def _get_default_commercial_agent(user):
@@ -1635,10 +1717,10 @@ def _resolve_branding_payload(data, user):
     )
 
     logo_url = (
-        _resolve_brand_asset_url(payload_logo, allow_data_url=True)
-        or _resolve_brand_asset_url(getattr(user, 'logo_url', ''), allow_data_url=True)
+        _resolve_brand_asset_url(payload_logo)
+        or _resolve_brand_asset_url(getattr(user, 'logo_url', ''))
     )
-    agent_photo_url = _resolve_brand_asset_url(profile_photo, allow_data_url=True)
+    agent_photo_url = _resolve_brand_asset_url(profile_photo)
 
     return {
         'agente_nombre': str(agent_name).strip(),
@@ -1666,7 +1748,7 @@ def _normalize_hashtags(value):
         if not tag:
             continue
         tag = tag if tag.startswith('#') else f'#{tag}'
-        tag = re.sub(r'[^#\wÁÉÍÓÚÜÑáéíóúüñ]', '', tag)
+        tag = re.sub(r'[^#\wÃƒÆ’Ã†â€™Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‹Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚ÂºÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¼ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±]', '', tag)
         if len(tag) > 1 and tag not in tags:
             tags.append(tag[:50])
     return tags[:35]
@@ -1888,17 +1970,17 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
     text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
 
     intro_patterns = [
-        r'^\s*[!¡]*\s*absolutamente[!¡\s\-,:.]*',
-        r'^\s*(opci[oó]n|option)\s*\d+\s*(?:\([^\)]*\))?\s*[:\-–.]*\s*',
-        r'^\s*(aqui|aquí)\s+tienes\s+un\s+caption[^:\n]{0,180}:\s*',
-        r'^\s*(aqui|aquí)\s+tienes[^:\n]{0,180}:\s*',
+        r'^\s*[!ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡]*\s*absolutamente[!ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡\s\-,:.]*',
+        r'^\s*(opci[oÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³]n|option)\s*\d+\s*(?:\([^\)]*\))?\s*[:\-ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ.]*\s*',
+        r'^\s*(aqui|aquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­)\s+tienes\s+un\s+caption[^:\n]{0,180}:\s*',
+        r'^\s*(aqui|aquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­)\s+tienes[^:\n]{0,180}:\s*',
         r'^\s*te\s+comparto\s+un\s+caption[^:\n]{0,180}:\s*',
     ]
     for pattern in intro_patterns:
         text = re.sub(pattern, '', text, count=1, flags=re.IGNORECASE)
 
     meta_prefix = re.compile(
-        r'^\s*(caption|copy|salida|output|explicacion|explicación|nota|instrucciones|observaciones?)\s*:\s*',
+        r'^\s*(caption|copy|salida|output|explicacion|explicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n|nota|instrucciones|observaciones?)\s*:\s*',
         flags=re.IGNORECASE,
     )
 
@@ -1908,11 +1990,11 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
             return False
         meta_signals = (
             'aqui tienes',
-            'aquí tienes',
+            'aquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ tienes',
             'caption optimizado',
             'caption para instagram',
             'disenado para captar',
-            'diseñado para captar',
+            'diseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±ado para captar',
             'te comparto el caption',
             'este caption',
             'copia optimizada',
@@ -1932,7 +2014,7 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
             cleaned_lines.append('')
             continue
 
-        current = re.sub(r'^\s*[-*•]+\s*', '', current)
+        current = re.sub(r'^\s*[-*ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢]+\s*', '', current)
         current = meta_prefix.sub('', current).strip()
 
         if re.match(r'^(json|formato|estructura)\b', current, flags=re.IGNORECASE):
@@ -1971,7 +2053,7 @@ def _caption_needs_fallback(text):
         'no puedo acceder',
         'como modelo de ia',
         'opcion 1',
-        'opción 1',
+        'opciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n 1',
         'option 1',
     )
     return any(signal in lowered for signal in bad_signals)
@@ -2058,14 +2140,11 @@ def _fallback_descripcion_pdf(data):
     )
 
 
-def _get_leadbook_logo_data_url():
-    logo_path = os.path.join(os.path.dirname(__file__), 'leadbook_logo.png')
-    try:
-        with open(logo_path, 'rb') as f:
-            logo_b64 = base64.b64encode(f.read()).decode('utf-8')
-        return f"data:image/png;base64,{logo_b64}"
-    except Exception:
-        return ''
+def _get_leadbook_logo_url():
+    configured = config('LEADBOOK_LOGO_URL', default='').strip()
+    if configured.startswith('http'):
+        return configured
+    return 'https://res.cloudinary.com/dpqgbgilw/image/upload/v1/leadbook/branding/leadbook_logo.png'
 
 
 def _ensure_caption_length(text, data, formato='post'):
@@ -2088,23 +2167,23 @@ def _ensure_caption_length(text, data, formato='post'):
 
         if formato == 'story':
             extension_blocks = [
-                f"{operacion} · {tipo} en {ciudad}",
+                f"{operacion} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {tipo} en {ciudad}",
                 f"Precio de referencia: {moneda} {precio}.",
-                "Ideal para quienes priorizan ubicación, distribución funcional y potencial de valorización.",
+                "Ideal para quienes priorizan ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, distribuciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n funcional y potencial de valorizaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.",
                 "Escribinos por WhatsApp y te enviamos ficha completa, recorrido y disponibilidad actualizada.",
                 "#Propiedades #Inmobiliaria #Oportunidad",
             ]
         elif formato == 'carrusel':
             extension_blocks = [
                 "\nDESTACADOS",
-                f"• {operacion} de {tipo} en {ciudad}.",
-                f"• Precio publicado: {moneda} {precio}.",
-                "• Propuesta ideal para vivir bien o invertir con estrategia.",
+                f"ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ {operacion} de {tipo} en {ciudad}.",
+                f"ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Precio publicado: {moneda} {precio}.",
+                "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Propuesta ideal para vivir bien o invertir con estrategia.",
                 "\nPOR QUE VALE LA PENA",
-                "• Ubicación competitiva frente a opciones similares de la zona.",
-                "• Distribución pensada para comodidad, funcionalidad y estilo.",
-                "• Potencial de renta y valorización a mediano plazo.",
-                "• Contenido visual pensado para evaluar la propiedad con más claridad antes de visitar.",
+                "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ UbicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n competitiva frente a opciones similares de la zona.",
+                "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ DistribuciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n pensada para comodidad, funcionalidad y estilo.",
+                "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Potencial de renta y valorizaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n a mediano plazo.",
+                "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Contenido visual pensado para evaluar la propiedad con mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s claridad antes de visitar.",
                 "\nCTA",
                 "Escribinos para recibir la ficha completa, comparativa de mercado, disponibilidad y coordinar visita privada.",
                 "#RealEstate #InversionInmobiliaria #Propiedades #BienesRaices #PropiedadPremium #CarruselInmobiliario #AgendaTuVisita #LuxuryRealEstate",
@@ -2112,14 +2191,14 @@ def _ensure_caption_length(text, data, formato='post'):
         else:
             extension_blocks = [
                 "\nDETALLES CLAVE",
-                f"• {operacion} de {tipo} en {ciudad}.",
-                f"• Valor de referencia: {moneda} {precio}.",
-                "• Balance entre calidad constructiva, ubicación y proyección de valor.",
+                f"ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ {operacion} de {tipo} en {ciudad}.",
+                f"ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Valor de referencia: {moneda} {precio}.",
+                "ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢ Balance entre calidad constructiva, ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y proyecciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de valor.",
                 "\nENFOQUE COMERCIAL",
-                "Esta propiedad se posiciona como una alternativa sólida para quien busca decidir con información clara y respaldo profesional.",
-                "Además, permite comunicar valor desde el primer contacto: ubicación, estilo de vida, potencial de inversión y una propuesta concreta para avanzar sin vueltas.",
+                "Esta propiedad se posiciona como una alternativa sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³lida para quien busca decidir con informaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n clara y respaldo profesional.",
+                "AdemÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s, permite comunicar valor desde el primer contacto: ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, estilo de vida, potencial de inversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y una propuesta concreta para avanzar sin vueltas.",
                 "\nSIGUIENTE PASO",
-                "Escribinos para enviarte la ficha técnica completa, videos, disponibilidad y agendar visita personalizada.",
+                "Escribinos para enviarte la ficha tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©cnica completa, videos, disponibilidad y agendar visita personalizada.",
                 "#RealEstate #Propiedades #Inmobiliaria #Inversion #BienesRaices #PropiedadPremium #OportunidadInmobiliaria #AgendaTuVisita #LuxuryRealEstate #BrokerInmobiliario",
             ]
 
@@ -2173,10 +2252,10 @@ import time
 
 def generar_whatsapp_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio='', moneda=''):
     import urllib.parse
-    # Limpiar teléfono: solo dígitos
+    # Limpiar telÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©fono: solo dÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­gitos
     raw_phone = str(telefono or '').strip()
     tel_limpio = ''.join(filter(str.isdigit, raw_phone))
-    # Si no viene en E.164, asumir Argentina (+54) por compatibilidad histórica.
+    # Si no viene en E.164, asumir Argentina (+54) por compatibilidad histÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³rica.
     if tel_limpio and not raw_phone.startswith('+') and not tel_limpio.startswith('54'):
         tel_limpio = '54' + tel_limpio
     if not tel_limpio:
@@ -2185,26 +2264,17 @@ def generar_whatsapp_url(telefono, tipo_propiedad='', ciudad='', operacion='', p
     detalle = f"{tipo_propiedad} en {ciudad}".strip(' en') if tipo_propiedad or ciudad else "propiedad"
     precio_str = f" por {moneda} {precio}" if precio else ""
     op_str = f" en {operacion.lower()}" if operacion else ""
-    mensaje = f"Hola! Me interesa {detalle}{op_str}{precio_str}. ¿Podés darme más información?"
+    mensaje = f"Hola! Me interesa {detalle}{op_str}{precio_str}. ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿PodÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s darme mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s informaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n?"
     # Armar URL de WhatsApp
     return f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(mensaje)}"
 
 
 def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio='', moneda=''):
-    import urllib.parse, urllib.request, base64
+    import urllib.parse
     wa_url = generar_whatsapp_url(telefono, tipo_propiedad, ciudad, operacion, precio, moneda)
     if not wa_url:
         return ''
-    # Generar QR de la URL de WhatsApp
-    qr_api = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(wa_url)}"
-    try:
-        with urllib.request.urlopen(qr_api, timeout=5) as resp:
-            png_bytes = resp.read()
-        b64 = base64.b64encode(png_bytes).decode()
-        return f"data:image/png;base64,{b64}"
-    except Exception as e:
-        print(f"[QR] Error: {e}")
-        return ''
+    return f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(wa_url)}"
 
 
 def _sanitize_generated_email_html(raw_html):
@@ -2330,22 +2400,22 @@ def request_trial_token(request):
     if not email:
         return Response({
             "error": "email_required",
-            "message": "Ingresá un email para recibir el código.",
+            "message": "IngresÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ un email para recibir el cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo.",
         }, status=status.HTTP_400_BAD_REQUEST)
 
     if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         return Response({
             "error": "invalid_email",
-            "message": "Ingresá un email válido para el envío de respaldo.",
+            "message": "IngresÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ un email vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido para el envÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­o de respaldo.",
         }, status=status.HTTP_400_BAD_REQUEST)
 
     if email and Agent.objects.filter(email=email).exists():
         return Response({
             "error": "email_taken",
-            "message": "Este email ya está asociado a una cuenta existente.",
+            "message": "Este email ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ asociado a una cuenta existente.",
         }, status=status.HTTP_409_CONFLICT)
 
-    # Generar código de acceso
+    # Generar cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo de acceso
     code = AccessCode.generate_code()
     trial_days = 30
     access_code_obj = AccessCode.objects.create(
@@ -2387,7 +2457,7 @@ def request_trial_token(request):
 
     response_data = {
         "sent": sent,
-        "message": "Código enviado por email." if channel == 'email' else "No se pudo enviar el código por email.",
+        "message": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo enviado por email." if channel == 'email' else "No se pudo enviar el cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo por email.",
         "trial_days": trial_days,
         "email": email or None,
         "channel": channel,
@@ -2413,7 +2483,7 @@ def validate_access_code(request):
         return Response({
             "valid": False,
             "error": "access_code_required",
-            "message": "Ingresá un codigo promocional valido de 6 caracteres.",
+            "message": "IngresÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ un codigo promocional valido de 6 caracteres.",
         }, status=status.HTTP_400_BAD_REQUEST)
 
     access_code = AccessCode.objects.filter(code=code).first()
@@ -2449,18 +2519,18 @@ class RegisterView(APIView):
         
         ip = get_client_ip(request)
         if BannedIP.objects.filter(ip_address=ip).exists():
-            return Response({'error': 'Tu IP ha sido bloqueada. No podés crear cuentas.'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({'error': 'Tu IP ha sido bloqueada. No podÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s crear cuentas.'}, status=status.HTTP_403_FORBIDDEN)
         
         # Verificar blacklist de emails baneados permanentemente
         from .models import Agent, BannedEmail
         if BannedEmail.objects.filter(email=email).exists():
-            return Response({"error": "Esta cuenta ha sido inhabilitada permanentemente. No podés registrarte con este email."}, status=403)
+            return Response({"error": "Esta cuenta ha sido inhabilitada permanentemente. No podÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s registrarte con este email."}, status=403)
         
         # Validar email duplicado
         if Agent.objects.filter(email=email).exists():
-            return Response({"error": "Este email ya está registrado. ¿Olvidaste tu contraseña?"}, status=400)
+            return Response({"error": "Este email ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ registrado. ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¿Olvidaste tu contraseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a?"}, status=400)
 
-        # Validar teléfono duplicado (si se envía)
+        # Validar telÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©fono duplicado (si se envÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a)
         telefono_raw = str(request.data.get('telefono') or '').strip()
         if telefono_raw:
             digits_only = re.sub(r'\D', '', telefono_raw)
@@ -2475,7 +2545,7 @@ class RegisterView(APIView):
                 if Agent.objects.filter(telefono=telefono_normalizado).exists():
                     return Response({
                         "error": "phone_taken",
-                        "message": "Este número de teléfono ya está asociado a una cuenta existente.",
+                        "message": "Este nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºmero de telÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©fono ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ asociado a una cuenta existente.",
                     }, status=status.HTTP_409_CONFLICT)
 
         otp_verificado = OTPCode.objects.filter(
@@ -2484,7 +2554,7 @@ class RegisterView(APIView):
             creado_en__gte=timezone.now() - timedelta(hours=1)
         ).exists()
         if not otp_verificado:
-            return Response({"error": "Debés verificar tu email primero"}, status=400)
+            return Response({"error": "DebÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s verificar tu email primero"}, status=400)
 
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
@@ -2593,22 +2663,22 @@ def cambiar_password(request):
     new_password = request.data.get('new_password') or ''
 
     if not current_password or not new_password:
-        return Response({"error": "Contraseña actual y nueva contraseña requeridas"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "ContraseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a actual y nueva contraseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a requeridas"}, status=status.HTTP_400_BAD_REQUEST)
     if not request.user.check_password(current_password):
-        return Response({"error": "La contraseña actual no es correcta"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "La contraseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a actual no es correcta"}, status=status.HTTP_400_BAD_REQUEST)
     if len(new_password) < 8:
-        return Response({"error": "La nueva contraseña debe tener al menos 8 caracteres"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "La nueva contraseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a debe tener al menos 8 caracteres"}, status=status.HTTP_400_BAD_REQUEST)
     if current_password == new_password:
-        return Response({"error": "La nueva contraseña debe ser distinta a la actual"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "La nueva contraseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a debe ser distinta a la actual"}, status=status.HTTP_400_BAD_REQUEST)
 
     request.user.set_password(new_password)
     request.user.save(update_fields=['password', 'updated_at'])
 
-    # Invalidamos refresh tokens anteriores y emitimos uno nuevo para mantener esta sesión activa.
+    # Invalidamos refresh tokens anteriores y emitimos uno nuevo para mantener esta sesiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n activa.
     blacklisted = _blacklist_refresh_tokens_for_user(request.user)
     refresh = RefreshToken.for_user(request.user)
     response = Response({
-        "mensaje": "Contraseña actualizada correctamente",
+        "mensaje": "ContraseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a actualizada correctamente",
         "access": str(refresh.access_token),
         "sessions_closed": blacklisted,
     }, status=status.HTTP_200_OK)
@@ -2623,7 +2693,7 @@ def logout_all(request):
     return _delete_refresh_cookie(response)
 
 class PropertyViewSet(viewsets.ModelViewSet):
-    """Stub — Property fue eliminado en v2.0. Se mantiene para compatibilidad con el router."""
+    """Stub ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Property fue eliminado en v2.0. Se mantiene para compatibilidad con el router."""
     permission_classes = [IsAuthenticated]
     queryset = Listado.objects.none()
     serializer_class = RegisterSerializer  # placeholder
@@ -2648,6 +2718,9 @@ import concurrent.futures
 def generar_guion(request):
     import json as _json
     data = request.data
+    blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+    if blocked_media_response:
+        return blocked_media_response
     tipo_video_raw = str(data.get('tipoVideo', 'reel')).strip().lower()
     tipo_video = {
         'tour_narrado': 'tour',
@@ -2728,36 +2801,36 @@ def generar_guion(request):
         if tipo_video == 'tour':
             if is_land:
                 return [
-                    {'nombre': 'Gancho', 'texto': f'Conocé este {tipo} en {ciudad}, una oportunidad para evaluar con calma por ubicación, superficie y potencial de desarrollo.', 'icono': '🌍'},
-                    {'nombre': 'Ubicación', 'texto': f'El entorno de {ciudad} permite pensar en un proyecto con buena conexión, servicios cercanos y proyección de valorización.', 'icono': '📍'},
-                    {'nombre': 'Superficie', 'texto': f'La superficie disponible abre posibilidades para construir, invertir o planificar un desarrollo adaptado a tus objetivos.', 'icono': '📐'},
-                    {'nombre': 'Potencial', 'texto': 'Es una alternativa interesante para quien busca tierra con margen de crecimiento y visión de mediano plazo.', 'icono': '🚀'},
-                    {'nombre': 'Inversión', 'texto': f'Con un valor de referencia de {moneda} {precio}, este terreno puede convertirse en una decisión estratégica.', 'icono': '💼'},
-                    {'nombre': 'Recorrido', 'texto': 'Recorrerlo permite entender mejor sus accesos, orientación, entorno inmediato y posibilidades reales de uso.', 'icono': '👁️'},
-                    {'nombre': 'Cierre', 'texto': 'Escribinos para recibir más información, resolver dudas y coordinar una visita personalizada al lugar.', 'icono': '📞'},
+                    {'nombre': 'Gancho', 'texto': f'ConocÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© este {tipo} en {ciudad}, una oportunidad para evaluar con calma por ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, superficie y potencial de desarrollo.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã¢â‚¬â„¢Ãƒâ€šÃ‚Â'},
+                    {'nombre': 'UbicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n', 'texto': f'El entorno de {ciudad} permite pensar en un proyecto con buena conexiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, servicios cercanos y proyecciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de valorizaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â'},
+                    {'nombre': 'Superficie', 'texto': f'La superficie disponible abre posibilidades para construir, invertir o planificar un desarrollo adaptado a tus objetivos.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â'},
+                    {'nombre': 'Potencial', 'texto': 'Es una alternativa interesante para quien busca tierra con margen de crecimiento y visiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de mediano plazo.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬'},
+                    {'nombre': 'InversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n', 'texto': f'Con un valor de referencia de {moneda} {precio}, este terreno puede convertirse en una decisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n estratÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©gica.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢Ãƒâ€šÃ‚Â¼'},
+                    {'nombre': 'Recorrido', 'texto': 'Recorrerlo permite entender mejor sus accesos, orientaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, entorno inmediato y posibilidades reales de uso.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‹Å“Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â'},
+                    {'nombre': 'Cierre', 'texto': 'Escribinos para recibir mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s informaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, resolver dudas y coordinar una visita personalizada al lugar.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€¦Ã‚Â¾'},
                 ]
             return [
-                {'nombre': 'Gancho', 'texto': f'Bienvenido a esta {tipo} en {ciudad}, una propiedad pensada para disfrutarse desde el primer recorrido.', 'icono': '🏠'},
-                {'nombre': 'Fachada y entorno', 'texto': 'La primera impresión combina presencia, ubicación y una propuesta visual clara para vivir o invertir.', 'icono': '✨'},
-                {'nombre': 'Zona social', 'texto': 'Los espacios principales ofrecen amplitud, circulación cómoda y una atmósfera ideal para compartir cada día.', 'icono': '🛋️'},
-                {'nombre': 'Cocina y detalles', 'texto': 'La distribución acompaña una vida práctica, con detalles que elevan la experiencia y simplifican la rutina.', 'icono': '🍳'},
-                {'nombre': 'Habitaciones', 'texto': f'Cuenta con {recamaras or "varios"} dormitorios y {banos or "baños funcionales"}, pensados para descanso, privacidad y confort.', 'icono': '🛏️'},
-                {'nombre': 'Beneficio de inversion', 'texto': f'Por {moneda} {precio}, esta propiedad reúne ubicación, prestaciones y potencial de valorización.', 'icono': '💼'},
-                {'nombre': 'Cierre con CTA', 'texto': 'Contactanos para recibir la ficha completa y coordinar una visita personalizada.', 'icono': '📞'},
+                {'nombre': 'Gancho', 'texto': f'Bienvenido a esta {tipo} en {ciudad}, una propiedad pensada para disfrutarse desde el primer recorrido.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â '},
+                {'nombre': 'Fachada y entorno', 'texto': 'La primera impresiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n combina presencia, ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y una propuesta visual clara para vivir o invertir.', 'icono': 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¨'},
+                {'nombre': 'Zona social', 'texto': 'Los espacios principales ofrecen amplitud, circulaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³moda y una atmÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³sfera ideal para compartir cada dÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂºÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â'},
+                {'nombre': 'Cocina y detalles', 'texto': 'La distribuciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n acompaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a una vida prÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ctica, con detalles que elevan la experiencia y simplifican la rutina.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â³'},
+                {'nombre': 'Habitaciones', 'texto': f'Cuenta con {recamaras or "varios"} dormitorios y {banos or "baÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os funcionales"}, pensados para descanso, privacidad y confort.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂºÃƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â'},
+                {'nombre': 'Beneficio de inversion', 'texto': f'Por {moneda} {precio}, esta propiedad reÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºne ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, prestaciones y potencial de valorizaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢Ãƒâ€šÃ‚Â¼'},
+                {'nombre': 'Cierre con CTA', 'texto': 'Contactanos para recibir la ficha completa y coordinar una visita personalizada.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€¦Ã‚Â¾'},
             ]
 
         if is_land:
             return [
-                {'nombre': 'Gancho', 'texto': f'{tipo} en {ciudad}: una oportunidad concreta para invertir o desarrollar.', 'icono': '⚡'},
-                {'nombre': 'Potencial', 'texto': 'Superficie, ubicación y proyección se combinan para pensar un proyecto con valor futuro.', 'icono': '📐'},
-                {'nombre': 'Ubicación', 'texto': f'En {ciudad}, con entorno y conectividad para evaluar una decisión estratégica.', 'icono': '📍'},
-                {'nombre': 'CTA', 'texto': f'Valor de referencia {moneda} {precio}. Escribinos y coordinamos una visita.', 'icono': '📞'},
+                {'nombre': 'Gancho', 'texto': f'{tipo} en {ciudad}: una oportunidad concreta para invertir o desarrollar.', 'icono': 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â¡'},
+                {'nombre': 'Potencial', 'texto': 'Superficie, ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y proyecciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n se combinan para pensar un proyecto con valor futuro.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â'},
+                {'nombre': 'UbicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n', 'texto': f'En {ciudad}, con entorno y conectividad para evaluar una decisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n estratÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©gica.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â'},
+                {'nombre': 'CTA', 'texto': f'Valor de referencia {moneda} {precio}. Escribinos y coordinamos una visita.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€¦Ã‚Â¾'},
             ]
         return [
-            {'nombre': 'Gancho', 'texto': f'{tipo} en {ciudad}: una propiedad que destaca desde el primer vistazo.', 'icono': '⚡'},
-            {'nombre': 'Diferencial', 'texto': f'{recamaras or "Ambientes"} dormitorios, {banos or "baños"} y espacios pensados para vivir mejor.', 'icono': '🏠'},
-            {'nombre': 'Ubicación', 'texto': f'Ubicación práctica en {ciudad}, cerca de servicios y puntos clave.', 'icono': '📍'},
-            {'nombre': 'CTA', 'texto': f'Precio {moneda} {precio}. Consultanos hoy y coordinamos una visita.', 'icono': '📞'},
+            {'nombre': 'Gancho', 'texto': f'{tipo} en {ciudad}: una propiedad que destaca desde el primer vistazo.', 'icono': 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â¡'},
+            {'nombre': 'Diferencial', 'texto': f'{recamaras or "Ambientes"} dormitorios, {banos or "baÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os"} y espacios pensados para vivir mejor.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â '},
+            {'nombre': 'UbicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n', 'texto': f'UbicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n prÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ctica en {ciudad}, cerca de servicios y puntos clave.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â'},
+            {'nombre': 'CTA', 'texto': f'Precio {moneda} {precio}. Consultanos hoy y coordinamos una visita.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€¦Ã‚Â¾'},
         ]
 
     def _fallback_response(reason):
@@ -2776,7 +2849,7 @@ def generar_guion(request):
 
     prompt = f"""Sos copywriter inmobiliario experto en videos cortos para redes.
 Genera un guion para formato {tipo_video.upper()}.
-{'Enfocate en inversión, superficie, ubicación, potencial de desarrollo y valorización. No menciones recámaras ni ambientes si es terreno/lote.' if is_land else ''}
+{'Enfocate en inversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, superficie, ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, potencial de desarrollo y valorizaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n. No menciones recÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡maras ni ambientes si es terreno/lote.' if is_land else ''}
 
 DATOS:
 - Tipo: {tipo}
@@ -2800,7 +2873,7 @@ REGLAS ESTRICTAS (OBLIGATORIAS):
 
 FORMATO:
 {{"escenas": [
-  {{"nombre":"...","texto":"...","icono":"🎬"}}
+  {{"nombre":"...","texto":"...","icono":"ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½Ãƒâ€šÃ‚Â¬"}}
 ]}}
 """
 
@@ -2810,7 +2883,7 @@ FORMATO:
     def _clean_scene_text(text):
         cleaned = str(text or '').strip()
         cleaned = cleaned.replace('**', '')
-        cleaned = re.sub(r'^\s*[-*•]+\s*', '', cleaned)
+        cleaned = re.sub(r'^\s*[-*ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¢]+\s*', '', cleaned)
         cleaned = re.sub(r'\s+', ' ', cleaned).strip('"').strip("'").strip()
         return cleaned
 
@@ -2879,11 +2952,11 @@ FORMATO:
             if isinstance(escena, dict):
                 texto = _clean_scene_text(escena.get('texto', ''))
                 nombre = _clean_scene_text(escena.get('nombre') or f'Escena {idx}')
-                icono = _clean_scene_text(escena.get('icono') or '🎬')
+                icono = _clean_scene_text(escena.get('icono') or 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½Ãƒâ€šÃ‚Â¬')
             elif isinstance(escena, str):
                 texto = _clean_scene_text(escena)
                 nombre = f'Escena {idx}'
-                icono = '🎬'
+                icono = 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½Ãƒâ€šÃ‚Â¬'
             else:
                 continue
 
@@ -2891,7 +2964,7 @@ FORMATO:
                 normalized.append({
                     'nombre': nombre or f'Escena {idx}',
                     'texto': texto,
-                    'icono': icono[:2] if icono else '🎬',
+                    'icono': icono[:2] if icono else 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½Ãƒâ€šÃ‚Â¬',
                 })
 
         return normalized
@@ -2942,9 +3015,9 @@ Contenido original:
             future = ex.submit(call_gemini_api, prompt, agente=request.user)
             raw_response = future.result(timeout=25)
     except APIKeyUnavailableError as e:
-        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as e:
-        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        return _quota_error_response(e)
     except Exception as e:
         logger.exception("Error llamando Gemini en generar_guion")
         return _fallback_response(f'gemini_no_disponible: {str(e)[:180]}')
@@ -2969,9 +3042,9 @@ Contenido original:
                         attempts.append(str(repaired).strip())
                         continue
                 except APIKeyUnavailableError as e:
-                    return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-                except GeminiQuotaExhaustedError as e:
-                    return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                    return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+                    return _quota_error_response(e)
                 except Exception:
                     pass
             break
@@ -2990,9 +3063,9 @@ Contenido original:
                     attempts.append(str(repaired).strip())
                     continue
             except APIKeyUnavailableError as e:
-                return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-            except GeminiQuotaExhaustedError as e:
-                return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+                return _quota_error_response(e)
             except Exception:
                 pass
 
@@ -3022,11 +3095,11 @@ Contenido original:
 @permission_classes([IsAuthenticated])
 @require_active_plan
 def generar_listado(request):
-    # TODO: re-habilitar cuando el sistema de planes esté estable
+    # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
     # if not puede_generar(request.user, 'ai'):
     #     return Response({
     #         "error": "limite_alcanzado", 
-    #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+    #         "mensaje": "Superaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de tu plan. ActualizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tu suscripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.",
     #         "upgrade_url": "/precios"
     #     }, status=status.HTTP_403_FORBIDDEN)
             
@@ -3034,7 +3107,7 @@ def generar_listado(request):
     if not prompt_text:
         return Response({"error": "No prompt provided. Please pass a 'prompt' field in the JSON body."}, status=status.HTTP_400_BAD_REQUEST)
         
-    system_prompt = "Sos un as copywriter de real estate. Escribí descripciones profesionales, persuasivas y completas (listados) para propiedades en venta o alquiler en español."
+    system_prompt = "Sos un as copywriter de real estate. EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ descripciones profesionales, persuasivas y completas (listados) para propiedades en venta o alquiler en espaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±ol."
 
     try:
         result = call_groq_api(prompt_text, system_prompt=system_prompt)
@@ -3043,9 +3116,9 @@ def generar_listado(request):
         try:
             result = call_gemini_api(prompt_text, system_prompt=system_prompt, agente=request.user)
         except APIKeyUnavailableError as e_gem:
-            return Response({"error": "api_key_unavailable", "mensaje": str(e_gem)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except GeminiQuotaExhaustedError as e_gem:
-            return Response({"error": "cuota_ia_agotada", "mensaje": str(e_gem)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            return _quota_error_response(e_gem, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e_gem:
+            return _quota_error_response(e_gem)
         except Exception as e_gem:
             return Response({
                 "error": "IA no disponible",
@@ -3123,7 +3196,7 @@ class PerfilView(APIView):
             "nacionalidad": getattr(user, 'nacionalidad', None),
             "sitio_web": getattr(user, 'sitio_web', None),
             "bio": getattr(user, 'bio', None),
-            "meta_access_token": getattr(user, 'meta_access_token', None),
+            "meta_access_token_set": bool(getattr(user, 'meta_access_token', None)),
             "meta_instagram_account_id": getattr(user, 'meta_instagram_account_id', None),
             "settings": settings_data,
             "agentes_asociados": [
@@ -3207,7 +3280,7 @@ class PerfilView(APIView):
             "nacionalidad": getattr(user, 'nacionalidad', None),
             "sitio_web": getattr(user, 'sitio_web', None),
             "bio": getattr(user, 'bio', None),
-            "meta_access_token": getattr(user, 'meta_access_token', None),
+            "meta_access_token_set": bool(getattr(user, 'meta_access_token', None)),
             "meta_instagram_account_id": getattr(user, 'meta_instagram_account_id', None),
             "settings": settings_data,
             "agentes_asociados": [
@@ -3798,7 +3871,13 @@ Colores solo HEX. No uses HTML ni CSS libre.
         reply = str(parsed.get('reply') or '').strip()
         if patch:
             return {'reply': reply, 'token_patch': patch}
-    except (APIKeyUnavailableError, GeminiQuotaExhaustedError):
+    except (
+        APIKeyUnavailableError,
+        GeminiQuotaExhaustedError,
+        GeminiRateLimitedError,
+        ElevenLabsQuotaExhaustedError,
+        ElevenLabsRateLimitedError,
+    ):
         raise
     except Exception as exc:
         logger.warning("Template Studio AI patch failed: %s", exc)
@@ -3974,15 +4053,15 @@ def brand_template_draft_chat(request):
     try:
         ai_result = _template_ai_patch_from_message(message, current_tokens, base_template_id, request.user) if message else None
     except APIKeyUnavailableError as exc:
-        return Response({'error': 'api_key_unavailable', 'mensaje': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as exc:
-        return Response({'error': 'cuota_ia_agotada', 'mensaje': str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as exc:
+        return _quota_error_response(exc)
     if ai_result:
         token_patch = ai_result.get('token_patch') or {}
-        reply = ai_result.get('reply') or 'Apliqué los cambios al borrador. Revisá la preview y guardá cuando te guste.'
+        reply = ai_result.get('reply') or 'ApliquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© los cambios al borrador. RevisÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ la preview y guardÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ cuando te guste.'
     else:
         token_patch = _template_patch_from_message(message)
-        reply = 'Apliqué los cambios al borrador. Revisá la preview y guardá cuando te guste.' if message else 'Decime qué querés cambiar: colores, tipografías, logo, QR, precio, bordes o estilo visual.'
+        reply = 'ApliquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© los cambios al borrador. RevisÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ la preview y guardÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ cuando te guste.' if message else 'Decime quÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© querÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s cambiar: colores, tipografÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­as, logo, QR, precio, bordes o estilo visual.'
 
     merged_tokens = _resolve_brand_template_tokens(_deep_merge_dict(current_tokens, token_patch))
     html, preview_format, merged_tokens, dimensions = _render_brand_template_preview_html(base_template_id, merged_tokens, preview_format)
@@ -4018,14 +4097,14 @@ def brand_template_chat(request, template_id):
     try:
         ai_result = _template_ai_patch_from_message(message, current_tokens, template.base_template_id, request.user) if message else None
     except APIKeyUnavailableError as exc:
-        return Response({'error': 'api_key_unavailable', 'mensaje': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as exc:
-        return Response({'error': 'cuota_ia_agotada', 'mensaje': str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as exc:
+        return _quota_error_response(exc)
     token_patch = (ai_result or {}).get('token_patch') or _template_patch_from_message(message)
     merged_tokens = _resolve_brand_template_tokens(_deep_merge_dict(current_tokens, token_patch))
-    reply = (ai_result or {}).get('reply') or 'Apliqué los cambios al borrador. Revisá la preview y guardá la revisión si te gusta.'
+    reply = (ai_result or {}).get('reply') or 'ApliquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© los cambios al borrador. RevisÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ la preview y guardÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ la revisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n si te gusta.'
     if not message:
-        reply = 'Decime qué querés cambiar: colores, tipografías, logo, QR, precio, bordes o estilo visual.'
+        reply = 'Decime quÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© querÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s cambiar: colores, tipografÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­as, logo, QR, precio, bordes o estilo visual.'
 
     return Response({
         'reply': reply,
@@ -4106,7 +4185,7 @@ def publicar_instagram(request):
 @require_active_plan
 def publicar_redes_sociales(request):
     """
-    Endpoint unificado para publicar contenido en redes sociales vía Upload Post API.
+    Endpoint unificado para publicar contenido en redes sociales vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a Upload Post API.
     Tipos soportados: image, video, carousel, document (PDF).
     """
     try:
@@ -4187,7 +4266,7 @@ def _extract_publish_images(payload):
 @require_active_plan
 def publicar_redes_todo(request):
     """
-    Publica automáticamente en Instagram las tres piezas principales:
+    Publica automÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ticamente en Instagram las tres piezas principales:
     post de feed, story y carrusel. Cada pieza genera un request_id separado.
     """
     try:
@@ -4223,7 +4302,7 @@ def publicar_redes_todo(request):
         if missing:
             return Response({
                 "success": False,
-                "error": f"Faltan piezas para publicar: {', '.join(missing)}. Regenerá el contenido antes de publicar todo."
+                "error": f"Faltan piezas para publicar: {', '.join(missing)}. RegenerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ el contenido antes de publicar todo."
             }, status=status.HTTP_400_BAD_REQUEST)
 
         results = {}
@@ -4233,8 +4312,8 @@ def publicar_redes_todo(request):
         if carousel_original_count > MAX_INSTAGRAM_CAROUSEL_ITEMS:
             carousel_images = carousel_images[:MAX_INSTAGRAM_CAROUSEL_ITEMS]
             warnings.append(
-                f"Instagram permite hasta {MAX_INSTAGRAM_CAROUSEL_ITEMS} imágenes por carrusel; "
-                f"se publicarán las primeras {MAX_INSTAGRAM_CAROUSEL_ITEMS} de {carousel_original_count}."
+                f"Instagram permite hasta {MAX_INSTAGRAM_CAROUSEL_ITEMS} imÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡genes por carrusel; "
+                f"se publicarÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡n las primeras {MAX_INSTAGRAM_CAROUSEL_ITEMS} de {carousel_original_count}."
             )
 
         publish_jobs = [
@@ -4290,15 +4369,18 @@ def generar_carrusel(request):
     """Genera carrusel narrativo con secciones editadas y galeria limpia."""
     try:
         user = request.user
-        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # if not puede_generar(user, 'image'):
         #      return Response({
         #         "error": "limite_alcanzado", 
-        #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+        #         "mensaje": "Superaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de tu plan. ActualizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tu suscripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.",
         #         "upgrade_url": "/precios"
         #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
         listado_id_val = data.get('listado_id') or data.get('listadoId')
 
         listado_obj = None
@@ -4398,14 +4480,14 @@ def generar_carrusel(request):
     <div class="top">{logo_html}</div>
     <main>
       <div class="headline">Contacto<br>Directo</div>
-      <div class="sub">Pedí la ficha completa, disponibilidad y condiciones comerciales actualizadas.</div>
+      <div class="sub">PedÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ la ficha completa, disponibilidad y condiciones comerciales actualizadas.</div>
     </main>
     <section class="contact">
       <div class="agent">
         {agent_photo}
         <div>
           <div class="name">{safe_agent}</div>
-          <div class="role">{safe_role} · {safe_agency}</div>
+          <div class="role">{safe_role} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {safe_agency}</div>
           {contact_line}
         </div>
       </div>
@@ -4418,7 +4500,7 @@ def generar_carrusel(request):
         hook_title = str(data.get('titulo') or f"{tipo_propiedad} en {ubicacion_text}" or tipo_propiedad).strip()
         hook_subheadline = (
             f"{operacion_text} por {precio_text}. {superficie} m2, {recamaras} hab, {banos} banos. "
-            "Deslizá para ver la galería y guardá esta oportunidad."
+            "DeslizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ para ver la galerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a y guardÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ esta oportunidad."
         )
 
         slides_urls = []
@@ -4483,27 +4565,27 @@ def generar_carrusel(request):
                     indice=i + 1
                 )
                 if not url:
-                    raise Exception('Almacenamiento devolvió None')
+                    raise Exception('Almacenamiento devolviÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ None')
                 slides_urls.append(url)
             except Exception as cloud_err:
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
-        prompt_text = f"""Escribí UN SOLO caption final para Instagram Carrusel, listo para publicar.
+        prompt_text = f"""EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ UN SOLO caption final para Instagram Carrusel, listo para publicar.
 Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
-Operación y precio: {data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-Detalles: {recamaras} habitaciones, {banos} baños, {superficie} m2. Amenities/diferenciales: {amenities_text}. Contexto: {descripcion_corta}.
+OperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y precio: {data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+Detalles: {recamaras} habitaciones, {banos} baÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os, {superficie} m2. Amenities/diferenciales: {amenities_text}. Contexto: {descripcion_corta}.
 
 Requisitos obligatorios:
 - 1100 a 1900 caracteres.
-- Gancho con personalidad en la primera línea.
-- 2 a 4 párrafos cortos, con deseo, exclusividad, inversión y beneficio concreto.
+- Gancho con personalidad en la primera lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­nea.
+- 2 a 4 pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafos cortos, con deseo, exclusividad, inversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y beneficio concreto.
 - Mencionar que el carrusel muestra recorrido/fotos reales y que conviene guardar o compartir.
 - CTA claro a WhatsApp/consulta privada.
-- Cerrar con 25 a 30 hashtags variados y específicos, no genéricos repetidos.
-- No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
+- Cerrar con 25 a 30 hashtags variados y especÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ficos, no genÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©ricos repetidos.
+- No des opciones, no uses tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos como "OpciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
-        caption = smart_call(prompt_text, system_prompt="Sos un director de marketing inmobiliario digital. Devolvés solo copy final listo para publicar.", agente=user)
+        caption = smart_call(prompt_text, system_prompt="Sos un director de marketing inmobiliario digital. DevolvÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s solo copy final listo para publicar.", agente=user)
         caption = _finalize_caption_text(caption, data, formato='carrusel', prefs=content_prefs, max_chars=2200)
 
         if listado_obj:
@@ -4527,8 +4609,8 @@ Requisitos obligatorios:
             crear_notificacion(
                 user,
                 'contenido_generado',
-                'Tu carrusel ya está listo',
-                'El carrusel fue generado correctamente y ya lo tenés disponible para publicar.',
+                'Tu carrusel ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ listo',
+                'El carrusel fue generado correctamente y ya lo tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible para publicar.',
             )
 
         return Response({
@@ -4542,15 +4624,16 @@ Requisitos obligatorios:
             "gallery_omitted": gallery_omitted,
         }, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as e:
-        crear_notificacion(
-            request.user,
-            'quota_agotada',
-            'Alcanzaste el 100% de tu uso de IA',
-            'La API compartida respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
-        )
-        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        if _is_hard_quota_error(e):
+            crear_notificacion(
+                request.user,
+                'quota_agotada',
+                'Alcanzaste el 100% de tu uso de IA',
+                'La API compartida respondio limite real. Vamos a reintentar automaticamente en el proximo reset de 12 horas.'
+            )
+        return _quota_error_response(e)
     except Exception:
         logger.exception("Error generando carrusel")
         return Response({"error": "Error al generar carrusel"}, status=500)
@@ -4694,11 +4777,11 @@ class ListadosView(APIView):
         from .models import Agent
         user = Agent.objects.get(id=request.user.id)
         
-        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # puede, usados, maximo = verificar_limite_plan(user)
         # if not puede:
         #     return Response({
-        #         "error": f"Alcanzaste el límite de tu plan ({usados}/{maximo} listados este mes). Actualizá tu plan para continuar.",
+        #         "error": f"Alcanzaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de tu plan ({usados}/{maximo} listados este mes). ActualizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tu plan para continuar.",
         #         "limite_alcanzado": True,
         #         "usados": usados,
         #         "maximo": maximo
@@ -4710,10 +4793,13 @@ class ListadosView(APIView):
         payload = data.get('formData') if isinstance(data, dict) and 'formData' in data else data
         if not isinstance(payload, dict):
             payload = {}
+        blocked_media_response = _reject_blocked_media_data_uri(payload, 'formData')
+        if blocked_media_response:
+            return blocked_media_response
             
-        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # if not puede_generar(user, 'property'):
-        #     return Response({"error": "limite_alcanzado", "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción."}, status=status.HTTP_403_FORBIDDEN)
+        #     return Response({"error": "limite_alcanzado", "mensaje": "Superaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de tu plan. ActualizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tu suscripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n."}, status=status.HTTP_403_FORBIDDEN)
         
         titulo = payload.get('titulo') or f"Propiedad en {payload.get('ciudad', 'Desconocida')}"
         tipo_propiedad = payload.get('tipoPropiedad', payload.get('tipo_propiedad', ''))
@@ -4781,7 +4867,7 @@ class ListadoDetalleView(APIView):
         if listado.agente.id != request.user.id:
             return Response({"error": "No tienes permiso para eliminar este listado"}, status=status.HTTP_403_FORBIDDEN)
 
-        # ── Eliminar assets de Cloudinary antes de borrar el registro ─────────
+        # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Eliminar assets de Cloudinary antes de borrar el registro ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
         datos = listado.datos_extra or {}
         public_ids_a_eliminar = []  # [(public_id, resource_type, cloud_name, api_key, api_secret)]
 
@@ -4803,7 +4889,7 @@ class ListadoDetalleView(APIView):
         if ref:
             public_ids_a_eliminar.append(ref)
 
-        # Fotos de galería
+        # Fotos de galerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a
         for foto in (datos.get('fotosRecorrido') or datos.get('fotos_recorrido') or []):
             ref = _extraer_public_id(foto)
             if ref:
@@ -4827,7 +4913,7 @@ class ListadoDetalleView(APIView):
                     if ref:
                         public_ids_a_eliminar.append(ref)
 
-        # Eliminar en Cloudinary — fallo individual no interrumpe la operación
+        # Eliminar en Cloudinary ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â fallo individual no interrumpe la operaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n
         import cloudinary
         import cloudinary.uploader
         from api.services.almacenamiento import AlmacenamientoCloudinary
@@ -4849,7 +4935,7 @@ class ListadoDetalleView(APIView):
             except Exception as cld_err:
                 logger.warning(f"[Eliminar] No se pudo eliminar asset {pub_id} de Cloudinary: {cld_err}")
 
-        # ── Borrar el registro de PostgreSQL ──────────────────────────────────
+        # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Borrar el registro de PostgreSQL ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
         listado.delete()
         return Response({"mensaje": "Listado eliminado"}, status=status.HTTP_200_OK)
 
@@ -4868,6 +4954,9 @@ class ListadoDetalleView(APIView):
             
         data = request.data
         if 'datos' in data:
+            blocked_media_response = _reject_blocked_media_data_uri(data.get('datos'), 'datos')
+            if blocked_media_response:
+                return blocked_media_response
             datos = _merge_listing_extra_preserving_covers(listado.datos_extra, data['datos'])
             listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
         if 'video_url' in data:
@@ -4883,13 +4972,16 @@ class ListadoDetalleView(APIView):
 @permission_classes([IsAuthenticated])
 @require_active_plan
 def generar_video(request, pk):
-    """Dispara la generación de video asincronamente"""
+    """Dispara la generaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de video asincronamente"""
     try:
         from django.conf import settings
         import threading
         listado = Listado.objects.get(id=pk, agente=request.user)
         payload_datos = request.data.get('datos') if isinstance(request.data, dict) else None
         if isinstance(payload_datos, dict):
+            blocked_media_response = _reject_blocked_media_data_uri(payload_datos, 'datos')
+            if blocked_media_response:
+                return blocked_media_response
             datos = _merge_listing_extra_preserving_covers(listado.datos_extra, payload_datos)
             listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
 
@@ -4929,7 +5021,7 @@ def generar_video(request, pk):
 
         return Response({
             "status": "queued",
-            "mensaje": "El video quedó en cola y se procesará según prioridad del plan",
+            "mensaje": "El video quedÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ en cola y se procesarÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ segÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºn prioridad del plan",
             "id": pk,
             "provider": video_provider,
             "queue_position": get_video_queue_position(listado),
@@ -4940,10 +5032,10 @@ def generar_video(request, pk):
         return Response({"error": "Listado no encontrado"}, status=404)
 
 def construir_contexto_pdf(data, user, request=None):
-    # ─── Extraer hint de listado para el almacenamiento ──────────────────────
+    # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Extraer hint de listado para el almacenamiento ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     listado_id_hint  = data.get('listado_id') or data.get('listadoId')
 
-    # ─── Helpers de imágenes para WeasyPrint ─────────────────────────────
+    # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Helpers de imÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡genes para WeasyPrint ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     temp_files = []
 
     def resolver_imagen(val, tipo='portada', indice=0):
@@ -4957,6 +5049,13 @@ def construir_contexto_pdf(data, user, request=None):
             if val.startswith('http'):
                 return val
             if val.startswith('data:'):
+                if not _allow_legacy_base64_media():
+                    logger.warning(
+                        "[MEDIA] Data URL rechazada en resolver_imagen (ALLOW_LEGACY_BASE64_MEDIA=False) tipo=%s listado_id=%s",
+                        tipo,
+                        listado_id_hint,
+                    )
+                    return None
                 from api.services.almacenamiento import AlmacenamientoCloudinary
                 try:
                     res = AlmacenamientoCloudinary.guardar_foto_propiedad(
@@ -4976,7 +5075,7 @@ def construir_contexto_pdf(data, user, request=None):
 
 
 
-    # ─── Extraer campos normalizados ──────────────────────────────────────
+    # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Extraer campos normalizados ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     tipo_propiedad   = data.get('tipoPropiedad', data.get('tipo_propiedad', 'Propiedad'))
     ciudad           = data.get('ciudad', '')
     precio           = str(data.get('precio', ''))
@@ -4999,7 +5098,7 @@ def construir_contexto_pdf(data, user, request=None):
     agente_rol = branding.get('agente_rol', 'Asesor Comercial')
     agente_foto_url = branding.get('agente_foto_url', '')
 
-    # ─── Procesar imágenes (base64 Y URLs) ───────────────────────────────
+    # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Procesar imÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡genes (base64 Y URLs) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     logo_url = branding.get('logo_url', '')
 
     portada_val_raw = data.get('portadaUrl', '')
@@ -5013,7 +5112,7 @@ def construir_contexto_pdf(data, user, request=None):
         elif isinstance(f, str) and f and f != logo_url:
             fotos_limpias.append(f)
 
-    # Si la portada viene vacía o es igual al logo, usar la primera foto real de la propiedad
+    # Si la portada viene vacÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a o es igual al logo, usar la primera foto real de la propiedad
     if not portada_val_raw or portada_val_raw == logo_url:
         if fotos_limpias:
             portada_val_raw = fotos_limpias[0]
@@ -5026,7 +5125,7 @@ def construir_contexto_pdf(data, user, request=None):
         if url_firma:
             fotos_recorrido_urls.append(url_firma)
 
-    # ─── Procesar escenas si las hay ─────────────────────────────────────
+    # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Procesar escenas si las hay ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     escenas = data.get('escenas', [])
     if isinstance(escenas, list):
         escenas_procesadas = []
@@ -5037,22 +5136,22 @@ def construir_contexto_pdf(data, user, request=None):
             escenas_procesadas.append(escena)
         data['escenas'] = escenas_procesadas
 
-    # ─── Descripción IA (si no viene en el payload) ──────────────────────
+    # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ DescripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n IA (si no viene en el payload) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     descripcion = data.get('descripcion', '')
     if not descripcion:
         amenidades_str = ', '.join(amenidades) if amenidades else 'no especificadas'
-        prompt_desc = f"""Generá una descripción inmobiliaria profesional de 2 párrafos para:
+        prompt_desc = f"""GenerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ una descripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n inmobiliaria profesional de 2 pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafos para:
 {tipo_propiedad} en {operacion} en {ciudad}.
 Precio: {moneda} {precio}.
-Recámaras: {recamaras}. Baños: {banos}.
+RecÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡maras: {recamaras}. BaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os: {banos}.
 Superficie construida: {superficie_cubierta}m2.
 Terreno: {superficie_total}m2.
 Amenidades: {amenidades_str}.
 
-Párrafo 1: Descripción general de la propiedad y ubicación (3-4 oraciones).
-Párrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
-Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
-        descripcion_ia = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribís en español, con tono sofisticado y persuasivo.", agente=user)
+PÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafo 1: DescripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n general de la propiedad y ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n (3-4 oraciones).
+PÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
+Tono elegante y persuasivo. Solo los 2 pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafos, sin tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos ni bullets."""
+        descripcion_ia = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­s en espaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±ol, con tono sofisticado y persuasivo.", agente=user)
         if descripcion_ia:
             descripcion = descripcion_ia
             from .plan_utils import registrar_uso
@@ -5072,7 +5171,7 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
         moneda=moneda
     )
 
-    # ─── Construir contexto del template ─────────────────────────────────
+    # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Construir contexto del template ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     context = {
         'tipo_propiedad':     tipo_propiedad,
         'ciudad':             ciudad,
@@ -5118,16 +5217,19 @@ Tono elegante y persuasivo. Solo los 2 párrafos, sin títulos ni bullets."""
 @permission_classes([IsAuthenticated])
 @require_active_plan
 def generar_pdf(request):
-    # TODO: re-habilitar cuando el sistema de planes esté estable
+    # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
     # if not puede_generar(request.user, 'property'):
     #     return Response({
     #         "error": "limite_alcanzado",
-    #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+    #         "mensaje": "Superaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de tu plan. ActualizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tu suscripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.",
     #         "upgrade_url": "/precios"
     #     }, status=status.HTTP_403_FORBIDDEN)
 
     try:
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
         
         print(f"[PAYLOAD] portadaUrl tipo: {type(data.get('portadaUrl')).__name__} | valor: {str(data.get('portadaUrl', ''))[:80]}")
         print(f"[PAYLOAD] fotosRecorrido tipo: {type(data.get('fotosRecorrido')).__name__} | largo: {len(data.get('fotosRecorrido', []))}")
@@ -5137,7 +5239,7 @@ def generar_pdf(request):
 
         context, temp_files, listado_id_hint, tipo_propiedad, ciudad = construir_contexto_pdf(data, request.user, request)
 
-        print(f"\n[PDF] Generando para {tipo_propiedad} en {ciudad} | portada: {bool(context.get('portada_url'))} | fotos: {len(context.get('fotos_recorrido', []))} | QR: sí")
+        print(f"\n[PDF] Generando para {tipo_propiedad} en {ciudad} | portada: {bool(context.get('portada_url'))} | fotos: {len(context.get('fotos_recorrido', []))} | QR: sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­")
 
         from django.template.loader import render_to_string
         from django.http import HttpResponse
@@ -5175,19 +5277,19 @@ def generar_pdf(request):
             html_string = generar_html_gemini(context, request.user)
             
         if not html_string:
-            print("[PDF] Fallback: Gemini falló, usando render_to_string estático")
+            print("[PDF] Fallback: Gemini fallÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³, usando render_to_string estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡tico")
             html_string = render_to_string('pdf/property_brochure_html.html', context)
 
         html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
 
-        # ─── Conversión a PDF Real con Playwright ────────────────────────────
+        # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ ConversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n a PDF Real con Playwright ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
         pdf_url = None
         pdf_cover_url = None
         try:
-            print(f"[PDF] Iniciando conversión Playwright para listado {listado_id_hint}...")
+            print(f"[PDF] Iniciando conversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n Playwright para listado {listado_id_hint}...")
             pdf_bytes = render_html_to_pdf(html_string)
             if pdf_bytes:
-                print(f"[PDF] Conversión exitosa ({len(pdf_bytes)} bytes). Subiendo a Cloudinary...")
+                print(f"[PDF] ConversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n exitosa ({len(pdf_bytes)} bytes). Subiendo a Cloudinary...")
                 pdf_url = AlmacenamientoCloudinary.guardar_pdf(
                     pdf_bytes, 
                     user_id=request.user.id, 
@@ -5216,12 +5318,12 @@ def generar_pdf(request):
                     listado_obj.save(update_fields=['datos_extra'])
                     print(f"[PDF] URL guardada en DB: {pdf_url}")
             else:
-                print("[PDF] Error: Playwright devolvió bytes vacíos.")
+                print("[PDF] Error: Playwright devolviÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ bytes vacÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­os.")
         except Exception as pdf_err:
-            print(f"[PDF ERROR] Falló la conversión/subida: {pdf_err}")
+            print(f"[PDF ERROR] FallÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ la conversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n/subida: {pdf_err}")
             # El fallback es seguir adelante con el HTML solo
 
-        # ─── Limpiar archivos temporales de imágenes ─────────────────────────
+        # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Limpiar archivos temporales de imÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡genes ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
         for f in temp_files:
             try:
                 if os.path.exists(f):
@@ -5234,8 +5336,8 @@ def generar_pdf(request):
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu PDF ya está listo',
-                'La ficha PDF fue generada correctamente y ya la tenés disponible para descargar.',
+                'Tu PDF ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ listo',
+                'La ficha PDF fue generada correctamente y ya la tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible para descargar.',
             )
 
         return Response({
@@ -5250,18 +5352,16 @@ def generar_pdf(request):
         }, status=status.HTTP_200_OK)
 
     except APIKeyUnavailableError as e:
-        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as e:
-        crear_notificacion(
-            request.user,
-            'quota_agotada',
-            'Alcanzaste el 100% de tu uso de IA',
-            'La API compartida respondió límite real. Vamos a reintentar automáticamente en el próximo reset de 12 horas.'
-        )
-        return Response({
-            "error": "cuota_ia_agotada",
-            "mensaje": str(e),
-        }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        if _is_hard_quota_error(e):
+            crear_notificacion(
+                request.user,
+                'quota_agotada',
+                'Alcanzaste el 100% de tu uso de IA',
+                'La API compartida respondio limite real. Vamos a reintentar automaticamente en el proximo reset de 12 horas.'
+            )
+        return _quota_error_response(e)
 
     except Exception:
         logger.exception("Error generando PDF")
@@ -5274,15 +5374,18 @@ def generar_pdf(request):
 def generar_imagen_post(request):
     """Genera imagen POST y la sube a Cloudinary"""
     try:
-        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # if not puede_generar(request.user, 'image'):
         #     return Response({
         #         "error": "limite_alcanzado", 
-        #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+        #         "mensaje": "Superaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de tu plan. ActualizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tu suscripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.",
         #         "upgrade_url": "/precios"
         #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
         
         print(f"[POST DEBUG] agenteNombre: {data.get('agenteNombre')}")
         print(f"[POST DEBUG] agenteTelefono: {data.get('agenteTelefono')}")
@@ -5303,9 +5406,9 @@ def generar_imagen_post(request):
             "agente_email": branding.get('agente_email', ''),
             "logo_url": branding.get('logo_url', ''),
             "caracteristicas": [
-                {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
+                {"label": "mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
                 {"label": "Hab", "valor": data.get('recamaras')},
-                {"label": "Baños", "valor": data.get('banos')},
+                {"label": "BaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os", "valor": data.get('banos')},
             ],
             "agente_nombre": branding.get('agente_nombre', ''),
             "agente_telefono": branding.get('agente_telefono', ''),
@@ -5313,7 +5416,7 @@ def generar_imagen_post(request):
             "agencia_nombre": branding.get('agencia_nombre', ''),
             "agente_foto_url": branding.get('agente_foto_url', ''),
             "agente_contacto_html": branding.get('agente_contacto_html', ''),
-            "leadbook_logo_url": _get_leadbook_logo_data_url(),
+            "leadbook_logo_url": _get_leadbook_logo_url(),
             "qr_url": generar_qr_url(
                 telefono=branding.get('agente_telefono', ''),
                 tipo_propiedad=data.get('tipoPropiedad', ''),
@@ -5354,22 +5457,22 @@ def generar_imagen_post(request):
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
-        prompt_text = f"""Escribí UN SOLO caption final para Instagram Feed, listo para publicar.
+        prompt_text = f"""EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ UN SOLO caption final para Instagram Feed, listo para publicar.
 Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
-Operación y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-Datos: habitaciones {data.get('recamaras', '')}, baños {data.get('banos', '')}, superficie {data.get('superficieCubierta') or data.get('superficieTotal') or ''}. Amenities: {', '.join(data.get('amenidades', [])) if isinstance(data.get('amenidades'), list) else ''}.
+OperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+Datos: habitaciones {data.get('recamaras', '')}, baÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os {data.get('banos', '')}, superficie {data.get('superficieCubierta') or data.get('superficieTotal') or ''}. Amenities: {', '.join(data.get('amenidades', [])) if isinstance(data.get('amenidades'), list) else ''}.
 Contexto adicional: {data.get('contextoAdicional', '') or data.get('notasAdicionales', '')}.
 
 Requisitos obligatorios:
 - 1100 a 1900 caracteres.
-- Primera línea con gancho fuerte y personalidad, no genérica.
-- 2 a 4 párrafos cortos con deseo, valor comercial, inversión/estilo de vida y urgencia elegante.
+- Primera lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­nea con gancho fuerte y personalidad, no genÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©rica.
+- 2 a 4 pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafos cortos con deseo, valor comercial, inversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n/estilo de vida y urgencia elegante.
 - Incluir detalles concretos, no solo adjetivos.
 - CTA directo a WhatsApp o mensaje privado para ficha completa, disponibilidad y visita.
-- Cerrar con 25 a 30 hashtags variados, mezclando ciudad, país, tipo de propiedad, operación, inversión, lujo y real estate.
-- No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
-Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
-        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales. Devolvés solo copy final listo para publicar.", agente=request.user)
+- Cerrar con 25 a 30 hashtags variados, mezclando ciudad, paÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­s, tipo de propiedad, operaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, inversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, lujo y real estate.
+- No des opciones, no uses tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos como "OpciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n 1", no expliques el caption, no menciones que sos IA.
+MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
+        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales. DevolvÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s solo copy final listo para publicar.", agente=request.user)
         caption = _finalize_caption_text(caption, data, formato='post', prefs=content_prefs, max_chars=2200)
 
         # Intentar subir a Cloudinary via Almacenamiento
@@ -5379,13 +5482,13 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
                 image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
             if not img_url:
-                raise Exception("Cloudinary no devolvió una URL válida")
+                raise Exception("Cloudinary no devolviÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ una URL vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lida")
             public_id = img_url
         except Exception as cloud_err:
-            print(f"[Cloudinary] Error crítico subiendo imagen: {cloud_err}")
+            print(f"[Cloudinary] Error crÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tico subiendo imagen: {cloud_err}")
             return Response({
                 "error": "error_subida",
-                "mensaje": "No se pudo subir la imagen a la nube. Reintentá en unos segundos."
+                "mensaje": "No se pudo subir la imagen a la nube. ReintentÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ en unos segundos."
             }, status=500)
 
         if listado_obj:
@@ -5408,8 +5511,8 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu imagen POST ya está lista',
-                'La pieza para feed fue generada correctamente y ya la tenés disponible en tu historial.',
+                'Tu imagen POST ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ lista',
+                'La pieza para feed fue generada correctamente y ya la tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible en tu historial.',
             )
 
         return Response({
@@ -5422,9 +5525,9 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as e:
-        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        return _quota_error_response(e)
     except Exception:
         logger.exception("Error generando imagen post")
         return Response({"error": "Error al generar imagen"}, status=500)
@@ -5433,17 +5536,20 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
 @permission_classes([IsAuthenticated])
 @require_active_plan
 def generar_imagen_story(request):
-    """Genera imagen Story, la sube a Cloudinary y devuelve también Base64 como respaldo"""
+    """Genera imagen Story y la sube a Cloudinary."""
     try:
-        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # if not puede_generar(request.user, 'image'):
         #     return Response({
         #         "error": "limite_alcanzado",
-        #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+        #         "mensaje": "Superaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de tu plan. ActualizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tu suscripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.",
         #         "upgrade_url": "/precios"
         #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
         listado_id_val = data.get('listado_id') or data.get('listadoId')
 
         listado_obj = None
@@ -5493,9 +5599,9 @@ def generar_imagen_story(request):
                 moneda=data.get('moneda', ''),
             ),
             "caracteristicas": [
-                {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
+                {"label": "mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
                 {"label": "Hab", "valor": data.get('recamaras')},
-                {"label": "Baños", "valor": data.get('banos')},
+                {"label": "BaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os", "valor": data.get('banos')},
             ]
         }
         context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
@@ -5517,11 +5623,10 @@ def generar_imagen_story(request):
                 image_stream, user_id=request.user.id, listado_id=listado_id_val
             )
             if not img_url:
-                raise Exception("Cloudinary no devolvió una URL válida")
+                raise Exception("Cloudinary no devolviÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ una URL vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lida")
             public_id = img_url
-            img_base64 = None
         except Exception as cloud_err:
-            print(f"[Cloudinary] Error crítico subiendo story: {cloud_err}")
+            print(f"[Cloudinary] Error crÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tico subiendo story: {cloud_err}")
             return Response({
                 "error": "error_subida",
                 "mensaje": "No se pudo subir la historia a la nube."
@@ -5547,13 +5652,12 @@ def generar_imagen_story(request):
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu story ya está lista',
-                'La story fue generada correctamente y ya la tenés disponible para publicar.',
+                'Tu story ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ lista',
+                'La story fue generada correctamente y ya la tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible para publicar.',
             )
 
         return Response({
             "url": img_url,
-            "img_base64": img_base64,
             "public_id": public_id,
             "caption": caption,
             "texto": caption,
@@ -5562,9 +5666,9 @@ def generar_imagen_story(request):
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as e:
-        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        return _quota_error_response(e)
     except Exception:
         logger.exception("Error generando story")
         return Response({"error": "Error al generar story"}, status=500)
@@ -5577,6 +5681,9 @@ def generar_caption_story(request):
     """Genera caption para Story solo cuando el usuario lo solicita."""
     try:
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
         listado_id_val = data.get('listado_id') or data.get('listadoId')
         listado_obj = None
         if listado_id_val:
@@ -5588,16 +5695,16 @@ def generar_caption_story(request):
             selection,
         )
 
-        prompt_text = f"""Escribí UN SOLO caption opcional para Instagram Story, listo para publicar.
+        prompt_text = f"""EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ UN SOLO caption opcional para Instagram Story, listo para publicar.
 Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
-Operación y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-Máximo 650 caracteres.
-Debe tener: gancho breve, sensación premium, razón concreta para consultar, CTA a responder la story o escribir por WhatsApp y 8 a 12 hashtags.
-No des opciones, no uses títulos como "Opción 1", no expliques el caption, no menciones que sos IA.
+OperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ximo 650 caracteres.
+Debe tener: gancho breve, sensaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n premium, razÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n concreta para consultar, CTA a responder la story o escribir por WhatsApp y 8 a 12 hashtags.
+No des opciones, no uses tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos como "OpciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
         raw_caption = smart_call(
             prompt_text,
-            system_prompt="Sos un experto en marketing inmobiliario para stories. Devolvés solo copy final listo para publicar.",
+            system_prompt="Sos un experto en marketing inmobiliario para stories. DevolvÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s solo copy final listo para publicar.",
             agente=request.user,
         )
         caption = _finalize_caption_text(raw_caption, data, formato='story', prefs=content_prefs, max_chars=650)
@@ -5618,15 +5725,15 @@ No des opciones, no uses títulos como "Opción 1", no expliques el caption, no 
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu texto para story ya está listo',
-                'El caption para story fue generado correctamente y ya lo podés usar.',
+                'Tu texto para story ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ listo',
+                'El caption para story fue generado correctamente y ya lo podÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s usar.',
             )
 
         return Response({"caption": caption, "texto": caption}, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as e:
-        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        return _quota_error_response(e)
     except Exception:
         logger.exception("Error generando caption de story")
         return Response({"error": "Error al generar texto"}, status=500)
@@ -5636,15 +5743,18 @@ No des opciones, no uses títulos como "Opción 1", no expliques el caption, no 
 @require_active_plan
 def generar_email(request):
     try:
-        # TODO: re-habilitar cuando el sistema de planes esté estable
+        # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # if not puede_generar(request.user, 'ai'):
         #     return Response({
         #         "error": "limite_alcanzado", 
-        #         "mensaje": "Superaste el límite de tu plan. Actualizá tu suscripción.",
+        #         "mensaje": "Superaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de tu plan. ActualizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tu suscripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.",
         #         "upgrade_url": "/precios"
         #     }, status=status.HTTP_403_FORBIDDEN)
             
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
         listado_id_val = data.get('listado_id') or data.get('listadoId')
 
         listado_obj = None
@@ -5675,29 +5785,29 @@ Redacta el cuerpo de un email profesional para ofrecer esta propiedad a un clien
 Tipo: {data.get('tipoPropiedad', 'Propiedad')}
 Ciudad: {data.get('ciudad', '')}
 Precio: {data.get('precio', '')}
-Operación: {data.get('operacion', 'venta')}
-Recámaras: {data.get('recamaras', '')}
-Baños: {data.get('banos', '')}
+OperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n: {data.get('operacion', 'venta')}
+RecÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡maras: {data.get('recamaras', '')}
+BaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os: {data.get('banos', '')}
 Superficie: {data.get('superficieCubierta') or data.get('superficieTotal') or ''}
 Amenidades: {', '.join(data.get('amenidades', [])) if isinstance(data.get('amenidades'), list) else ''}
 Agente: {branding.get('agente_nombre', '')}
 Agencia: {branding.get('agencia_nombre', '')}
 Preferencias de copy: {_caption_preference_prompt(content_prefs)}
 
-Debe incluir: introducción, galería/recorrido, amenities, precio y una invitación general a responder el correo.
-No incluyas teléfonos, emails, WhatsApp, links, botones ni etiquetas <a>; la plantilla se encarga de los contactos reales.
+Debe incluir: introducciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, galerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a/recorrido, amenities, precio y una invitaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n general a responder el correo.
+No incluyas telÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©fonos, emails, WhatsApp, links, botones ni etiquetas <a>; la plantilla se encarga de los contactos reales.
 
-Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, sin ````json) con la siguiente estructura y nada más:
+Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente un objeto JSON vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido (sin Markdown, sin ````json) con la siguiente estructura y nada mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s:
 {{
   "asunto": "el asunto sugerido del correo",
-  "html": "el cuerpo del email en una línea, todo en codigo html inline, usando etiquetas como <br>, <strong> (sin los tags <html>, <head> o <body>, solo contenido directo)",
-  "texto_plano": "el equivalente en texto plano básico pero atractivo"
+  "html": "el cuerpo del email en una lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­nea, todo en codigo html inline, usando etiquetas como <br>, <strong> (sin los tags <html>, <head> o <body>, solo contenido directo)",
+  "texto_plano": "el equivalente en texto plano bÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡sico pero atractivo"
 }}
 """
-        json_str = smart_call(prompt_text, system_prompt="Sos un asistente técnico que solo responde en JSON.", agente=request.user)
+        json_str = smart_call(prompt_text, system_prompt="Sos un asistente tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©cnico que solo responde en JSON.", agente=request.user)
         
         if json_str is None:
-            json_str = '{"asunto": "Propiedad destacada", "html": "<div>Tenemos una excelente oportunidad para vos. Contestá a este mail para más detalles.</div>", "texto_plano": "Tenemos una excelente oportunidad para vos. Contestá a este mail para más detalles."}'
+            json_str = '{"asunto": "Propiedad destacada", "html": "<div>Tenemos una excelente oportunidad para vos. ContestÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a este mail para mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s detalles.</div>", "texto_plano": "Tenemos una excelente oportunidad para vos. ContestÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a este mail para mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s detalles."}'
             
         import json
         try:
@@ -5718,8 +5828,8 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu email ya está listo',
-                'El email inmobiliario fue generado correctamente y ya lo tenés disponible.',
+                'Tu email ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ listo',
+                'El email inmobiliario fue generado correctamente y ya lo tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible.',
             )
 
         parsed_html = _sanitize_generated_email_html(parsed.get('html', ''))
@@ -5821,9 +5931,9 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             
         return Response(parsed, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as e:
-        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        return _quota_error_response(e)
     except Exception:
         logger.exception("Error generando email")
         return Response({"error": "Error al generar email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -5974,6 +6084,34 @@ def _mp_webhook_event(request):
     return str(event_type or ''), str(action or ''), str(data_id or '')
 
 
+def _mp_webhook_signature_valid(request, data_id):
+    from django.conf import settings
+    from django.utils.crypto import constant_time_compare
+    import hashlib
+    import hmac
+
+    secret = str(getattr(settings, 'MP_WEBHOOK_SECRET', '') or '').strip()
+    if not secret:
+        return bool(getattr(settings, 'DEBUG', False))
+
+    signature_header = request.headers.get('x-signature') or request.headers.get('X-Signature') or ''
+    request_id = request.headers.get('x-request-id') or request.headers.get('X-Request-Id') or ''
+    parts = {}
+    for item in signature_header.split(','):
+        if '=' in item:
+            key, value = item.split('=', 1)
+            parts[key.strip()] = value.strip()
+
+    ts = parts.get('ts')
+    v1 = parts.get('v1')
+    if not data_id or not request_id or not ts or not v1:
+        return False
+
+    manifest = f'id:{data_id};request-id:{request_id};ts:{ts};'
+    digest = hmac.new(secret.encode('utf-8'), manifest.encode('utf-8'), hashlib.sha256).hexdigest()
+    return constant_time_compare(digest, v1)
+
+
 def _mp_fetch_payment(payment_id):
     response = requests.get(
         f'https://api.mercadopago.com/v1/payments/{payment_id}',
@@ -5988,7 +6126,7 @@ def _mp_notify(user, tipo, titulo, mensaje):
     try:
         crear_notificacion(user, tipo, titulo, mensaje)
     except Exception as exc:
-        logger.warning(f'[MP] No se pudo crear notificación: {exc}')
+        logger.warning(f'[MP] No se pudo crear notificaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n: {exc}')
 
 
 def _mp_assign_paid_extra(agent, tipo, pago):
@@ -6029,22 +6167,22 @@ def _mp_assign_paid_extra(agent, tipo, pago):
             agent,
             'api_extra_asignada',
             'Recurso adicional activado',
-            f"Se activó tu recurso adicional: {', '.join(assigned)}.",
+            f"Se activÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ tu recurso adicional: {', '.join(assigned)}.",
         )
 
     if missing:
         AdminAlert.objects.create(
             tipo='assign_failed',
             severidad='critical',
-            titulo=f'Pago aprobado sin stock extra — {agent.email}',
-            mensaje=f"Pago {pago.mp_payment_id} aprobado, pero faltó stock para: {', '.join(missing)}.",
+            titulo=f'Pago aprobado sin stock extra ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â {agent.email}',
+            mensaje=f"Pago {pago.mp_payment_id} aprobado, pero faltÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ stock para: {', '.join(missing)}.",
             related_user=agent,
         )
         _mp_notify(
             agent,
             'pago_aprobado',
-            'Pago aprobado en revisión',
-            'Recibimos tu pago. Estamos activando el recurso adicional y te avisaremos cuando esté disponible.',
+            'Pago aprobado en revisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n',
+            'Recibimos tu pago. Estamos activando el recurso adicional y te avisaremos cuando estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© disponible.',
         )
 
     return assigned, missing
@@ -6129,7 +6267,7 @@ def _mp_process_payment(payment_data):
         ])
         from .services.pool_service import assign_apis_to_agent
         assign_apis_to_agent(agent)
-        _mp_notify(agent, 'pago_aprobado', 'Plan activado', f'Tu plan {plan} ya está activo.')
+        _mp_notify(agent, 'pago_aprobado', 'Plan activado', f'Tu plan {plan} ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ activo.')
         print(f"[MP] plan payment processed id={mp_payment_id} user={agent.email} plan={plan}", flush=True)
         return {'status': 'processed', 'plan': plan}
 
@@ -6140,7 +6278,7 @@ def mp_checkout(request):
     ciclo = request.data.get('ciclo', 'monthly')
 
     if plan not in MP_PLAN_LABELS:
-        return Response({"error": "Plan inválido"}, status=400)
+        return Response({"error": "Plan invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido"}, status=400)
 
     precio = _mp_unit_price(plan)
     nombre = f"{MP_PLAN_LABELS[plan]} ({'Anual' if ciclo == 'annual' else 'Mensual'})"
@@ -6189,7 +6327,7 @@ def mp_checkout_api_extra(request):
     servicio = request.data.get('servicio', 'pack_completo')
 
     if servicio not in MP_EXTRA_ITEMS:
-        return Response({"error": "Servicio inválido"}, status=400)
+        return Response({"error": "Servicio invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido"}, status=400)
 
     tipo = f'extra_{servicio}'
     missing_stock = _mp_available_stock_missing(request.user, MP_EXTRA_SERVICES[tipo])
@@ -6207,7 +6345,7 @@ def mp_checkout_api_extra(request):
         "items": [{
             "id": tipo,
             "title": item['nombre'],
-            "description": f"Uso adicional permanente mensual de {item['nombre']}. Se suma a tu límite actual.",
+            "description": f"Uso adicional permanente mensual de {item['nombre']}. Se suma a tu lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite actual.",
             "quantity": 1,
             "currency_id": "ARS",
             "unit_price": float(precio)
@@ -6247,6 +6385,10 @@ def mp_webhook(request):
     from .models import WebhookLog
 
     topic, action, data_id = _mp_webhook_event(request)
+    if not _mp_webhook_signature_valid(request, data_id):
+        logger.warning('[MP] webhook rejected: invalid signature topic=%s action=%s data_id=%s', topic, action, data_id)
+        return Response({'error': 'invalid_signature'}, status=status.HTTP_401_UNAUTHORIZED)
+
     body_payload = request.data
     if hasattr(body_payload, 'dict'):
         body_payload = body_payload.dict()
@@ -6408,7 +6550,7 @@ def send_otp(request):
         creado_en__gte=timezone.now() - timedelta(minutes=15)
     ).count()
     if recent >= 3:
-        return Response({"error": "Demasiados intentos. Esperá 15 minutos."}, status=429)
+        return Response({"error": "Demasiados intentos. EsperÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ 15 minutos."}, status=429)
 
     code = str(secrets.randbelow(900000) + 100000)
     code_hash = hashlib.sha256(code.encode()).hexdigest()
@@ -6420,12 +6562,12 @@ def send_otp(request):
         expires_at=expires_at
     )
 
-    # En Railway no hay garantía de que exista un worker Celery consumiendo cola.
-    # Enviamos el OTP en el request para no reportar "enviado" cuando solo quedó encolado.
+    # En Railway no hay garantÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a de que exista un worker Celery consumiendo cola.
+    # Enviamos el OTP en el request para no reportar "enviado" cuando solo quedÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ encolado.
     import sys
     from django.conf import settings
 
-    # Log de diagnóstico MUY visible en Railway
+    # Log de diagnÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³stico MUY visible en Railway
     print(f"[EMAIL] Intentando enviar a {email}", flush=True)
     print(
         f"[EMAIL] DIAG backend={settings.EMAIL_BACKEND} "
@@ -6453,12 +6595,12 @@ def send_otp(request):
     if not str(sent_mode or '').startswith('sent:'):
         return Response({
             "error": "email_send_failed",
-            "message": "No se pudo enviar el codigo por email. Intentá de nuevo en unos minutos.",
+            "message": "No se pudo enviar el codigo por email. IntentÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ de nuevo en unos minutos.",
             "email": email,
             "_mode": sent_mode,
         }, status=502)
 
-    return Response({"mensaje": "Código enviado", "email": email, "_mode": sent_mode})
+    return Response({"mensaje": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo enviado", "email": email, "_mode": sent_mode})
 
 
 @api_view(['POST'])
@@ -6468,7 +6610,7 @@ def verify_otp(request):
     code = request.data.get('code', '').strip()
 
     if not email or not code:
-        return Response({"error": "Email y código requeridos"}, status=400)
+        return Response({"error": "Email y cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo requeridos"}, status=400)
 
     otp = OTPCode.objects.filter(
         email=email,
@@ -6476,13 +6618,13 @@ def verify_otp(request):
     ).order_by('-creado_en').first()
 
     if not otp:
-        return Response({"error": "Código inválido o ya utilizado"}, status=400)
+        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido o ya utilizado"}, status=400)
 
     if otp.is_expired():
-        return Response({"error": "Código expirado. Pedí uno nuevo."}, status=400)
+        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo expirado. PedÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ uno nuevo."}, status=400)
 
     if otp.attempts >= 5:
-        return Response({"error": "Demasiados intentos. Pedí un nuevo código."}, status=429)
+        return Response({"error": "Demasiados intentos. PedÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ un nuevo cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo."}, status=429)
 
     # Verificar hash ANTES de incrementar attempts para no penalizar el intento correcto
     code_hash = OTPCode.hash_code(code)
@@ -6490,9 +6632,9 @@ def verify_otp(request):
         otp.attempts += 1
         otp.save()
         intentos_restantes = 5 - otp.attempts
-        return Response({"error": f"Código incorrecto. {intentos_restantes} intentos restantes."}, status=400)
+        return Response({"error": f"CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo incorrecto. {intentos_restantes} intentos restantes."}, status=400)
 
-    # Código correcto
+    # CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo correcto
     otp.verified = True
     otp.save()
 
@@ -6503,13 +6645,26 @@ def verify_otp(request):
 @permission_classes([AllowAny])
 def recuperar_password(request):
     from .models import Agent
+    from django.conf import settings
+    from datetime import timedelta
+    from django.utils import timezone
     email = request.data.get('email', '').strip().lower()
     if not email:
         return Response({"error": "Email requerido"}, status=400)
+
+    generic_response = {"mensaje": "Si el email existe, te enviamos un cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo de recuperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n."}
+
+    recent = OTPCode.objects.filter(
+        email=email,
+        tipo="recuperacion",
+        creado_en__gte=timezone.now() - timedelta(minutes=15)
+    ).count()
+    if recent >= 3:
+        return Response({"error": "Demasiados intentos. EsperÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ 15 minutos."}, status=429)
     
     user = Agent.objects.filter(email=email).first()
     if not user:
-        return Response({"error": "No encontramos una cuenta con ese email"}, status=404)
+        return Response(generic_response, status=200)
     
     import secrets
     import hashlib
@@ -6527,7 +6682,7 @@ def recuperar_password(request):
         tipo="recuperacion"
     )
 
-    # Envío síncrono: no dependemos de worker Celery para entregar el código.
+    # EnvÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­o sÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ncrono: no dependemos de worker Celery para entregar el cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo.
     sent_mode = None
     try:
         from .tasks import send_otp_email_async
@@ -6540,12 +6695,12 @@ def recuperar_password(request):
     if not str(sent_mode or '').startswith('sent:'):
         return Response({
             "error": "email_send_failed",
-            "message": "No se pudo enviar el codigo por email. Intentá de nuevo en unos minutos.",
-            "email": email,
-            "_mode": sent_mode,
+            "message": "No se pudo enviar el codigo por email. IntentÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ de nuevo en unos minutos.",
+            "email": email if settings.DEBUG else None,
+            "_mode": sent_mode if settings.DEBUG else None,
         }, status=502)
 
-    return Response({"mensaje": "Código enviado", "email": email, "_mode": sent_mode}, status=200)
+    return Response(generic_response, status=200)
 
 
 @api_view(['POST'])
@@ -6566,15 +6721,23 @@ def confirmar_recuperacion(request):
     ).order_by('-creado_en').first()
     
     if not otp:
-        return Response({"error": "Código inválido"}, status=400)
+        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido"}, status=400)
     if otp.is_expired():
-        return Response({"error": "Código expirado"}, status=400)
+        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo expirado"}, status=400)
     if not otp.is_valid(code):
-        return Response({"error": "Código incorrecto"}, status=400)
-    
+        otp.attempts += 1
+        otp.save(update_fields=['attempts'])
+        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo incorrecto"}, status=400)
+
     user = Agent.objects.filter(email=email).first()
     if not user:
-        return Response({"error": "Usuario no encontrado"}, status=404)
+        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido"}, status=400)
+
+    try:
+        from django.contrib.auth.password_validation import validate_password
+        validate_password(nueva_password, user=user)
+    except Exception as exc:
+        return Response({"error": "password_insegura", "detalle": list(getattr(exc, 'messages', [str(exc)]))}, status=400)
     
     user.set_password(nueva_password)
     user.save()
@@ -6582,30 +6745,30 @@ def confirmar_recuperacion(request):
     otp.verified = True
     otp.save()
     
-    return Response({"mensaje": "Contraseña actualizada correctamente"}, status=200)
+    return Response({"mensaje": "ContraseÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a actualizada correctamente"}, status=200)
 
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def obtener_terminos(request):
-    """Devuelve los Términos y Condiciones vigentes"""
+    """Devuelve los TÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©rminos y Condiciones vigentes"""
     try:
         terminos = TerminosCondiciones.objects.filter(activo=True).latest('fecha_actualizacion')
         serializer = TerminosCondicionesSerializer(terminos)
         return Response(serializer.data)
     except TerminosCondiciones.DoesNotExist:
-        return Response({"error": "Términos no disponibles"}, status=404)
+        return Response({"error": "TÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©rminos no disponibles"}, status=404)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def obtener_politica_privacidad(request):
-    """Devuelve la Política de Privacidad vigente"""
+    """Devuelve la PolÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tica de Privacidad vigente"""
     try:
         politica = PoliticaPrivacidad.objects.filter(activo=True).latest('fecha_actualizacion')
         serializer = PoliticaPrivacidadSerializer(politica)
         return Response(serializer.data)
     except PoliticaPrivacidad.DoesNotExist:
-        return Response({"error": "Política de privacidad no disponible"}, status=404)
+        return Response({"error": "PolÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tica de privacidad no disponible"}, status=404)
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
@@ -6740,17 +6903,23 @@ from datetime import timedelta
 ADMIN_KEY = config('ADMIN_KEY', default='')
 
 def check_admin(request):
+    from django.conf import settings
     from django.utils.crypto import constant_time_compare
     supplied_key = request.headers.get('X-Admin-Key', '')
-    if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
+    if getattr(settings, 'ALLOW_ADMIN_KEY_AUTH', False) and ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
         return True
     return bool(request.user and request.user.is_authenticated and request.user.is_staff)
+
+
+def debug_endpoints_enabled():
+    from django.conf import settings
+    return bool(getattr(settings, 'ALLOW_DEBUG_ENDPOINTS', False))
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def admin_stats(request):
     """
-    Dashboard de administración: Métricas globales y estado detallado de las APIs asignadas.
+    Dashboard de administraciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n: MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©tricas globales y estado detallado de las APIs asignadas.
     """
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
@@ -6861,7 +7030,7 @@ def admin_cambiar_plan(request, user_id):
     planes_validos = ['starter','pro','scale','business']
     
     if nuevo_plan not in planes_validos:
-        return Response({"error": "Plan inválido"}, status=400)
+        return Response({"error": "Plan invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido"}, status=400)
     
     from .models import Agent
     try:
@@ -7131,7 +7300,7 @@ def conexiones_init(request):
         # 1. Key del bundle/pool del usuario
         api_key = get_api_key(user, 'uploadpost')
         
-        # 2. Fallback: key global del .env de producción
+        # 2. Fallback: key global del .env de producciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n
         if not api_key:
             api_key = (
                 getattr(settings, 'UPLOADPOST_API_KEY', '') or
@@ -7145,7 +7314,7 @@ def conexiones_init(request):
             print(f"[conexiones_init] Sin key uploadpost para {user.email}. Plan={getattr(user, 'plan_nombre', 'starter')}", flush=True)
             return Response({
                 "success": False,
-                "error": "Tu cuenta no tiene una API de publicación asignada. Contactá a soporte."
+                "error": "Tu cuenta no tiene una API de publicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n asignada. ContactÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a soporte."
             }, status=400)
         
         headers = {
@@ -7167,7 +7336,7 @@ def conexiones_init(request):
             if "PROFILE_LIMIT_REACHED" in err_text or "limit of 2 profiles" in err_text:
                 return Response({
                     "success": False,
-                    "error": "Alcanzaste el límite de cuentas vinculadas de tu plan actual. Para conectar más redes sociales, por favor mejorá a un Plan Pro."
+                    "error": "Alcanzaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de cuentas vinculadas de tu plan actual. Para conectar mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s redes sociales, por favor mejorÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a un Plan Pro."
                 }, status=400)
                 
             return Response({
@@ -7181,11 +7350,11 @@ def conexiones_init(request):
             "username": username,
             "redirect_url": f"{settings.FRONTEND_URL}/conexiones",
             "logo_image": "https://res.cloudinary.com/dpqgbgilw/image/upload/leadbook_logo",
-            "connect_title": "Conectá tus redes sociales",
-            "connect_description": "Conectá tus cuentas para publicar automáticamente con LeadBook",
+            "connect_title": "ConectÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tus redes sociales",
+            "connect_description": "ConectÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tus cuentas para publicar automÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ticamente con LeadBook",
             "show_calendar": True
         }
-        # Si viene una plataforma específica, pre-seleccionarla en el wizard de UploadPost
+        # Si viene una plataforma especÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­fica, pre-seleccionarla en el wizard de UploadPost
         if platform:
             jwt_payload["platform"] = platform
             
@@ -7221,7 +7390,7 @@ def conexiones_init(request):
 @permission_classes([IsAuthenticated])
 def conexiones_eliminar(request):
     """
-    Elimina el perfil del usuario en UploadPost (desvincula todas las redes y libera el límite de la API).
+    Elimina el perfil del usuario en UploadPost (desvincula todas las redes y libera el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de la API).
     """
     try:
         from api.pool_manager import get_api_key
@@ -7230,7 +7399,7 @@ def conexiones_eliminar(request):
         api_key = get_api_key(user, 'uploadpost')
         
         if not api_key:
-            return Response({"success": False, "error": "No se encontró API Key vinculada para este usuario"}, status=400)
+            return Response({"success": False, "error": "No se encontrÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ API Key vinculada para este usuario"}, status=400)
             
         headers = {
             "Authorization": f"Apikey {api_key}",
@@ -7245,7 +7414,7 @@ def conexiones_eliminar(request):
         )
         
         if resp.status_code in [200, 204]:
-            return Response({"success": True, "message": "Perfil eliminado. Podés volver a vincular tus cuentas."})
+            return Response({"success": True, "message": "Perfil eliminado. PodÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s volver a vincular tus cuentas."})
         else:
             return Response({"success": False, "error": f"Error al eliminar: {resp.text[:200]}"}, status=400)
             
@@ -7257,7 +7426,7 @@ def conexiones_eliminar(request):
 def conexiones_estado(request):
     """
     Devuelve las redes sociales conectadas del usuario consultando UploadPost.
-    Siempre devuelve JSON — nunca HTML.
+    Siempre devuelve JSON ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â nunca HTML.
     """
     import traceback, sys, os
     try:
@@ -7290,14 +7459,14 @@ def conexiones_estado(request):
             "Content-Type": "application/json"
         }
 
-        # ESTRATEGIA 1: Endpoint específico del usuario (más preciso)
+        # ESTRATEGIA 1: Endpoint especÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­fico del usuario (mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s preciso)
         perfil = None
         resp_individual = http_requests.get(
             f"https://api.upload-post.com/api/uploadposts/users/{username}",
             headers=headers,
             timeout=10
         )
-        print(f"[conexiones_estado] GET /users/{username} → status={resp_individual.status_code}", flush=True)
+        print(f"[conexiones_estado] GET /users/{username} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ status={resp_individual.status_code}", flush=True)
 
         if resp_individual.status_code == 200:
             try:
@@ -7313,7 +7482,7 @@ def conexiones_estado(request):
                 headers=headers,
                 timeout=10
             )
-            print(f"[conexiones_estado] GET /users list → status={resp_list.status_code}", flush=True)
+            print(f"[conexiones_estado] GET /users list ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ status={resp_list.status_code}", flush=True)
             if resp_list.status_code == 200:
                 try:
                     raw = resp_list.json()
@@ -7350,13 +7519,13 @@ def conexiones_estado(request):
         # Iterar sobre las claves del diccionario (ej: "instagram", "tiktok")
         if isinstance(social_accounts, dict):
             for platform, data in social_accounts.items():
-                # Si el valor está vacío (ej: ""), significa que no está conectado
+                # Si el valor estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ vacÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­o (ej: ""), significa que no estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ conectado
                 if not data:
                     continue
                     
                 # Si es un dict, extraer la info
                 if isinstance(data, dict):
-                    # Ignorar si requiere reconexión
+                    # Ignorar si requiere reconexiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n
                     if data.get("reauth_required") is True:
                         continue
                         
@@ -7366,7 +7535,7 @@ def conexiones_estado(request):
                         "status": "connected"
                     })
                 elif isinstance(data, str) and data:
-                    # Por si acaso devuelve un string no vacío
+                    # Por si acaso devuelve un string no vacÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­o
                     redes_normalizadas.append({
                         "platform": platform,
                         "username": data,
@@ -7395,7 +7564,7 @@ def conexiones_estado(request):
 
 
 # ============================================================
-# DEBUG / DIAGNÓSTICO — endpoints seguros (no exponen secretos)
+# DEBUG / DIAGNÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œSTICO ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â endpoints seguros (no exponen secretos)
 # Uso: curl https://tuback.up.railway.app/api/v1/debug/email-check/
 # ============================================================
 
@@ -7404,8 +7573,10 @@ def conexiones_estado(request):
 def debug_uploadpost(request, username):
     """
     Endpoint temporal para ver la estructura exacta que devuelve UploadPost
-    para un usuario específico.
+    para un usuario especÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­fico.
     """
+    if not debug_endpoints_enabled():
+        return Response({"error": "Not found"}, status=404)
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
     import os
@@ -7467,15 +7638,17 @@ def debug_email_check(request):
     """
     Devuelve metadata de la config de email sin exponer la password.
     Sirve para verificar si las env vars GMAIL_USER y GMAIL_APP_PASSWORD
-    están cargadas en Railway (o cualquier entorno).
+    estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡n cargadas en Railway (o cualquier entorno).
     """
+    if not debug_endpoints_enabled():
+        return Response({"error": "Not found"}, status=404)
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
     from django.conf import settings
     host_user = getattr(settings, 'EMAIL_HOST_USER', '') or ''
     host_pass = getattr(settings, 'EMAIL_HOST_PASSWORD', '') or ''
 
-    # Enmascarar el user (mostrar solo primeros/últimos chars)
+    # Enmascarar el user (mostrar solo primeros/ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºltimos chars)
     def mask(s, head=3, tail=3):
         if not s:
             return None
@@ -7525,10 +7698,12 @@ def debug_email_check(request):
 @permission_classes([AllowAny])
 def debug_email_send(request):
     """
-    Dispara un envío SMTP REAL y SINCRÓNICO de prueba.
-    Body JSON: {"email": "destino@mail.com"}  (acepta también "to")
-    Endpoint protegido por staff o X-Admin-Key.
+    Dispara un envÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­o SMTP REAL y SINCRÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œNICO de prueba.
+    Body JSON: {"email": "destino@mail.com"}  (acepta tambiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©n "to")
+    Endpoint protegido por usuario staff.
     """
+    if not debug_endpoints_enabled():
+        return Response({"error": "Not found"}, status=404)
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
     import socket, smtplib, ssl, time
@@ -7540,7 +7715,7 @@ def debug_email_send(request):
     if not destino:
         return Response({"error": "falta campo 'email' con el email destino"}, status=400)
 
-    # Provider opcional — si se pasa "resend", probamos Resend sin tocar env vars
+    # Provider opcional ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â si se pasa "resend", probamos Resend sin tocar env vars
     forced_provider = (request.data.get('provider') or '').strip().lower()
     if forced_provider == 'resend':
         import os
@@ -7551,12 +7726,12 @@ def debug_email_send(request):
                 "ok": False, "stage": "import-resend",
                 "error_type": type(e_imp).__name__, "error": str(e_imp),
             }, status=500)
-        print(f"[DEBUG-EMAIL] Forzando envío via RESEND a {destino}", flush=True)
-        subject = "LeadBook — prueba de email (Resend, debug)"
+        print(f"[DEBUG-EMAIL] Forzando envÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­o via RESEND a {destino}", flush=True)
+        subject = "LeadBook ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â prueba de email (Resend, debug)"
         text_body = "Este es un email de prueba enviado por /api/v1/debug/email-send/ (provider=resend)."
         html_body = (
             "<p>Este es un email de prueba enviado por <code>/api/v1/debug/email-send/</code> "
-            "(<b>provider=resend</b>).</p><p>Si lo estás leyendo, Resend funciona desde este servidor.</p>"
+            "(<b>provider=resend</b>).</p><p>Si lo estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s leyendo, Resend funciona desde este servidor.</p>"
         )
         try:
             ok, detalle = _send_via_resend(destino, subject, text_body, html_body)
@@ -7598,14 +7773,14 @@ def debug_email_send(request):
         "from": from_addr,
     }
 
-    print(f"[DEBUG-EMAIL] Disparando envío de test a {destino} — host={host}:{port} ssl={use_ssl} tls={use_tls}", flush=True)
+    print(f"[DEBUG-EMAIL] Disparando envÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­o de test a {destino} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â host={host}:{port} ssl={use_ssl} tls={use_tls}", flush=True)
 
     # Guardas tempranas
     if not host_user or not host_pass:
         return Response({
             "ok": False,
             "stage": "env-vars",
-            "error": "GMAIL_USER o GMAIL_APP_PASSWORD no están cargadas en el entorno",
+            "error": "GMAIL_USER o GMAIL_APP_PASSWORD no estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡n cargadas en el entorno",
             **info,
         }, status=500)
 
@@ -7622,7 +7797,7 @@ def debug_email_send(request):
             "stage": "tcp-connect",
             "error_type": type(e_tcp).__name__,
             "error": str(e_tcp),
-            "hint": "Railway no puede abrir el puerto SMTP. Gmail en la nube suele fallar aquí → migrar a Resend.",
+            "hint": "Railway no puede abrir el puerto SMTP. Gmail en la nube suele fallar aquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ migrar a Resend.",
             **info,
         }, status=500)
 
@@ -7650,7 +7825,7 @@ def debug_email_send(request):
             "error_type": "SMTPAuthenticationError",
             "smtp_code": e_auth.smtp_code,
             "smtp_error": (e_auth.smtp_error or b"").decode(errors="ignore"),
-            "hint": "Gmail rechazó la autenticación. Si el app password es correcto y el usuario tiene 2FA, probablemente Google está bloqueando IPs de Railway → migrar a Resend.",
+            "hint": "Gmail rechazÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ la autenticaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n. Si el app password es correcto y el usuario tiene 2FA, probablemente Google estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ bloqueando IPs de Railway ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ migrar a Resend.",
             "debug": smtp_debug,
             **info,
         }, status=500)
@@ -7661,12 +7836,12 @@ def debug_email_send(request):
             "stage": "smtp-handshake",
             "error_type": type(e_smtp).__name__,
             "error": str(e_smtp),
-            "hint": "Falló el handshake SSL/TLS con Gmail. Probablemente Railway bloquea → migrar a Resend.",
+            "hint": "FallÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ el handshake SSL/TLS con Gmail. Probablemente Railway bloquea ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ migrar a Resend.",
             "debug": smtp_debug,
             **info,
         }, status=500)
 
-    # 3) Si llegamos acá, SMTP está OK. Enviamos el mail real.
+    # 3) Si llegamos acÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡, SMTP estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ OK. Enviamos el mail real.
     try:
         connection = get_connection(
             backend="django.core.mail.backends.smtp.EmailBackend",
@@ -7677,15 +7852,15 @@ def debug_email_send(request):
             timeout=30,
         )
         msg = EmailMultiAlternatives(
-            subject="LeadBook — prueba de email (debug)",
-            body="Este es un email de prueba enviado por /api/v1/debug/email-send/.\nSi lo estás leyendo, SMTP funciona desde este servidor.",
+            subject="LeadBook ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â prueba de email (debug)",
+            body="Este es un email de prueba enviado por /api/v1/debug/email-send/.\nSi lo estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s leyendo, SMTP funciona desde este servidor.",
             from_email=from_addr,
             to=[destino],
             connection=connection,
         )
         msg.attach_alternative(
             "<p>Este es un email de prueba enviado por <code>/api/v1/debug/email-send/</code>.</p>"
-            "<p>Si lo estás leyendo, <b>SMTP funciona</b> desde este servidor.</p>",
+            "<p>Si lo estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s leyendo, <b>SMTP funciona</b> desde este servidor.</p>",
             "text/html",
         )
         sent = msg.send(fail_silently=False)
@@ -7695,7 +7870,7 @@ def debug_email_send(request):
             "sent_count": sent,
             "debug": smtp_debug,
             **info,
-            "nota": "Si 'sent_count'=1 Gmail aceptó el mensaje. Revisá inbox y spam del destino.",
+            "nota": "Si 'sent_count'=1 Gmail aceptÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ el mensaje. RevisÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ inbox y spam del destino.",
         })
     except Exception as e_send:
         logger.exception("Error enviando email debug")
@@ -7739,12 +7914,12 @@ def proxy_pdf_view(request, listado_id):
         if not _is_safe_remote_asset_url(pdf_url, allowed_hosts=['res.cloudinary.com']):
             return Response({"error": "URL de PDF no permitida"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Petición interna a Cloudinary
+        # PeticiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n interna a Cloudinary
         response = requests.get(pdf_url, stream=True, timeout=30, allow_redirects=False)
         
         if response.status_code != 200:
             return Response({
-                "error": f"Cloudinary respondió con error {response.status_code}"
+                "error": f"Cloudinary respondiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ con error {response.status_code}"
             }, status=status.HTTP_502_BAD_GATEWAY)
 
         django_response = StreamingHttpResponse(
@@ -7937,7 +8112,7 @@ def export_listado_zip(request, pk):
 @permission_classes([IsAuthenticated])
 def proxy_pdf_thumbnail_view(request, listado_id):
     """
-    Genera una vista previa (imagen) de la primera página del PDF vía proxy.
+    Genera una vista previa (imagen) de la primera pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡gina del PDF vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a proxy.
     """
     try:
         from .models import Listado
@@ -8009,8 +8184,11 @@ def generar_html(request, pk):
 @permission_classes([IsAuthenticated])
 @require_active_plan
 def generar_escena(request):
-    """Regenera el texto de UNA escena específica usando el mismo tono/voz del usuario."""
+    """Regenera el texto de UNA escena especÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­fica usando el mismo tono/voz del usuario."""
     data = request.data
+    blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+    if blocked_media_response:
+        return blocked_media_response
     nombre_escena = data.get('nombre_escena', 'Escena')
     indice_escena = data.get('indice_escena', 0)
     total_escenas = data.get('total_escenas', 4)
@@ -8028,10 +8206,10 @@ def generar_escena(request):
     tono_map = {
         'profesional': 'profesional y formal, transmite confianza',
         'lujo': 'de lujo y exclusividad, sofisticado, usa vocabulario refinado',
-        'energetico': 'dinámico y energético, usa frases cortas e impactantes',
+        'energetico': 'dinÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡mico y energÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©tico, usa frases cortas e impactantes',
     }
     tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
-    narrador = 'firme, directo, con autoridad' if voz == 'masculina' else 'cálido, cercano, invitador'
+    narrador = 'firme, directo, con autoridad' if voz == 'masculina' else 'cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido, cercano, invitador'
     tipo_video_raw = str(tipo_video or '').strip().lower()
     tipo_video_norm = {
         'tour_narrado': 'tour',
@@ -8046,7 +8224,7 @@ def generar_escena(request):
     contexto_extra = f"\nEnfoque adicional: {contexto_adicional}" if contexto_adicional else ''
 
     prompt = f"""Sos un copywriter inmobiliario experto.
-Generá SOLO el texto para la escena "{nombre_escena}" (escena {indice_escena + 1} de {total_escenas}) de un video inmobiliario.
+GenerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ SOLO el texto para la escena "{nombre_escena}" (escena {indice_escena + 1} de {total_escenas}) de un video inmobiliario.
 
 PROPIEDAD: {tipo} en {operacion} | {ciudad} | {moneda} {precio}
 TONO: {tono_instrucciones}
@@ -8054,7 +8232,7 @@ NARRADOR: {narrador}{contexto_extra}
 
 REQUISITOS:
 - Entre {reglas_palabras['min']} y {reglas_palabras['max']} palabras
-- El texto es para narración en voz en off, debe sonar natural al hablar
+- El texto es para narraciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n en voz en off, debe sonar natural al hablar
 - No pongas el nombre de la escena, solo el texto a narrar
 - Responde SOLO el texto, sin JSON, sin comillas, sin explicaciones"""
 
@@ -8064,9 +8242,9 @@ REQUISITOS:
             return Response({"error": "No se pudo generar texto"}, status=503)
         return Response({"texto": result.strip()})
     except APIKeyUnavailableError as e:
-        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-    except GeminiQuotaExhaustedError as e:
-        return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        return _quota_error_response(e)
     except Exception:
         logger.exception("Error generando texto de escena")
         return Response({"error": "Error al generar texto"}, status=500)
@@ -8076,14 +8254,17 @@ REQUISITOS:
 @require_active_plan
 def upload_fotos_listado(request):
     """
-    Sube fotos de propiedad (portada y galería) a Cloudinary a través del pool del backend.
+    Sube fotos de propiedad (portada y galerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a) a Cloudinary a travÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s del pool del backend.
     """
     data = request.data
-    portada_b64 = data.get('portadaUrl')
-    fotos_b64 = data.get('fotosRecorrido', [])
-    listado_id = data.get('listado_id')
-    if not isinstance(fotos_b64, list):
-        fotos_b64 = [fotos_b64] if fotos_b64 else []
+    portada_input = data.get('portadaUrl')
+    fotos_input = data.get('fotosRecorrido', [])
+    listado_id = data.get('listado_id') or data.get('listadoId')
+    portada_file = request.FILES.get('portada_file')
+    fotos_files = request.FILES.getlist('fotos_files')
+    allow_legacy_base64 = _allow_legacy_base64_media()
+    if not isinstance(fotos_input, list):
+        fotos_input = [fotos_input] if fotos_input else []
 
     user_id = request.user.id
     response_data = {
@@ -8114,8 +8295,23 @@ def upload_fotos_listado(request):
             media['order'] = order
             return media
 
+        def upload_file(uploaded_file, role, order, indice):
+            logger.info("[UPLOAD] Subiendo archivo %s order=%s listado_id=%s", role, order, listado_id)
+            uploaded = AlmacenamientoCloudinary.guardar_foto_propiedad_file(
+                uploaded_file,
+                user_id=user_id,
+                listado_id=listado_id,
+                tipo_foto=role,
+                indice=indice,
+            )
+            if not uploaded:
+                return None, "No se pudo subir una foto a Cloudinary."
+            return complete_media_ref(uploaded, role, order), None
+
         def normalize_media(item, role, order):
             if item and isinstance(item, str) and item.startswith('data:image'):
+                if not allow_legacy_base64:
+                    return None, "Formato base64 no permitido. Subi archivo o URL remota."
                 logger.info("[UPLOAD] Subiendo foto %s order=%s listado_id=%s", role, order, listado_id)
                 uploaded = AlmacenamientoCloudinary.guardar_foto_propiedad(
                     item,
@@ -8147,10 +8343,10 @@ def upload_fotos_listado(request):
             return None, None
 
         raw_items = []
-        if portada_b64:
-            raw_items.append(portada_b64)
-        portada_identity = media_identity(portada_b64)
-        for foto in fotos_b64:
+        if portada_input:
+            raw_items.append(portada_input)
+        portada_identity = media_identity(portada_input)
+        for foto in fotos_input:
             if not foto:
                 continue
             if portada_identity and media_identity(foto) == portada_identity:
@@ -8158,12 +8354,36 @@ def upload_fotos_listado(request):
             raw_items.append(foto)
 
         normalized = []
+        if portada_file:
+            media, error_msg = upload_file(portada_file, 'portada', 0, 0)
+            if error_msg:
+                return Response({"error": "error_subida", "mensaje": error_msg}, status=502)
+            if media:
+                normalized.append(media)
+
+        for idx, file_item in enumerate(fotos_files):
+            role = 'portada' if not normalized else 'galeria'
+            order = 0 if role == 'portada' else len(normalized)
+            media, error_msg = upload_file(file_item, role, order, idx)
+            if error_msg:
+                return Response({"error": "error_subida", "mensaje": error_msg}, status=502)
+            if media:
+                normalized.append(media)
+
         for item in raw_items:
             role = 'portada' if not normalized else 'galeria'
             order = 0 if role == 'portada' else len(normalized)
             media, error_msg = normalize_media(item, role, order)
             if error_msg:
-                return Response({"error": "error_subida", "mensaje": error_msg}, status=502)
+                status_code = status.HTTP_400_BAD_REQUEST if 'base64' in error_msg.lower() else 502
+                return Response(
+                    {
+                        "error": "invalid_media",
+                        "mensaje": error_msg,
+                        "allow_legacy_base64_media": allow_legacy_base64,
+                    },
+                    status=status_code,
+                )
             if media:
                 normalized.append(media)
 
@@ -8182,41 +8402,7 @@ def upload_fotos_listado(request):
                 }
                 listado.datos_extra = _sanitize_listing_payload_for_storage(datos_extra)
                 listado.save(update_fields=['datos_extra', 'updated_at'])
-
         return Response(response_data)
-        
-        if portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('data:image'):
-            print(f"[UPLOAD] portada_b64 tipo: {type(portada_b64).__name__}, es base64: {bool(portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('data:image'))}")
-            obj = AlmacenamientoCloudinary.guardar_foto_propiedad(portada_b64, user_id, listado_id, tipo_foto='portada')
-            print(f"[UPLOAD] get_mejor_cuenta resultado: {AlmacenamientoCloudinary.get_mejor_cuenta()}")
-            print(f"[UPLOAD] resultado upload portada: {obj}")
-            if obj:
-                response_data['portadaUrl'] = obj
-            else:
-                return Response({"error": "error_subida", "mensaje": "No se pudo subir la portada a la nube."}, status=502)
-        elif isinstance(portada_b64, dict):
-            response_data['portadaUrl'] = portada_b64
-        elif portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('http'):
-            if not _is_safe_remote_asset_url(portada_b64):
-                return Response({"error": "URL de portada no permitida"}, status=400)
-            response_data['portadaUrl'] = portada_b64
-            
-        for i, foto in enumerate(fotos_b64):
-            if foto and isinstance(foto, str) and foto.startswith('data:image'):
-                obj = AlmacenamientoCloudinary.guardar_foto_propiedad(foto, user_id, listado_id, tipo_foto='galeria', indice=i)
-                if obj:
-                    response_data['fotosRecorrido'].append(obj)
-                else:
-                    return Response({"error": "error_subida", "mensaje": "No se pudo subir una foto de la galería a la nube."}, status=502)
-            elif isinstance(foto, dict):
-                response_data['fotosRecorrido'].append(foto)
-            elif foto and isinstance(foto, str) and foto.startswith('http'):
-                if not _is_safe_remote_asset_url(foto):
-                    return Response({"error": "URL de foto no permitida"}, status=400)
-                response_data['fotosRecorrido'].append(foto)
-
-        return Response(response_data)
-        
     except Exception:
         logger.exception("Error al subir fotos de listado")
         return Response({"error": "Error al subir fotos"}, status=500)
@@ -8291,19 +8477,21 @@ def estado_cuota_ia(request):
 @permission_classes([AllowAny])
 def debug_quota(request):
     from .models import UserAPIAssignment, UserAPIQuota
+    if not debug_endpoints_enabled():
+        return Response({"error": "Not found"}, status=404)
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
     
     if request.method == 'POST':
         from .models import UserAPIQuota
-        # Desbloquear todos los usuarios cuyo uso actual es menor al límite
+        # Desbloquear todos los usuarios cuyo uso actual es menor al lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite
         desbloqueados = 0
         for q in UserAPIQuota.objects.filter(is_blocked=True):
             if q.requests_today < q.user_daily_limit:
                 q.is_blocked = False
                 q.save()
                 desbloqueados += 1
-        # Corregir límites stale según plan + extras activos.
+        # Corregir lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mites stale segÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºn plan + extras activos.
         for q in UserAPIQuota.objects.select_related('user', 'servicio'):
             q.recalcular_limite(plan=q.user.plan_nombre)
         

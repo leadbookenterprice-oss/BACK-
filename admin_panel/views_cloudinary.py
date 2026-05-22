@@ -5,13 +5,14 @@ from rest_framework.permissions import AllowAny
 from api.models import APIKey, Servicio, UserAPIAssignment
 from api.services.pool_service import APIPoolService
 from decouple import config
+from django.conf import settings
 from django.utils.crypto import constant_time_compare
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
 
 def _check_admin(request):
     supplied_key = request.headers.get('X-Admin-Key', '')
-    if ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
+    if getattr(settings, 'ALLOW_ADMIN_KEY_AUTH', False) and ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
         return True
     return request.user and request.user.is_authenticated and request.user.is_staff
 

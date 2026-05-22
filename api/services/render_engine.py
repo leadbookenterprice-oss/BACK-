@@ -1,10 +1,50 @@
 import io
+import ipaddress
 import logging
 import os
 import json
+import socket
+from urllib.parse import urlparse
+from django.conf import settings
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 logger = logging.getLogger(__name__)
+
+
+def _render_allowed_hosts():
+    configured = getattr(settings, 'RENDER_ALLOWED_HOSTS', '') or ''
+    hosts = [h.strip().lower().rstrip('.') for h in str(configured).split(',') if h.strip()]
+    if not hosts:
+        hosts = list(getattr(settings, 'REMOTE_ASSET_ALLOWED_HOSTS', ['res.cloudinary.com']))
+    return set(hosts + ['fonts.googleapis.com', 'fonts.gstatic.com'])
+
+
+def _is_safe_render_url(url):
+    parsed = urlparse(str(url or '').strip())
+    if parsed.scheme in {'about', 'data', 'blob'}:
+        return True
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        return False
+    hostname = parsed.hostname.lower().rstrip('.')
+    if not any(hostname == host or hostname.endswith(f'.{host}') for host in _render_allowed_hosts()):
+        return False
+    try:
+        for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def _install_network_guard(page):
+    def guard(route):
+        if _is_safe_render_url(route.request.url):
+            return route.continue_()
+        logger.warning('[Render Engine] Bloqueando recurso remoto no permitido: %s', route.request.url)
+        return route.abort()
+    page.route('**/*', guard)
 
 def render_html_to_image(html_content: str, width: int, height: int) -> io.BytesIO:
     """
@@ -19,6 +59,7 @@ def render_html_to_image(html_content: str, width: int, height: int) -> io.Bytes
         )
         context = browser.new_context(viewport={"width": width, "height": height})
         page = context.new_page()
+        _install_network_guard(page)
         
         try:
             # wait_until='networkidle' asegura que se carguen las imágenes remotas y fuentes de Google
@@ -49,6 +90,7 @@ def render_html_to_pdf(html_content: str) -> bytes:
             args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         )
         page = browser.new_page()
+        _install_network_guard(page)
         try:
             # networkidle es clave para asegurar que se carguen imágenes y fuentes antes de imprimir
             page.set_content(html_content, wait_until="networkidle", timeout=30000)
