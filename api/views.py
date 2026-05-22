@@ -76,7 +76,7 @@ def actualizar_resultados_listado(listado, tipo, resultado):
     if 'resultados' not in listado.datos_extra:
         listado.datos_extra['resultados'] = {}
     
-    listado.datos_extra['resultados'][tipo] = resultado
+    listado.datos_extra['resultados'][tipo] = _sanitize_listing_storage_value(resultado)
     listado.save(update_fields=['datos_extra'])
 
 
@@ -1058,6 +1058,33 @@ def _merge_listing_extra_preserving_covers(existing, incoming):
         merged['cover_frame_url'] = cover_url
     return merged
 
+
+def _sanitize_listing_storage_value(value):
+    """Evita guardar blobs/base64 pesados dentro de Postgres JSONField."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(('data:image', 'data:video', 'data:audio', 'data:application/pdf')):
+            return None
+        return value
+    if isinstance(value, list):
+        cleaned = [_sanitize_listing_storage_value(item) for item in value]
+        return [item for item in cleaned if item is not None]
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            if key == 'html' and isinstance(item, str) and len(item) > 20000:
+                continue
+            sanitized = _sanitize_listing_storage_value(item)
+            if sanitized is not None:
+                cleaned[key] = sanitized
+        return cleaned
+    return value
+
+
+def _sanitize_listing_payload_for_storage(payload):
+    if not isinstance(payload, dict):
+        return {}
+    return _sanitize_listing_storage_value(payload)
 
 def _serialize_listing_summary(listado):
     cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
@@ -4504,6 +4531,7 @@ class ListadosView(APIView):
         if cover_frame_url:
             payload = {**payload, 'cover_frame_url': cover_frame_url}
 
+        payload = _sanitize_listing_payload_for_storage(payload)
         # Guardamos en datos_extra el payload limpio
         listado = Listado.objects.create(
             agente=user,
@@ -4646,7 +4674,7 @@ class ListadoDetalleView(APIView):
         data = request.data
         if 'datos' in data:
             datos = _merge_listing_extra_preserving_covers(listado.datos_extra, data['datos'])
-            listado.datos_extra = datos
+            listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
         if 'video_url' in data:
             listado.video_url = data['video_url']
         if 'video_status' in data:
@@ -4972,7 +5000,6 @@ def generar_pdf(request):
                         listado_obj.datos_extra['resultados'] = {}
 
                     listado_obj.datos_extra['resultados']['pdf'] = {
-                        "html": html_string,
                         "url": pdf_url,
                         "cover_frame_url": pdf_cover_url,
                         "cover_url": pdf_cover_url,
@@ -7832,7 +7859,7 @@ def upload_fotos_listado(request):
             if obj:
                 response_data['portadaUrl'] = obj
             else:
-                response_data['portadaUrl'] = portada_b64 # Fallback
+                return Response({"error": "error_subida", "mensaje": "No se pudo subir la portada a la nube."}, status=502)
         elif isinstance(portada_b64, dict):
             response_data['portadaUrl'] = portada_b64
         elif portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('http'):
@@ -7845,6 +7872,8 @@ def upload_fotos_listado(request):
                 obj = AlmacenamientoCloudinary.guardar_foto_propiedad(foto, user_id, listado_id, tipo_foto='galeria', indice=i)
                 if obj:
                     response_data['fotosRecorrido'].append(obj)
+                else:
+                    return Response({"error": "error_subida", "mensaje": "No se pudo subir una foto de la galeria a la nube."}, status=502)
             elif isinstance(foto, dict):
                 response_data['fotosRecorrido'].append(foto)
             elif foto and isinstance(foto, str) and foto.startswith('http'):
