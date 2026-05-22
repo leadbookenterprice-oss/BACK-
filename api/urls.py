@@ -39,6 +39,7 @@ from .views_admin import (
     admin_apikeys_auto_repair, admin_branding_watermark,
     admin_access_codes, admin_access_code_detail,
 )
+from .views_crm import crm_client_send_email
 
 router = DefaultRouter()
 router.register(r'properties', PropertyViewSet)
@@ -61,6 +62,7 @@ urlpatterns = [
     path('auth/content-preferences/', content_preferences_detail, name='content_preferences_detail'),
     path('auth/crm/clientes/', crm_clients_collection, name='crm_clients_collection'),
     path('auth/crm/clientes/<int:client_id>/', crm_client_detail, name='crm_client_detail'),
+    path('auth/crm/clientes/<int:client_id>/email/', crm_client_send_email, name='crm_client_send_email'),
     path('auth/templates/', brand_templates_collection, name='brand_templates_collection'),
     path('auth/templates/options/', brand_templates_options, name='brand_templates_options'),
     path('auth/templates/clone/', brand_template_clone, name='brand_template_clone'),
