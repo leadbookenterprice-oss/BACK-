@@ -4542,18 +4542,27 @@ def video_status(request, listado_id):
         if listado.video_url:
             normalized_status = 'done'
         elif normalized_status in ('queued', 'processing'):
-            from django.conf import settings
-            stale_after = int(config('HYPERFRAMES_RENDER_TIMEOUT', default=420)) + 180
+            stale_after = int(config('VIDEO_QUEUE_PROCESSING_TIMEOUT_MINUTES', default=45)) * 60
             age_seconds = (timezone.now() - listado.updated_at).total_seconds() if listado.updated_at else 0
-            if age_seconds > stale_after:
+            if normalized_status == 'processing' and age_seconds > stale_after:
                 listado.video_status = 'error'
                 listado.save(update_fields=['video_status'])
                 normalized_status = 'error'
+
+        queue_position = None
+        queue_meta = None
+        if normalized_status == 'queued':
+            from api.services.video_queue import get_video_queue_metadata, get_video_queue_position
+            queue_position = get_video_queue_position(listado)
+            queue_meta = get_video_queue_metadata(listado)
 
         return Response({
             "status": normalized_status,
             "video_url": listado.video_url,
             "updated_at": listado.updated_at,
+            "queue_position": queue_position,
+            "queue_priority": queue_meta.get('priority') if queue_meta else None,
+            "provider": queue_meta.get('provider') if queue_meta else (listado.datos_extra or {}).get('video_provider'),
         }, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
@@ -4772,24 +4781,23 @@ def generar_video(request, pk):
         if isinstance(payload_datos, dict):
             datos = _merge_listing_extra_preserving_covers(listado.datos_extra, payload_datos)
             listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
-        listado.video_status = 'queued'
-        listado.video_url = None
-        listado.save(update_fields=['datos_extra', 'video_status', 'video_url', 'updated_at'])
 
         video_provider = config('VIDEO_PROVIDER', default='hyperframes' if settings.DEBUG else 'leadbook_sync').strip().lower()
-        default_generation_mode = 'thread' if settings.DEBUG or video_provider in {'veo3', 'veo', 'gemini_veo', 'gemini'} else 'celery'
+        from api.services.video_queue import get_video_queue_position, mark_video_queued
+        queue_meta = mark_video_queued(listado, video_provider)
+
+        default_generation_mode = 'thread' if settings.DEBUG else 'celery'
         generation_mode = config('VIDEO_GENERATION_MODE', default=default_generation_mode).strip().lower()
 
-        # Thread mantiene el comportamiento local: responde rápido y renderiza en segundo plano.
-        # Si hay worker dedicado, usar VIDEO_GENERATION_MODE=celery.
+        # El request solo encola. El procesador toma 1 video a la vez y ordena por plan.
         if generation_mode != 'celery' or getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
             logger.info("[VIDEO] Dispatch thread listado_id=%s mode=%s eager=%s", pk, generation_mode, getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False))
-            from api.tasks import generar_video_task
-            threading.Thread(target=generar_video_task, args=(pk,), daemon=True).start()
+            from api.tasks import process_video_queue
+            threading.Thread(target=process_video_queue, daemon=True).start()
         else:
             logger.info("[VIDEO] Dispatch celery listado_id=%s mode=%s eager=%s", pk, generation_mode, getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False))
-            from api.tasks import generar_video_task
-            generar_video_task.delay(pk)
+            from api.tasks import process_video_queue_task
+            process_video_queue_task.delay()
 
             # Fallback opcional: si no hay worker vivo, usar thread para no dejar el video clavado en queued.
             # Mantener desactivado por defecto en prod para evitar OOM del contenedor web.
@@ -4801,15 +4809,20 @@ def generar_video(request, pk):
                     pings = inspect.ping() or {}
                     if not pings:
                         logger.warning("[VIDEO] No Celery workers responded to ping; using thread fallback listado_id=%s", pk)
-                        threading.Thread(target=generar_video_task, args=(pk,), daemon=True).start()
+                        from api.tasks import process_video_queue
+                        threading.Thread(target=process_video_queue, daemon=True).start()
                 except Exception as ping_err:
                     logger.warning("[VIDEO] Worker ping failed (%s); using thread fallback listado_id=%s", ping_err, pk)
-                    threading.Thread(target=generar_video_task, args=(pk,), daemon=True).start()
+                    from api.tasks import process_video_queue
+                    threading.Thread(target=process_video_queue, daemon=True).start()
 
         return Response({
             "status": "queued",
-            "mensaje": "El video se está generando en segundo plano",
+            "mensaje": "El video quedó en cola y se procesará según prioridad del plan",
             "id": pk,
+            "provider": video_provider,
+            "queue_position": get_video_queue_position(listado),
+            "queue_priority": queue_meta.get('priority'),
             "mode": generation_mode if generation_mode == 'celery' else 'thread',
         })
     except Listado.DoesNotExist:

@@ -1,6 +1,7 @@
 from celery import shared_task
 from django.utils import timezone
 from django.db.models import F, Q
+from django.core.cache import cache
 from datetime import timedelta
 from .models import APIKey, Agent, Notificacion, UserAPIAssignment, UserAPIQuota
 from .services.pool_service import APIPoolService
@@ -11,6 +12,119 @@ logger = logging.getLogger(__name__)
 
 
 FREE_POOL_SERVICES = ['gemini', 'elevenlabs']
+
+
+def _default_video_provider():
+    from django.conf import settings
+    from decouple import config
+    return config('VIDEO_PROVIDER', default='hyperframes' if settings.DEBUG else 'leadbook_sync').strip().lower()
+
+
+def _run_video_provider(listado_id, provider=None):
+    provider = (provider or _default_video_provider()).strip().lower()
+    if provider in {'veo3', 'veo', 'gemini_veo', 'gemini'}:
+        from .services.gemini_video_service import generar_video_listado_veo3
+        return generar_video_listado_veo3(listado_id), provider
+    if provider in {'hyperframes', 'legacy'}:
+        from .services.video_service import generar_video_listado
+        return generar_video_listado(listado_id), provider
+    from .services.lightweight_video_service import generar_video_listado_liviano
+    return generar_video_listado_liviano(listado_id), provider
+
+
+def _finalize_successful_video(listado_id):
+    from .models import Listado
+    from .plan_utils import registrar_uso
+
+    listado = Listado.objects.get(id=listado_id)
+    registrar_uso(listado.agente, 'video')
+    try:
+        from .utils import crear_notificacion
+        crear_notificacion(
+            listado.agente,
+            'contenido_generado',
+            'Tu video ya está listo',
+            'El video de tu listado fue generado correctamente y ya lo tenés disponible.',
+        )
+    except Exception:
+        logger.exception("[VIDEO_TASK] No se pudo crear notificación para listado_id=%s", listado_id)
+
+
+def _queue_lock_key():
+    return 'leadbook:video_queue:processor_lock'
+
+
+def _claim_next_video_from_queue():
+    from decouple import config
+    from .models import Listado
+    from .services.video_queue import get_video_queue_metadata, sort_video_queue
+
+    stale_minutes = config('VIDEO_QUEUE_PROCESSING_TIMEOUT_MINUTES', default=45, cast=int)
+    stale_cutoff = timezone.now() - timedelta(minutes=stale_minutes)
+    Listado.objects.filter(video_status='processing', updated_at__lt=stale_cutoff).update(video_status='queued')
+
+    max_active = max(1, config('VIDEO_QUEUE_MAX_ACTIVE', default=1, cast=int))
+    active = Listado.objects.filter(video_status='processing').count()
+    if active >= max_active:
+        return None
+
+    batch_size = max(10, config('VIDEO_QUEUE_BATCH_SIZE', default=100, cast=int))
+    candidates = list(
+        Listado.objects.filter(video_status='queued')
+        .select_related('agente')
+        .order_by('updated_at')[:batch_size]
+    )
+    for listado in sort_video_queue(candidates):
+        updated = Listado.objects.filter(id=listado.id, video_status='queued').update(video_status='processing')
+        if updated:
+            metadata = get_video_queue_metadata(listado)
+            listado.refresh_from_db()
+            return listado, metadata
+    return None
+
+
+def process_video_queue(max_jobs=None):
+    from decouple import config
+    from .models import Listado
+
+    lock_ttl = config('VIDEO_QUEUE_LOCK_TTL_SECONDS', default=3600, cast=int)
+    token = f'{timezone.now().timestamp()}:{id(object())}'
+    if not cache.add(_queue_lock_key(), token, timeout=lock_ttl):
+        return {'status': 'locked', 'processed': 0}
+
+    attempted = 0
+    processed = 0
+    failed = 0
+    max_jobs = max_jobs if max_jobs is not None else config('VIDEO_QUEUE_JOBS_PER_RUN', default=1, cast=int)
+    max_jobs = max(1, int(max_jobs or 1))
+    try:
+        while attempted < max_jobs:
+            claimed = _claim_next_video_from_queue()
+            if not claimed:
+                break
+            listado, metadata = claimed
+            attempted += 1
+            provider = metadata.get('provider') or _default_video_provider()
+            logger.info(
+                "[VIDEO_QUEUE] Procesando listado_id=%s provider=%s priority=%s plan=%s",
+                listado.id,
+                provider,
+                metadata.get('priority'),
+                metadata.get('plan'),
+            )
+            success, resolved_provider = _run_video_provider(listado.id, provider)
+            if success:
+                _finalize_successful_video(listado.id)
+                processed += 1
+            else:
+                failed += 1
+                Listado.objects.filter(id=listado.id).update(video_status='error')
+
+        remaining = Listado.objects.filter(video_status='queued').count()
+        return {'status': 'ok', 'processed': processed, 'failed': failed, 'remaining': remaining}
+    finally:
+        if cache.get(_queue_lock_key()) == token:
+            cache.delete(_queue_lock_key())
 
 
 def _notify_free_pool_reset(user, now):
@@ -88,44 +202,29 @@ def run_asset_generation(listado_id):
 @shared_task(name='api.tasks.generar_video_task')
 def generar_video_task(listado_id):
     """Genera video del listado en worker Celery."""
-    from django.conf import settings
-    from decouple import config
-    from .models import Listado
-    from .plan_utils import registrar_uso
-
     logger.info("[VIDEO_TASK] Inicio listado_id=%s", listado_id)
     try:
-        default_provider = 'hyperframes' if settings.DEBUG else 'leadbook_sync'
-        provider = config('VIDEO_PROVIDER', default=default_provider).strip().lower()
-        if provider in {'veo3', 'veo', 'gemini_veo', 'gemini'}:
-            from .services.gemini_video_service import generar_video_listado_veo3
-            success = generar_video_listado_veo3(listado_id)
-        elif provider in {'hyperframes', 'legacy'}:
-            from .services.video_service import generar_video_listado
-            success = generar_video_listado(listado_id)
-        else:
-            from .services.lightweight_video_service import generar_video_listado_liviano
-            success = generar_video_listado_liviano(listado_id)
+        success, provider = _run_video_provider(listado_id)
 
         logger.info("[VIDEO_TASK] Resultado listado_id=%s provider=%s success=%s", listado_id, provider, success)
         if success:
-            listado = Listado.objects.get(id=listado_id)
-            registrar_uso(listado.agente, 'video')
-            try:
-                from .utils import crear_notificacion
-                crear_notificacion(
-                    listado.agente,
-                    'contenido_generado',
-                    'Tu video ya está listo',
-                    'El video de tu listado fue generado correctamente y ya lo tenés disponible.',
-                )
-            except Exception:
-                logger.exception("[VIDEO_TASK] No se pudo crear notificación para listado_id=%s", listado_id)
+            _finalize_successful_video(listado_id)
             return {"status": "completado", "id": listado_id}
         return {"status": "fallido", "id": listado_id}
     except Exception as e:
         logger.exception("[VIDEO_TASK] Error listado_id=%s", listado_id)
         return {"error": str(e), "id": listado_id}
+
+
+@shared_task(name='api.tasks.process_video_queue_task')
+def process_video_queue_task():
+    result = process_video_queue()
+    try:
+        if result.get('remaining', 0) > 0 and (result.get('processed', 0) > 0 or result.get('failed', 0) > 0):
+            process_video_queue_task.delay()
+    except Exception:
+        logger.exception("[VIDEO_QUEUE] No se pudo reprogramar cola")
+    return result
 
 
 @shared_task
