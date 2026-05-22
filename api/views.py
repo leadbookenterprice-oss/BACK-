@@ -2148,44 +2148,14 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def request_trial_token(request):
-    from django.conf import settings
     from django.core.mail import send_mail
-
-    def _normalize_whatsapp_phone(raw_phone):
-        digits = re.sub(r'\D', '', str(raw_phone or '').strip())
-        if not digits:
-            return ''
-
-        # Quitar prefijo local 0 si viene (ej: 011..., 02324...)
-        if digits.startswith('0'):
-            digits = digits.lstrip('0')
-
-        # Argentina: preferir E.164 móvil para WhatsApp (+549...)
-        if digits.startswith('549'):
-            return '+' + digits
-
-        if digits.startswith('54'):
-            rest = digits[2:]
-            if rest.startswith('9'):
-                return '+' + digits
-            return '+549' + rest
-
-        # Si viene formato local (10 dígitos), asumir móvil AR
-        if len(digits) == 10:
-            return '+549' + digits
-
-        # Fallback legado
-        return '+54' + digits
-
-    telefono = str(request.data.get('telefono') or '').strip()
     email = str(request.data.get('email') or '').strip().lower()
-    digits_only = re.sub(r'\D', '', telefono)
-    logger.info("[WHATSAPP] request_trial_token solicitado telefono_raw=%s email=%s", telefono, email)
+    logger.info("[TRIAL_TOKEN] request_trial_token solicitado email=%s", email)
 
-    if not telefono and not email:
+    if not email:
         return Response({
-            "error": "contact_required",
-            "message": "Ingresá WhatsApp o email para recibir el código.",
+            "error": "email_required",
+            "message": "Ingresá un email para recibir el código.",
         }, status=status.HTTP_400_BAD_REQUEST)
 
     if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
@@ -2193,21 +2163,6 @@ def request_trial_token(request):
             "error": "invalid_email",
             "message": "Ingresá un email válido para el envío de respaldo.",
         }, status=status.HTTP_400_BAD_REQUEST)
-
-    if telefono and len(digits_only) < 10:
-        return Response({
-            "error": "invalid_phone",
-            "message": "Ingresá un número de teléfono válido con al menos 10 dígitos.",
-        }, status=status.HTTP_400_BAD_REQUEST)
-
-    telefono_normalizado = _normalize_whatsapp_phone(telefono)
-
-    # Verificar que el teléfono no esté ya registrado
-    if telefono_normalizado and Agent.objects.filter(telefono=telefono_normalizado).exists():
-        return Response({
-            "error": "phone_taken",
-            "message": "Este número de teléfono ya está asociado a una cuenta existente.",
-        }, status=status.HTTP_409_CONFLICT)
 
     if email and Agent.objects.filter(email=email).exists():
         return Response({
@@ -2221,68 +2176,49 @@ def request_trial_token(request):
     access_code_obj = AccessCode.objects.create(
         code=code,
         trial_days=trial_days,
-        assigned_phone=telefono_normalizado or None,
+        assigned_phone=None,
         assigned_email=email or None,
-        notes=f"Solicitado token. phone={telefono_normalizado or '-'} email={email or '-'}",
+        notes=f"Solicitado token por email={email or '-'}",
     )
 
-    # Enviar por WhatsApp primero (si hay teléfono)
+    # Enviar token por email (flujo simple, sin Twilio)
     sent = False
     send_error = None
-    message_sid = None
     channel = None
-
-    if telefono_normalizado:
-        from .services.whatsapp_service import send_trial_token
-        sent, send_error, message_sid = send_trial_token(telefono_normalizado, code)
-        if sent:
-            channel = 'whatsapp'
-
-    # Fallback por email (sin costo Twilio) si WhatsApp no pudo
     email_error = None
-    if not sent and email:
-        try:
-            send_mail(
-                subject='Tu código de acceso LeadBook',
-                message=(
-                    'Hola!\n\n'
-                    'Tu código de acceso para activar la prueba Starter de 30 días es:\n\n'
-                    f'{code}\n\n'
-                    'Ingresalo en la app para continuar.'
-                ),
-                from_email=None,
-                recipient_list=[email],
-                fail_silently=False,
-            )
-            sent = True
-            channel = 'email'
-            send_error = None
-        except Exception as e:
-            email_error = str(e)
+    try:
+        send_mail(
+            subject='Tu código de acceso LeadBook',
+            message=(
+                'Hola!\n\n'
+                'Tu código de acceso para activar la prueba Starter de 30 días es:\n\n'
+                f'{code}\n\n'
+                'Ingresalo en la app para continuar.'
+            ),
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+        sent = True
+        channel = 'email'
+    except Exception as e:
+        email_error = str(e)
+        send_error = email_error
 
     logger.info(
-        "[WHATSAPP] intento_envio telefono=%s email=%s sent=%s channel=%s sid=%s error=%s email_error=%s",
-        telefono_normalizado,
+        "[TRIAL_TOKEN] envio email=%s sent=%s channel=%s error=%s",
         email,
         sent,
         channel,
-        message_sid,
         send_error,
-        email_error,
     )
 
     response_data = {
         "sent": sent,
-        "message": (
-            "Código enviado por WhatsApp." if channel == 'whatsapp'
-            else "Código enviado por email." if channel == 'email'
-            else "Código generado. No se pudo enviar por WhatsApp ni por email."
-        ),
+        "message": "Código enviado por email." if channel == 'email' else "No se pudo enviar el código por email.",
         "trial_days": trial_days,
-        "to": telefono_normalizado,
         "email": email or None,
         "channel": channel,
-        "message_sid": message_sid,
     }
 
     if send_error:
@@ -2290,56 +2226,10 @@ def request_trial_token(request):
     if email_error:
         response_data["email_error"] = email_error
 
-    if settings.DEBUG:
-        response_data["code"] = code
-
     if not sent:
         return Response(response_data, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     return Response(response_data)
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def whatsapp_message_status(request, sid):
-    sid = str(sid or '').strip()
-    if not sid:
-        return Response({"error": "sid_required", "message": "SID requerido"}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        from twilio.rest import Client
-        account_sid = config('TWILIO_ACCOUNT_SID', default='')
-        auth_token = config('TWILIO_AUTH_TOKEN', default='')
-        if not account_sid or not auth_token:
-            return Response({
-                "error": "twilio_not_configured",
-                "message": "Faltan credenciales de Twilio",
-            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        client = Client(account_sid, auth_token)
-        msg = client.messages(sid).fetch()
-
-        return Response({
-            "sid": msg.sid,
-            "status": msg.status,
-            "to": msg.to,
-            "from": msg.from_,
-            "error_code": msg.error_code,
-            "error_message": msg.error_message,
-            "date_created": str(msg.date_created) if msg.date_created else None,
-            "date_sent": str(msg.date_sent) if msg.date_sent else None,
-            "date_updated": str(msg.date_updated) if msg.date_updated else None,
-            "direction": msg.direction,
-            "price": msg.price,
-            "price_unit": msg.price_unit,
-        })
-    except Exception as e:
-        return Response({
-            "error": "twilio_fetch_failed",
-            "message": str(e),
-        }, status=status.HTTP_502_BAD_GATEWAY)
-
-
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def validate_access_code(request):
@@ -4715,27 +4605,6 @@ class ListadoDetalleView(APIView):
         return Response({"mensaje": "Listado actualizado"}, status=status.HTTP_200_OK)
 
 
-# ---- Celery task + endpoint para generación de video ----
-from celery import shared_task
-from .services.video_service import generar_video_listado
-
-@shared_task
-def generar_video_task(listado_id):
-    """Genera video con Remotion para el listado"""
-    try:
-        success = generar_video_listado(listado_id)
-        if success:
-            from .models import Listado
-            from .plan_utils import registrar_uso
-            listado = Listado.objects.get(id=listado_id)
-            registrar_uso(listado.agente, 'video')
-            return {"status": "completado", "id": listado_id}
-        else:
-            return {"status": "fallido", "id": listado_id}
-    except Exception as e:
-        return {"error": str(e)}
-
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
@@ -4755,8 +4624,12 @@ def generar_video(request, pk):
         # Thread mantiene el comportamiento local: responde rápido y renderiza en segundo plano.
         # Si hay worker dedicado, usar VIDEO_GENERATION_MODE=celery.
         if generation_mode != 'celery' or getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            logger.info("[VIDEO] Dispatch thread listado_id=%s mode=%s eager=%s", pk, generation_mode, getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False))
+            from api.tasks import generar_video_task
             threading.Thread(target=generar_video_task, args=(pk,), daemon=True).start()
         else:
+            logger.info("[VIDEO] Dispatch celery listado_id=%s mode=%s eager=%s", pk, generation_mode, getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False))
+            from api.tasks import generar_video_task
             generar_video_task.delay(pk)
 
         return Response({

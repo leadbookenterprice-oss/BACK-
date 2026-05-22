@@ -5,6 +5,9 @@ from datetime import timedelta
 from .models import APIKey, Agent, Notificacion, UserAPIAssignment, UserAPIQuota
 from .services.pool_service import APIPoolService
 import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 FREE_POOL_SERVICES = ['gemini', 'elevenlabs']
@@ -80,6 +83,27 @@ def _send_via_resend(email, subject, text_body, html_body):
 def run_asset_generation(listado_id):
     """Stub — se mantiene por compatibilidad con imports. No hace nada."""
     return f"run_asset_generation: listado {listado_id} — usar generar_video_task"
+
+
+@shared_task(name='api.tasks.generar_video_task')
+def generar_video_task(listado_id):
+    """Genera video del listado en worker Celery."""
+    from .services.video_service import generar_video_listado
+    from .models import Listado
+    from .plan_utils import registrar_uso
+
+    logger.info("[VIDEO_TASK] Inicio listado_id=%s", listado_id)
+    try:
+        success = generar_video_listado(listado_id)
+        logger.info("[VIDEO_TASK] Resultado listado_id=%s success=%s", listado_id, success)
+        if success:
+            listado = Listado.objects.get(id=listado_id)
+            registrar_uso(listado.agente, 'video')
+            return {"status": "completado", "id": listado_id}
+        return {"status": "fallido", "id": listado_id}
+    except Exception as e:
+        logger.exception("[VIDEO_TASK] Error listado_id=%s", listado_id)
+        return {"error": str(e), "id": listado_id}
 
 
 @shared_task

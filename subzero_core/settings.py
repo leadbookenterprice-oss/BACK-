@@ -316,12 +316,6 @@ ELEVENLABS_API_KEY = config('ELEVENLABS_API_KEY', default='')
 UPLOADPOST_API_KEY = config('UPLOADPOST_API_KEY', default='')
 NVIDIA_API_KEY     = config('NVIDIA_API_KEY', default='')
 
-# Twilio / WhatsApp
-TWILIO_ACCOUNT_SID  = config('TWILIO_ACCOUNT_SID', default='')
-TWILIO_AUTH_TOKEN   = config('TWILIO_AUTH_TOKEN', default='')
-TWILIO_WHATSAPP_FROM = config('TWILIO_WHATSAPP_FROM', default='whatsapp:+14155238886')
-WHATSAPP_ENABLED     = config('WHATSAPP_ENABLED', default=False, cast=bool)
-
 # MercadoPago Configuration
 MP_MODE           = config('MP_MODE', default='production').strip().lower()
 MP_ACCESS_TOKEN   = config('MP_ACCESS_TOKEN', default='')
