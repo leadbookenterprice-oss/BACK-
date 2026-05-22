@@ -99,6 +99,7 @@ websockets==16.0
 whitenoise==6.12.0
 weasyprint==60.2
 pydyf==0.8.0
+playwright==1.42.0
 gunicorn==21.2.0
 channels==4.0.0
 channels-redis==4.2.0

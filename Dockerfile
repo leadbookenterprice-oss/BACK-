@@ -13,15 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 
-# ── Critical: install CPU-only PyTorch BEFORE requirements.txt ────────────────
-# openai-whisper depends on torch but does not pin a CPU/GPU variant.
-# If we let pip resolve it from PyPI it pulls the full CUDA build (~2.4 GB).
-# Installing torch from the CPU wheel index first prevents that.
-RUN pip install --no-cache-dir \
-    torch torchaudio \
-    --index-url https://download.pytorch.org/whl/cpu
-
-# Install the rest (torch is already satisfied → pip skips CUDA re-install)
+# Install Python dependencies. Playwright is still required by render_engine
+# for PDF/image rendering, but local Whisper/PyTorch is no longer used.
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Download Playwright Chromium binary into the builder cache
