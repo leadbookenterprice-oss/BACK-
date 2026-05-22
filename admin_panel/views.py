@@ -6,6 +6,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import Count
 from datetime import timedelta
 from api.models import (
@@ -155,33 +156,129 @@ def admin_api_keys_bulk_create(request):
     if not _check_admin(request):
         return Response({'error': 'Forbidden'}, status=403)
     keys_data = request.data.get('keys', [])
-    if not keys_data:
+    if not isinstance(keys_data, list) or not keys_data:
         return Response({'error': 'No se enviaron keys'}, status=400)
-    new_keys = []
+
+    def normalize_key(value):
+        return str(value or '').replace('\ufeff', '').replace('\u200b', '').strip().strip('"\'')
+
+    candidates = []
     errores = []
-    for data in keys_data:
-        servicio_nombre = (data.get('service') or data.get('servicio') or '').lower()
-        api_key_str = data.get('api_key') or data.get('key', '')
-        limit = data.get('daily_limit', 1500)
-        label_str = data.get('label', '')
+    seen_in_request = set()
+    duplicates_in_request = 0
+    service_cache = {}
+
+    for index, data in enumerate(keys_data, start=1):
+        if not isinstance(data, dict):
+            errores.append({'line': index, 'error': 'Formato inválido'})
+            continue
+
+        servicio_nombre = str(data.get('service') or data.get('servicio') or '').strip().lower()
+        api_key_str = normalize_key(data.get('api_key') or data.get('key'))
+        label_str = str(data.get('label') or '').strip()
+
+        try:
+            limit = int(data.get('daily_limit') or 1500)
+        except (TypeError, ValueError):
+            limit = 1500
+
         if not servicio_nombre or not api_key_str:
-            errores.append({'error': 'Faltan service o api_key'}); continue
-        servicio = Servicio.objects.filter(nombre=servicio_nombre).first()
+            errores.append({'line': index, 'error': 'Faltan service o api_key'})
+            continue
+
+        servicio = service_cache.get(servicio_nombre)
+        if servicio is None:
+            servicio = Servicio.objects.filter(nombre__iexact=servicio_nombre).first()
+            service_cache[servicio_nombre] = servicio
+
         if not servicio:
-            errores.append({'error': f'Servicio "{servicio_nombre}" no existe'}); continue
-        if not APIKey.objects.filter(api_key=api_key_str, servicio=servicio).exists():
-            new_keys.append(APIKey(servicio=servicio, api_key=api_key_str,
-                                   google_daily_limit=limit, label=label_str, status='available'))
+            errores.append({'line': index, 'error': f'Servicio "{servicio_nombre}" no existe'})
+            continue
+
+        pair = (servicio.id, api_key_str)
+        if pair in seen_in_request:
+            duplicates_in_request += 1
+            continue
+
+        seen_in_request.add(pair)
+        candidates.append({
+            'servicio': servicio,
+            'api_key': api_key_str,
+            'daily_limit': limit,
+            'label': label_str,
+        })
+
+    existing_pairs = set()
+    keys_by_service = {}
+    for servicio_id, api_key_str in seen_in_request:
+        keys_by_service.setdefault(servicio_id, set()).add(api_key_str)
+
+    for servicio_id, api_keys in keys_by_service.items():
+        existing_pairs.update(
+            (servicio_id, key)
+            for key in APIKey.objects.filter(servicio_id=servicio_id, api_key__in=api_keys).values_list('api_key', flat=True)
+        )
+
+    new_keys = [
+        APIKey(
+            servicio=item['servicio'],
+            api_key=item['api_key'],
+            google_daily_limit=item['daily_limit'],
+            label=item['label'],
+            status='available',
+        )
+        for item in candidates
+        if (item['servicio'].id, item['api_key']) not in existing_pairs
+    ]
+
     counts = {}
-    if new_keys:
-        APIKey.objects.bulk_create(new_keys)
-        for k in new_keys:
-            nombre = k.servicio.nombre
-            counts[nombre] = counts.get(nombre, 0) + 1
-    return Response({'status': 'created', 'count': len(new_keys),
-                     'counts_by_service': counts,
-                     'ignored': len(keys_data) - len(new_keys) - len(errores),
-                     'errores': errores}, status=201)
+    duplicates_deleted = 0
+    duplicates_protected = 0
+
+    with transaction.atomic():
+        if new_keys:
+            APIKey.objects.bulk_create(new_keys)
+            for k in new_keys:
+                nombre = k.servicio.nombre
+                counts[nombre] = counts.get(nombre, 0) + 1
+
+        # Limpieza segura: solo elimina duplicados sin asignaciones ni logs históricos.
+        for servicio_id, api_key_str in seen_in_request:
+            duplicates = list(
+                APIKey.objects.filter(servicio_id=servicio_id, api_key=api_key_str)
+                .order_by('creado_en', 'id')
+            )
+            if len(duplicates) <= 1:
+                continue
+
+            duplicate_ids = [key.id for key in duplicates]
+            linked_ids = set(UserAPIAssignment.objects.filter(apikey_id__in=duplicate_ids).values_list('apikey_id', flat=True))
+            linked_ids.update(APIRequestLog.objects.filter(api_key_id__in=duplicate_ids).values_list('api_key_id', flat=True))
+            keep = next((key for key in duplicates if key.id in linked_ids), duplicates[0])
+            delete_ids = [key.id for key in duplicates if key.id != keep.id and key.id not in linked_ids]
+            duplicates_protected += sum(1 for key in duplicates if key.id != keep.id and key.id in linked_ids)
+
+            if delete_ids:
+                APIKey.objects.filter(id__in=delete_ids).delete()
+                duplicates_deleted += len(delete_ids)
+
+    duplicates_existing = len(existing_pairs)
+    ignored = duplicates_in_request + duplicates_existing + len(errores)
+
+    return Response({
+        'status': 'created',
+        'received': len(keys_data),
+        'valid_unique': len(candidates),
+        'count': len(new_keys),
+        'created': len(new_keys),
+        'counts_by_service': counts,
+        'ignored': ignored,
+        'duplicates_in_request': duplicates_in_request,
+        'duplicates_existing': duplicates_existing,
+        'duplicates_deleted': duplicates_deleted,
+        'duplicates_protected': duplicates_protected,
+        'errores': errores,
+    }, status=201)
 
 
 @api_view(['PATCH', 'DELETE', 'POST'])
