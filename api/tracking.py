@@ -5,6 +5,7 @@ import uuid
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from decouple import config
 from django.utils import timezone
 
 from api.models import (
@@ -334,11 +335,30 @@ def _raise_service_exhausted(service, message):
     raise Exception(message)
 
 
-def _raise_api_key_unavailable(service):
+def _raise_api_key_unavailable(service, agente=None):
     message = f"No hay API key asignada para {service}. El admin debe cargar stock o reparar el pool."
     service_name = str(service or '').lower()
     if service_name in {'gemini', 'elevenlabs'}:
         from api.ai_services import APIKeyUnavailableError
+        if agente:
+            retry_after_seconds = max(
+                int(config('SOFT_RATE_LIMIT_RETRY_SECONDS', default=600, cast=int)),
+                60,
+            )
+            has_assigned_keys = UserAPIAssignment.objects.filter(
+                user=agente,
+                servicio__nombre__iexact=service_name,
+                activo=True,
+                apikey__status__in=['available', 'assigned', 'exhausted'],
+            ).exists()
+            if has_assigned_keys:
+                raise APIKeyUnavailableError(
+                    f"Servicio temporalmente bloqueado para {service_name}. Reintentá en 10 minutos.",
+                    provider=service_name,
+                    scope='provider',
+                    quota_state='soft_rate_limited',
+                    retry_after_seconds=retry_after_seconds,
+                )
         raise APIKeyUnavailableError(message, provider=service_name, scope='pool')
     raise Exception(message)
 
@@ -443,7 +463,7 @@ def track_api_call(service, action=''):
 
             key_str = get_next_available_api(agente, service)
             if not key_str:
-                _raise_api_key_unavailable(service)
+                _raise_api_key_unavailable(service, agente=agente)
 
             key_obj = APIKey.objects.filter(
                 api_key=key_str,

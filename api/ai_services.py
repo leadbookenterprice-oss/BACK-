@@ -584,12 +584,12 @@ class GeminiRateLimitedError(Exception):
     """Rate limit/saturación transitoria de Gemini."""
     def __init__(
         self,
-        message="Servicio de IA temporalmente saturado. Reintentá en unos minutos.",
+        message="Servicio de IA temporalmente saturado. Reintentá en 10 minutos.",
         *,
         provider='gemini',
         scope='provider',
         quota_state='soft_rate_limited',
-        retry_after_seconds=60,
+        retry_after_seconds=600,
     ):
         super().__init__(message)
         self.provider = provider
@@ -620,12 +620,12 @@ class ElevenLabsRateLimitedError(Exception):
     """Rate limit/saturación transitoria de ElevenLabs."""
     def __init__(
         self,
-        message="Servicio de voz temporalmente saturado. Reintentá en unos minutos.",
+        message="Servicio de voz temporalmente saturado. Reintentá en 10 minutos.",
         *,
         provider='elevenlabs',
         scope='provider',
         quota_state='soft_rate_limited',
-        retry_after_seconds=60,
+        retry_after_seconds=600,
     ):
         super().__init__(message)
         self.provider = provider
@@ -903,11 +903,11 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina', voice_id=None, v
                         quota_state='hard_exhausted',
                     )
                 raise ElevenLabsRateLimitedError(
-                    "Servicio de voz temporalmente saturado. Reintentá en unos minutos.",
+                    "Servicio de voz temporalmente saturado. Reintentá en 10 minutos.",
                     provider='elevenlabs',
                     scope='provider',
                     quota_state='soft_rate_limited',
-                    retry_after_seconds=60,
+                    retry_after_seconds=600,
                 )
 
         return None
@@ -1007,11 +1007,11 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                         time.sleep(60)
                         continue
                     raise GeminiRateLimitedError(
-                        "Servicio de IA temporalmente saturado. Reintentá en unos minutos.",
+                        "Servicio de IA temporalmente saturado. Reintentá en 10 minutos.",
                         provider='gemini',
                         scope='provider',
                         quota_state='soft_rate_limited',
-                        retry_after_seconds=60,
+                        retry_after_seconds=600,
                     )
             
             # Otros errores no relacionados a cuota

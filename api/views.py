@@ -106,7 +106,11 @@ def _quota_error_response(exc, fallback_status=status.HTTP_429_TOO_MANY_REQUESTS
 
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     if isinstance(exc, APIKeyUnavailableError):
-        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        status_code = (
+            status.HTTP_429_TOO_MANY_REQUESTS
+            if quota_state == 'soft_rate_limited'
+            else status.HTTP_503_SERVICE_UNAVAILABLE
+        )
     elif fallback_status:
         status_code = fallback_status
     return Response(payload, status=status_code)

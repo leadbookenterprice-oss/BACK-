@@ -31,13 +31,15 @@ def get_next_available_api(agente, servicio):
     servicio_nombre = str(servicio or '').strip().lower()
     if not servicio_nombre:
         return None
+    soft_retry_services = {'gemini', 'elevenlabs'}
 
     def _buscar_asignada():
+        statuses = ['assigned', 'available', 'exhausted'] if servicio_nombre in soft_retry_services else ['assigned', 'available']
         assignments = UserAPIAssignment.objects.filter(
             user=agente,
             servicio__nombre__iexact=servicio_nombre,
             activo=True,
-            apikey__status__in=['assigned', 'available']
+            apikey__status__in=statuses
         ).select_related('apikey').order_by('assigned_at')
 
         candidates = []
@@ -48,9 +50,10 @@ def get_next_available_api(agente, servicio):
 
             usage, limit = _resolve_usage_window(key, servicio_nombre)
             if limit and usage >= limit:
-                key.status = 'exhausted'
-                key.save(update_fields=['status', 'updated_at'])
-                continue
+                if servicio_nombre not in soft_retry_services:
+                    key.status = 'exhausted'
+                    key.save(update_fields=['status', 'updated_at'])
+                    continue
 
             if key.status == 'available':
                 key.status = 'assigned'
