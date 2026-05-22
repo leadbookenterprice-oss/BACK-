@@ -46,6 +46,9 @@ def _value(datos, *keys, default=''):
 
 def _normalize_media_url(item):
     if isinstance(item, dict):
+        resolved = AlmacenamientoCloudinary.obtener_url_foto(item)
+        if resolved:
+            return resolved
         for key in ('url', 'fotoUrl', 'foto_url', 'secure_url'):
             if item.get(key):
                 return str(item[key]).strip()

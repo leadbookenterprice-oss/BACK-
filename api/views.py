@@ -1184,6 +1184,10 @@ def _merge_listing_extra_preserving_covers(existing, incoming):
     existing = existing if isinstance(existing, dict) else {}
     merged = incoming.copy() if isinstance(incoming, dict) else {}
 
+    for key in ('portadaUrl', 'portada_url', 'fotoPortada', 'fotoportada', 'fotosRecorrido', 'fotos_recorrido'):
+        if not merged.get(key) and existing.get(key):
+            merged[key] = existing[key]
+
     existing_pdf_cover = _resolve_pdf_cover_from_data(existing)
     incoming_pdf_cover = _resolve_pdf_cover_from_data(merged)
     if existing_pdf_cover and not incoming_pdf_cover:
@@ -4314,8 +4318,9 @@ def generar_carrusel(request):
             _persist_template_selection(listado_obj, selection, source='carrusel')
 
         images_pool = _collect_property_images(data)
-        gallery_images = images_pool[:MAX_CAROUSEL_GALLERY_IMAGES]
-        gallery_omitted = max(0, len(images_pool) - len(gallery_images))
+        gallery_source = images_pool[1:] if len(images_pool) > 1 else []
+        gallery_images = gallery_source[:MAX_CAROUSEL_GALLERY_IMAGES]
+        gallery_omitted = max(0, len(gallery_source) - len(gallery_images))
         recamaras = data.get('recamaras') or 'N/D'
         banos = data.get('banos') or 'N/D'
         superficie = data.get('superficieCubierta') or data.get('superficieTotal') or 'N/D'
@@ -4941,9 +4946,9 @@ def construir_contexto_pdf(data, user, request=None):
     def resolver_imagen(val, tipo='portada', indice=0):
         if not val: return None
         
-        if isinstance(val, dict) and 'public_id' in val:
+        if isinstance(val, dict):
             from api.services.almacenamiento import AlmacenamientoCloudinary
-            return AlmacenamientoCloudinary.obtener_url_foto(val)
+            return AlmacenamientoCloudinary.obtener_url_foto(val) or _resolve_cloudinary_asset_url(val)
             
         if isinstance(val, str):
             if val.startswith('http'):
@@ -5316,14 +5321,8 @@ def generar_imagen_post(request):
             ),
         }
         
-        fotos_raw = data.get('fotosRecorrido', [])
-        portada_val = fotos_raw[0] if fotos_raw else data.get('portadaUrl', '')
-        if isinstance(portada_val, dict) and 'public_id' in portada_val:
-            cloud = portada_val.get('cloudinary_account', 'df1vldrhb')
-            pid = portada_val.get('public_id', '')
-            portada_post = f"https://res.cloudinary.com/{cloud}/image/upload/{pid}"
-        else:
-            portada_post = str(portada_val) if portada_val else ''
+        images_pool = _collect_property_images(data)
+        portada_post = _resolve_primary_property_image(data) or (images_pool[0] if images_pool else '')
             
         context["portada_url"] = portada_post
         context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
@@ -8080,6 +8079,8 @@ def upload_fotos_listado(request):
     portada_b64 = data.get('portadaUrl')
     fotos_b64 = data.get('fotosRecorrido', [])
     listado_id = data.get('listado_id')
+    if not isinstance(fotos_b64, list):
+        fotos_b64 = [fotos_b64] if fotos_b64 else []
 
     user_id = request.user.id
     response_data = {
@@ -8089,6 +8090,97 @@ def upload_fotos_listado(request):
 
     try:
         from api.services.almacenamiento import AlmacenamientoCloudinary
+
+        def media_identity(item):
+            if isinstance(item, dict):
+                return item.get('public_id') or item.get('secure_url') or item.get('url')
+            if isinstance(item, str) and item.startswith('data:image'):
+                return item
+            if isinstance(item, str) and item.startswith('http'):
+                return item
+            return None
+
+        def complete_media_ref(value, role, order):
+            media = value.copy() if isinstance(value, dict) else {}
+            resolved = AlmacenamientoCloudinary.obtener_url_foto(media) or _resolve_cloudinary_asset_url(media)
+            if resolved:
+                media.setdefault('url', resolved)
+                media.setdefault('secure_url', resolved)
+            media.setdefault('resource_type', 'image')
+            media['role'] = role
+            media['order'] = order
+            return media
+
+        def normalize_media(item, role, order):
+            if item and isinstance(item, str) and item.startswith('data:image'):
+                logger.info("[UPLOAD] Subiendo foto %s order=%s listado_id=%s", role, order, listado_id)
+                uploaded = AlmacenamientoCloudinary.guardar_foto_propiedad(
+                    item,
+                    user_id,
+                    listado_id,
+                    tipo_foto=role,
+                    indice=max(order - 1, 0),
+                )
+                if not uploaded:
+                    return None, "No se pudo subir una foto a Cloudinary."
+                return complete_media_ref(uploaded, role, order), None
+            if isinstance(item, dict):
+                media = complete_media_ref(item, role, order)
+                if not (media.get('url') or media.get('secure_url') or media.get('public_id')):
+                    return None, "Referencia de imagen incompleta."
+                return media, None
+            if item and isinstance(item, str) and item.startswith('http'):
+                if not _is_safe_remote_asset_url(item):
+                    return None, "URL de imagen no permitida."
+                return {
+                    'url': item,
+                    'secure_url': item,
+                    'resource_type': 'image',
+                    'role': role,
+                    'order': order,
+                }, None
+            if item:
+                return None, "Formato de imagen no soportado."
+            return None, None
+
+        raw_items = []
+        if portada_b64:
+            raw_items.append(portada_b64)
+        portada_identity = media_identity(portada_b64)
+        for foto in fotos_b64:
+            if not foto:
+                continue
+            if portada_identity and media_identity(foto) == portada_identity:
+                continue
+            raw_items.append(foto)
+
+        normalized = []
+        for item in raw_items:
+            role = 'portada' if not normalized else 'galeria'
+            order = 0 if role == 'portada' else len(normalized)
+            media, error_msg = normalize_media(item, role, order)
+            if error_msg:
+                return Response({"error": "error_subida", "mensaje": error_msg}, status=502)
+            if media:
+                normalized.append(media)
+
+        if normalized:
+            response_data['portadaUrl'] = normalized[0]
+            response_data['fotosRecorrido'] = normalized[1:]
+
+        if listado_id and normalized:
+            listado = Listado.objects.filter(id=listado_id, agente=request.user).first()
+            if listado:
+                datos_extra = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+                datos_extra = {
+                    **datos_extra,
+                    'portadaUrl': response_data['portadaUrl'],
+                    'fotosRecorrido': response_data['fotosRecorrido'],
+                }
+                listado.datos_extra = _sanitize_listing_payload_for_storage(datos_extra)
+                listado.save(update_fields=['datos_extra', 'updated_at'])
+
+        return Response(response_data)
         
         if portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('data:image'):
             print(f"[UPLOAD] portada_b64 tipo: {type(portada_b64).__name__}, es base64: {bool(portada_b64 and isinstance(portada_b64, str) and portada_b64.startswith('data:image'))}")

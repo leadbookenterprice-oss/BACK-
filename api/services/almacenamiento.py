@@ -343,39 +343,25 @@ class AlmacenamientoCloudinary:
                 data = base64_str
                 
             image_bytes = base64.b64decode(data)
-            
-            # Construir public_id explícito
-            base_id = f'leadbook/usuario_{user_id}'
-            if listado_id:
-                base_id += f'/listado_{listado_id}'
-            else:
-                base_id += '/temp'
-                
-            if tipo_foto == 'portada':
-                public_id = f'{base_id}/portada'
-            else:
-                public_id = f'{base_id}/galeria_{indice}'
-
-            creds, key_id = cls.get_mejor_cuenta()
-            if not creds:
-                return None
-                
-            cloudinary.uploader.upload(
-                image_bytes,
-                resource_type='image',
-                public_id=public_id,
-                type='upload',
-                overwrite=True,
-                invalidate=True,
-                **creds
+            metadata = cls.subir(
+                io.BytesIO(image_bytes),
+                TIPO_FOTO_PROPIEDAD,
+                user_id=user_id,
+                listado_id=listado_id,
+                sufijo=f'_{tipo_foto}_{indice}',
+                return_metadata=True,
             )
-            
-            if key_id:
-                cls._invalidate_stats_cache(key_id)
+            if not metadata:
+                return None
 
             return {
-                "cloudinary_account": creds.get('cloud_name', ''),
-                "public_id": public_id
+                **metadata,
+                "url": metadata.get("url") or metadata.get("secure_url"),
+                "secure_url": metadata.get("secure_url") or metadata.get("url"),
+                "cloudinary_account": metadata.get("cloudinary_account") or metadata.get("cloud_name", ""),
+                "resource_type": metadata.get("resource_type") or "image",
+                "role": tipo_foto,
+                "order": 0 if tipo_foto == 'portada' else indice + 1,
             }
             
         except Exception as e:
@@ -391,7 +377,11 @@ class AlmacenamientoCloudinary:
         if not foto_dict or not isinstance(foto_dict, dict):
             return None
             
-        cloud_name = foto_dict.get('cloudinary_account')
+        direct_url = foto_dict.get('url') or foto_dict.get('secure_url')
+        if isinstance(direct_url, str) and direct_url.strip():
+            return direct_url.strip()
+
+        cloud_name = foto_dict.get('cloudinary_account') or foto_dict.get('cloud_name')
         public_id = foto_dict.get('public_id')
         if not cloud_name or not public_id:
             return None
@@ -413,17 +403,22 @@ class AlmacenamientoCloudinary:
 
         try:
             from cloudinary.utils import cloudinary_url
-            url, _ = cloudinary_url(
-                public_id,
-                resource_type='image',
-                type='upload',
-                sign_url=True,
-                secure=True,
-                **creds
-            )
+            url_params = {
+                'resource_type': foto_dict.get('resource_type') or 'image',
+                'type': 'upload',
+                'secure': True,
+            }
+            if creds and all(creds.get(k) for k in ('cloud_name', 'api_key', 'api_secret')):
+                url_params.update(creds)
+                url_params['sign_url'] = True
+            else:
+                url_params['cloud_name'] = cloud_name
+            url, _ = cloudinary_url(public_id, **url_params)
             return url
         except Exception as e:
             logger.error(f'[Almacenamiento] Error firmando url foto: {e}')
+            if cloud_name:
+                return f'https://res.cloudinary.com/{cloud_name}/image/upload/{public_id}'
             return None
 
     # ── Estado del pool ───────────────────────────────────────────────────────

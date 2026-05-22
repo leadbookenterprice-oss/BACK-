@@ -372,12 +372,12 @@ def generar_video_listado(listado_id):
 
         def _normalize_url(item):
             if isinstance(item, dict):
-                if item.get('url'):
-                    return str(item.get('url')).strip()
-                if item.get('fotoUrl'):
-                    return str(item.get('fotoUrl')).strip()
-                if item.get('foto_url'):
-                    return str(item.get('foto_url')).strip()
+                resolved = AlmacenamientoCloudinary.obtener_url_foto(item)
+                if resolved:
+                    return resolved
+                for key in ('url', 'secure_url', 'fotoUrl', 'foto_url'):
+                    if item.get(key):
+                        return str(item.get(key)).strip()
             if isinstance(item, str):
                 return item.strip()
             return ''
@@ -392,14 +392,13 @@ def generar_video_listado(listado_id):
                     fotos_escenas.append(foto_url)
 
         fotos_base = []
-        for f in datos.get('fotosRecorrido', []) or []:
-            u = _normalize_url(f)
-            if u:
-                fotos_base.append(u)
-
         portada = _normalize_url(datos.get('portadaUrl'))
         if portada:
             fotos_base.append(portada)
+        for f in datos.get('fotosRecorrido', []) or []:
+            u = _normalize_url(f)
+            if u and u not in fotos_base:
+                fotos_base.append(u)
 
         fotos = fotos_escenas or fotos_base
         fotos = [_absolute_media_url(f) for f in fotos if f]
