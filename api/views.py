@@ -4669,7 +4669,8 @@ def generar_video(request, pk):
         listado.video_url = None
         listado.save(update_fields=['video_status', 'video_url'])
 
-        default_generation_mode = 'thread' if settings.DEBUG else 'celery'
+        video_provider = config('VIDEO_PROVIDER', default='hyperframes' if settings.DEBUG else 'veo3').strip().lower()
+        default_generation_mode = 'thread' if settings.DEBUG or video_provider in {'veo3', 'veo', 'gemini_veo', 'gemini'} else 'celery'
         generation_mode = config('VIDEO_GENERATION_MODE', default=default_generation_mode).strip().lower()
 
         # Thread mantiene el comportamiento local: responde rápido y renderiza en segundo plano.

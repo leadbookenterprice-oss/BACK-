@@ -88,14 +88,23 @@ def run_asset_generation(listado_id):
 @shared_task(name='api.tasks.generar_video_task')
 def generar_video_task(listado_id):
     """Genera video del listado en worker Celery."""
-    from .services.video_service import generar_video_listado
+    from django.conf import settings
+    from decouple import config
     from .models import Listado
     from .plan_utils import registrar_uso
 
     logger.info("[VIDEO_TASK] Inicio listado_id=%s", listado_id)
     try:
-        success = generar_video_listado(listado_id)
-        logger.info("[VIDEO_TASK] Resultado listado_id=%s success=%s", listado_id, success)
+        default_provider = 'hyperframes' if settings.DEBUG else 'veo3'
+        provider = config('VIDEO_PROVIDER', default=default_provider).strip().lower()
+        if provider in {'veo3', 'veo', 'gemini_veo', 'gemini'}:
+            from .services.gemini_video_service import generar_video_listado_veo3
+            success = generar_video_listado_veo3(listado_id)
+        else:
+            from .services.video_service import generar_video_listado
+            success = generar_video_listado(listado_id)
+
+        logger.info("[VIDEO_TASK] Resultado listado_id=%s provider=%s success=%s", listado_id, provider, success)
         if success:
             listado = Listado.objects.get(id=listado_id)
             registrar_uso(listado.agente, 'video')
