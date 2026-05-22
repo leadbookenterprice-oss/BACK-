@@ -4429,7 +4429,12 @@ def generar_carrusel(request):
         for image_url in gallery_images:
             slides_content.append({"kind": "gallery", "image": image_url})
 
-        slides_content.append({"kind": "contact", "image": None, "headline": "Contacto", "subheadline": ""})
+        slides_content.append({
+            "kind": "contact",
+            "image": pick_image(0),
+            "headline": "Contacto directo",
+            "subheadline": "Pedi la ficha completa, disponibilidad y condiciones comerciales actualizadas.",
+        })
 
         for i in range(len(slides_content)):
             slide = slides_content[i]
@@ -4461,8 +4466,6 @@ def generar_carrusel(request):
 
             if slide.get('kind') == 'gallery':
                 html_content = render_clean_gallery_slide(slide.get('image'))
-            elif slide.get('kind') == 'contact':
-                html_content = render_contact_slide(context)
             else:
                 html_content = render_to_string(template_carousel, context)
                 html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
