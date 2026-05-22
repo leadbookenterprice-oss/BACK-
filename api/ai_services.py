@@ -448,27 +448,31 @@ def generar_html_desde_template(context, agente):
         replacements={'{{WHATSAPP_URL}}': whatsapp_url},
     )
     
-    # 8. Foto de portada — siempre galeria_0 del listado
+    # 8. Foto de portada: usar la fuente principal del listado antes que la galeria.
     def _build_cloudinary_url(val):
-        if isinstance(val, dict) and 'public_id' in val:
-            cloud = val.get('cloudinary_account', 'df1vldrhb')
-            pid = val.get('public_id', '')
-            return f"https://res.cloudinary.com/{cloud}/image/upload/{pid}"
+        if isinstance(val, dict):
+            direct_url = val.get('secure_url') or val.get('url')
+            if isinstance(direct_url, str) and direct_url.startswith('http'):
+                import re as re_module
+                return re_module.sub(r's--[^/]+--/', '', direct_url)
+            if val.get('public_id'):
+                cloud = val.get('cloudinary_account') or val.get('cloud_name') or 'df1vldrhb'
+                pid = val.get('public_id', '')
+                return f"https://res.cloudinary.com/{cloud}/image/upload/{pid}"
         elif isinstance(val, str) and val.startswith('http'):
             import re as re_module
             return re_module.sub(r's--[^/]+--/', '', val)
         return ''
 
-    portada_url = ''
-    # Prioridad 1: primera foto de galería (galeria_0)
+    portada_url = _build_cloudinary_url(
+        context.get('portada_url', '') or context.get('portada_url_raw', '')
+    )
     fotos_raw = context.get('fotos_recorrido_raw', [])
-    if fotos_raw:
+    if not isinstance(fotos_raw, list):
+        fotos_raw = []
+
+    if not portada_url and fotos_raw:
         portada_url = _build_cloudinary_url(fotos_raw[0])
-    # Prioridad 2: portada_url del context como fallback
-    if not portada_url:
-        portada_url = _build_cloudinary_url(
-            context.get('portada_url', '') or context.get('portada_url_raw', '')
-        )
     print(f"[Template] Portada URL FINAL: {portada_url}")
     html = html.replace('{{FOTO_PORTADA}}', portada_url)
 
