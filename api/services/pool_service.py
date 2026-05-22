@@ -10,6 +10,33 @@ from django.db import transaction
 from api.models import APIKey, UserAPIAssignment, Servicio, AdminAlert, UserAPIQuota
 
 
+SERVICE_DEFAULTS = {
+    'gemini': {
+        'descripcion': 'Google Gemini',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'elevenlabs': {
+        'descripcion': 'ElevenLabs',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'uploadpost': {
+        'descripcion': 'UploadPost',
+        'default_daily_limit': 999999,
+        'default_monthly_limit': 10,
+        'extra_increment': 10,
+    },
+    'cloudinary': {
+        'descripcion': 'Cloudinary',
+        'default_daily_limit': 999999,
+        'default_monthly_limit': None,
+        'extra_increment': 1,
+    },
+}
+
 SERVICIOS_CRITICOS = ['gemini', 'elevenlabs', 'uploadpost']
 
 PLAN_API_COUNTS = {
@@ -27,6 +54,21 @@ def _desired_api_counts_for_plan(plan):
     counts = dict(COMPATIBILITY_API_COUNTS)
     counts.update(PLAN_API_COUNTS.get(str(plan or 'starter').lower(), PLAN_API_COUNTS['starter']))
     return counts
+
+
+def ensure_core_services():
+    """Crea el catálogo mínimo de servicios para que el pool pueda asignar keys."""
+    for nombre, defaults in SERVICE_DEFAULTS.items():
+        Servicio.objects.update_or_create(
+            nombre=nombre,
+            defaults={
+                'descripcion': defaults['descripcion'],
+                'activo': True,
+                'default_daily_limit': defaults['default_daily_limit'],
+                'default_monthly_limit': defaults['default_monthly_limit'],
+                'extra_increment': defaults['extra_increment'],
+            },
+        )
 
 
 def _create_assign_failed_alert(user, service_name, missing_count):
@@ -62,6 +104,7 @@ class APIPoolService:
         Devuelve la lista de servicios que tienen al menos una key activa o fueron asignados.
         """
         asignados = []
+        ensure_core_services()
         desired_counts = _desired_api_counts_for_plan(getattr(user, 'plan_nombre', 'starter'))
 
         for nombre_servicio, desired_count in desired_counts.items():

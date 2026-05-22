@@ -40,13 +40,14 @@ def mi_uso_apis(request):
     Cruza datos de UserAPIQuota con las keys asignadas en UserAPIAssignment.
     """
     user = request.user
+    from api.services.pool_service import APIPoolService, ensure_core_services
+    ensure_core_services()
     
     # 1. Obtener todas las cuotas del usuario
     quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
     
     # Si no tiene cuotas, intentar repararlas (asignar keys si es nuevo)
     if not quotas.exists():
-        from api.services.pool_service import APIPoolService
         APIPoolService.assign_keys_to_user(user)
         quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
 

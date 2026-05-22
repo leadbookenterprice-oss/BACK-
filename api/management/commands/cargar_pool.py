@@ -4,6 +4,7 @@ import os
 from django.core.management.base import BaseCommand, CommandError
 
 from api.models import APIKey, Servicio
+from api.services.pool_service import SERVICE_DEFAULTS
 
 
 class Command(BaseCommand):
@@ -32,8 +33,26 @@ class Command(BaseCommand):
             if not servicio_nombre or not api_key:
                 raise CommandError('Cada cuenta requiere servicio y api_key.')
 
-            servicio, _ = Servicio.objects.get_or_create(nombre=servicio_nombre)
-            _, created = APIKey.objects.get_or_create(servicio=servicio, api_key=api_key)
+            defaults = SERVICE_DEFAULTS.get(servicio_nombre, {})
+            servicio, _ = Servicio.objects.update_or_create(
+                nombre=servicio_nombre,
+                defaults={
+                    'descripcion': defaults.get('descripcion', servicio_nombre.title()),
+                    'activo': True,
+                    'default_daily_limit': defaults.get('default_daily_limit', 1500),
+                    'default_monthly_limit': defaults.get('default_monthly_limit'),
+                    'extra_increment': defaults.get('extra_increment', 1500),
+                },
+            )
+            _, created = APIKey.objects.get_or_create(
+                servicio=servicio,
+                api_key=api_key,
+                defaults={
+                    'label': cuenta.get('label') or f'{servicio_nombre}-pool',
+                    'status': 'available',
+                    'google_daily_limit': int(cuenta.get('daily_limit') or defaults.get('default_daily_limit') or 1500),
+                },
+            )
             if created:
                 creadas += 1
             else:

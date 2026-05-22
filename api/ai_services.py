@@ -12,6 +12,7 @@ from api.tracking import track_api_call
 
 logger = logging.getLogger(__name__)
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
+API_KEY_UNAVAILABLE_MESSAGE = "No hay una API asignada para este servicio. Pedile al admin que cargue o repare el pool de APIs."
 
 
 def _settings_or_env(name, default=''):
@@ -561,6 +562,11 @@ class GeminiQuotaExhaustedError(Exception):
     """Cuota mensual/diaria de Gemini agotada. No tiene solución con reintentos."""
     pass
 
+
+class APIKeyUnavailableError(Exception):
+    """El usuario no tiene una API key asignada o el pool no tiene stock disponible."""
+    pass
+
 @track_api_call(service='gemini')
 def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
     system_prompt = kwargs.get('system_prompt', '')
@@ -698,6 +704,8 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
             result = call_gemini_api(prompt, agente=agente, **kwargs)
             if result:
                 return result
+        except APIKeyUnavailableError:
+            raise
         except GeminiQuotaExhaustedError:
             raise
         except Exception as e:
@@ -838,7 +846,7 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
             current_key = settings.GEMINI_API_KEY
 
         if not current_key:
-            raise GeminiQuotaExhaustedError(LIMIT_REACHED_MESSAGE)
+            raise APIKeyUnavailableError(API_KEY_UNAVAILABLE_MESSAGE)
 
         # 2. Crear cliente y ejecutar
         try:

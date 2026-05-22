@@ -18,6 +18,7 @@ import re
 import json
 import io
 import zipfile
+import base64
 import html as html_lib
 import unicodedata
 from functools import wraps
@@ -41,7 +42,7 @@ from .serializers import (
     UserContentPreferenceSerializer, CRMClientSerializer,
 )
 from .tasks import run_asset_generation
-from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError, normalize_elevenlabs_voice_choice
+from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError, APIKeyUnavailableError, normalize_elevenlabs_voice_choice
 from .utils import crear_notificacion
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
@@ -63,6 +64,52 @@ def active_plan_block_response(request):
     if block_payload:
         return Response(block_payload, status=status.HTTP_402_PAYMENT_REQUIRED)
     return None
+
+
+def _is_data_url(value):
+    return isinstance(value, str) and value.strip().lower().startswith('data:')
+
+
+def _safe_persisted_media_url(value):
+    """Nunca devolver blobs data: desde campos persistidos."""
+    if _is_data_url(value):
+        return None
+    return value
+
+
+def _upload_profile_data_image(value, user_id):
+    if not _is_data_url(value):
+        return value
+    try:
+        header, payload = value.split(',', 1)
+        if not header.lower().startswith('data:image'):
+            return None
+        raw = base64.b64decode(payload, validate=True)
+        if len(raw) > 8 * 1024 * 1024:
+            return None
+        return AlmacenamientoCloudinary.guardar_avatar(io.BytesIO(raw), user_id=user_id)
+    except Exception as exc:
+        logger.warning("No se pudo subir imagen de perfil desde data URL: %s", exc)
+        return None
+
+
+def _resolve_profile_logo_input(data, user):
+    present, value = _extract_first_present(data, 'logo_url', 'logoUrl')
+    if not present:
+        return False, None, None
+    if value in (None, ''):
+        return True, value, None
+    uploaded = _upload_profile_data_image(value, user.id)
+    if _is_data_url(value) and not uploaded:
+        return True, None, Response(
+            {'error': 'invalid_logo', 'message': 'No se pudo subir el logo a Cloudinary.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if isinstance(uploaded, str) and uploaded.startswith('http'):
+        return True, uploaded, None
+    if isinstance(value, str) and value.startswith('http'):
+        return True, value, None
+    return True, None, None
 
 
 def _notify_admin_trial_token_request(access_code_obj, email):
@@ -2890,6 +2937,8 @@ Contenido original:
         with concurrent.futures.ThreadPoolExecutor() as ex:
             future = ex.submit(call_gemini_api, prompt, agente=request.user)
             raw_response = future.result(timeout=25)
+    except APIKeyUnavailableError as e:
+        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception as e:
@@ -2915,6 +2964,8 @@ Contenido original:
                     if repaired:
                         attempts.append(str(repaired).strip())
                         continue
+                except APIKeyUnavailableError as e:
+                    return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
                 except GeminiQuotaExhaustedError as e:
                     return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
                 except Exception:
@@ -2934,6 +2985,8 @@ Contenido original:
                 if repaired:
                     attempts.append(str(repaired).strip())
                     continue
+            except APIKeyUnavailableError as e:
+                return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
             except GeminiQuotaExhaustedError as e:
                 return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
             except Exception:
@@ -2985,6 +3038,8 @@ def generar_listado(request):
         # Fallback: intentar con Gemini si Groq falla
         try:
             result = call_gemini_api(prompt_text, system_prompt=system_prompt, agente=request.user)
+        except APIKeyUnavailableError as e_gem:
+            return Response({"error": "api_key_unavailable", "mensaje": str(e_gem)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except GeminiQuotaExhaustedError as e_gem:
             return Response({"error": "cuota_ia_agotada", "mensaje": str(e_gem)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
         except Exception as e_gem:
@@ -3022,7 +3077,7 @@ class DashboardView(APIView):
 
         return Response({
             "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
-            "logo_url": getattr(user, 'logo_url', None),
+            "logo_url": _safe_persisted_media_url(getattr(user, 'logo_url', None)),
             "listados_este_mes": listados_este_mes,
             "total_generados": total_generados,
             "videos_creados": videos_creados,
@@ -3057,7 +3112,7 @@ class PerfilView(APIView):
             "nombre": user.nombre,
             "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
             "agencia": getattr(user, 'agencia', None),
-            "logo_url": getattr(user, 'logo_url', None),
+            "logo_url": _safe_persisted_media_url(getattr(user, 'logo_url', None)),
             "telefono": getattr(user, 'telefono', None),
             "nicho": getattr(user, 'nicho', None),
             "pais": getattr(user, 'pais', None),
@@ -3103,10 +3158,11 @@ class PerfilView(APIView):
         if agency_present:
             user.nombre_inmobiliaria = clean_agency_name
 
-        if 'logo_url' in data:
-            user.logo_url = data['logo_url']
-        elif 'logoUrl' in data:
-            user.logo_url = data['logoUrl']
+        logo_present, logo_value, logo_error = _resolve_profile_logo_input(data, user)
+        if logo_error:
+            return logo_error
+        if logo_present:
+            user.logo_url = logo_value
 
         if 'meta_access_token' in data:
             user.meta_access_token = data['meta_access_token']
@@ -3140,7 +3196,7 @@ class PerfilView(APIView):
             "nombre": user.nombre,
             "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
             "agencia": getattr(user, 'agencia', None),
-            "logo_url": getattr(user, 'logo_url', None),
+            "logo_url": _safe_persisted_media_url(getattr(user, 'logo_url', None)),
             "telefono": getattr(user, 'telefono', None),
             "nicho": getattr(user, 'nicho', None),
             "pais": getattr(user, 'pais', None),
@@ -3738,7 +3794,7 @@ Colores solo HEX. No uses HTML ni CSS libre.
         reply = str(parsed.get('reply') or '').strip()
         if patch:
             return {'reply': reply, 'token_patch': patch}
-    except GeminiQuotaExhaustedError:
+    except (APIKeyUnavailableError, GeminiQuotaExhaustedError):
         raise
     except Exception as exc:
         logger.warning("Template Studio AI patch failed: %s", exc)
@@ -3913,6 +3969,8 @@ def brand_template_draft_chat(request):
 
     try:
         ai_result = _template_ai_patch_from_message(message, current_tokens, base_template_id, request.user) if message else None
+    except APIKeyUnavailableError as exc:
+        return Response({'error': 'api_key_unavailable', 'mensaje': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as exc:
         return Response({'error': 'cuota_ia_agotada', 'mensaje': str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     if ai_result:
@@ -3955,6 +4013,8 @@ def brand_template_chat(request, template_id):
 
     try:
         ai_result = _template_ai_patch_from_message(message, current_tokens, template.base_template_id, request.user) if message else None
+    except APIKeyUnavailableError as exc:
+        return Response({'error': 'api_key_unavailable', 'mensaje': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as exc:
         return Response({'error': 'cuota_ia_agotada', 'mensaje': str(exc)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     token_patch = (ai_result or {}).get('token_patch') or _template_patch_from_message(message)
@@ -4473,6 +4533,8 @@ Requisitos obligatorios:
             "gallery_used": len(gallery_images),
             "gallery_omitted": gallery_omitted,
         }, status=status.HTTP_200_OK)
+    except APIKeyUnavailableError as e:
+        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as e:
         crear_notificacion(
             request.user,
@@ -4525,10 +4587,11 @@ class OnboardingView(APIView):
         if agency_present:
             user.nombre_inmobiliaria = clean_agency_name
             
-        if 'logo_url' in data:
-            user.logo_url = data['logo_url']
-        elif 'logoUrl' in data:
-            user.logo_url = data['logoUrl']
+        logo_present, logo_value, logo_error = _resolve_profile_logo_input(data, user)
+        if logo_error:
+            return logo_error
+        if logo_present:
+            user.logo_url = logo_value
             
         if 'nicho' in data:
             user.nicho = data['nicho']
@@ -4554,7 +4617,7 @@ class OnboardingView(APIView):
             "email": user.email,
             "nombre": user.nombre,
             "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
-            "logo_url": getattr(user, 'logo_url', None),
+            "logo_url": _safe_persisted_media_url(getattr(user, 'logo_url', None)),
             "telefono": getattr(user, 'telefono', None),
             "nicho": getattr(user, 'nicho', None),
             "pais": getattr(user, 'pais', None),
@@ -5178,6 +5241,8 @@ def generar_pdf(request):
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
 
+    except APIKeyUnavailableError as e:
+        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as e:
         crear_notificacion(
             request.user,
@@ -5354,6 +5419,8 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
+    except APIKeyUnavailableError as e:
+        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception:
@@ -5492,6 +5559,8 @@ def generar_imagen_story(request):
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
+    except APIKeyUnavailableError as e:
+        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception:
@@ -5552,6 +5621,8 @@ No des opciones, no uses títulos como "Opción 1", no expliques el caption, no 
             )
 
         return Response({"caption": caption, "texto": caption}, status=status.HTTP_200_OK)
+    except APIKeyUnavailableError as e:
+        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception:
@@ -5747,6 +5818,8 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
             actualizar_resultados_listado(listado_obj, 'email', parsed)
             
         return Response(parsed, status=status.HTTP_200_OK)
+    except APIKeyUnavailableError as e:
+        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception:
@@ -6851,7 +6924,7 @@ def dashboard(request):
 
     return Response({
         'nombre_inmobiliaria': getattr(agent, 'nombre_inmobiliaria', None),
-        'logo_url': getattr(agent, 'logo_url', None),
+        'logo_url': _safe_persisted_media_url(getattr(agent, 'logo_url', None)),
         'listados_este_mes': listados_este_mes,
         'total_generados': total_generados,
         'videos_creados': videos_creados,
@@ -7988,6 +8061,8 @@ REQUISITOS:
         if not result:
             return Response({"error": "No se pudo generar texto"}, status=503)
         return Response({"texto": result.strip()})
+    except APIKeyUnavailableError as e:
+        return Response({"error": "api_key_unavailable", "mensaje": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except GeminiQuotaExhaustedError as e:
         return Response({"error": "cuota_ia_agotada", "mensaje": str(e)}, status=status.HTTP_429_TOO_MANY_REQUESTS)
     except Exception:

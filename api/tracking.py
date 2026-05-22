@@ -311,6 +311,14 @@ def _raise_service_exhausted(service, message):
     raise Exception(message)
 
 
+def _raise_api_key_unavailable(service):
+    message = f"No hay API key asignada para {service}. El admin debe cargar stock o reparar el pool."
+    if str(service or '').lower() == 'gemini':
+        from api.ai_services import APIKeyUnavailableError
+        raise APIKeyUnavailableError(message)
+    raise Exception(message)
+
+
 def emit_ws_event(event_data):
     """Envía un evento al consumer de WebSockets del Admin Dashboard."""
     channel_layer = get_channel_layer()
@@ -411,7 +419,7 @@ def track_api_call(service, action=''):
 
             key_str = get_next_available_api(agente, service)
             if not key_str:
-                _raise_service_exhausted(service, _limit_message_for_service(service))
+                _raise_api_key_unavailable(service)
 
             key_obj = APIKey.objects.filter(
                 api_key=key_str,
