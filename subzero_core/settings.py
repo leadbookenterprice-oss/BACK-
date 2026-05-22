@@ -115,6 +115,15 @@ ASGI_APPLICATION = 'subzero_core.asgi.application'
 
 _DATABASE_URL = config("DATABASE_URL", default="").strip()
 
+_app_role = os.environ.get('APP_ROLE', '').strip().lower()
+_service_name = os.environ.get('RAILWAY_SERVICE_NAME', '').strip().lower()
+_is_worker_role = (_app_role == 'worker') or (_service_name == 'heroic-wisdom')
+
+if _is_worker_role and not _DATABASE_URL:
+    raise RuntimeError(
+        "Worker iniciado sin DATABASE_URL. Configurá DATABASE_URL en el servicio worker de Railway."
+    )
+
 if _DATABASE_URL:
     DATABASES = {
         'default': dj_database_url.config(
@@ -134,6 +143,8 @@ else:
             'OPTIONS': {'timeout': 20},
         }
     }
+
+print(f"[STARTUP] DB_ENGINE={DATABASES['default']['ENGINE']}")
 
 
 # Password validation
