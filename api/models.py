@@ -1148,6 +1148,7 @@ class AdminAlert(models.Model):
         ('api_dead',        'API Muerta'),
         ('pool_low',        'Pool bajo — menos de 3 disponibles'),
         ('user_abuse',      'Abuso de usuario'),
+        ('trial_token_request', 'Token solicitado'),
         ('high_error_rate', 'Alta tasa de errores'),
         ('webhook_error',   'Error en Webhook'),
         ('assign_failed',   'Fallo en asignación de APIs'),

@@ -2,6 +2,7 @@ import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from decouple import config
 from django.utils.crypto import constant_time_compare
+from django.utils import timezone
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
 
@@ -25,16 +26,31 @@ class AdminDashboardConsumer(AsyncWebsocketConsumer):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def api_request_made(self, event):
-        await self.send(text_data=json.dumps({
-            'type': 'request_made',
-            'data': event['data']
-        }))
+        await self._send_payload('request', event)
 
     async def admin_alert(self, event):
-        await self.send(text_data=json.dumps({
-            'type': 'alert',
-            'data': event['data']
-        }))
+        await self._send_payload('alert', event)
+
+    async def stats_update(self, event):
+        await self._send_payload('stats_update', event)
+
+    async def trial_token_request(self, event):
+        await self._send_payload('trial_token_request', event)
+
+    async def _send_payload(self, event_type, event):
+        payload = event.get('data') or {}
+        if not isinstance(payload, dict):
+            payload = {'value': payload}
+
+        outgoing = {
+            'type': event_type,
+            'data': payload,
+        }
+        outgoing.update(payload)
+        outgoing.setdefault('message', event_type.replace('_', ' ').strip().capitalize())
+        outgoing.setdefault('timestamp', timezone.now().isoformat())
+
+        await self.send(text_data=json.dumps(outgoing, default=str))
 
     async def receive(self, text_data=None, bytes_data=None):
         # Ping/pong keepalive

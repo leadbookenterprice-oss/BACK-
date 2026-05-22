@@ -547,11 +547,14 @@ def track_api_call(service, action=''):
                     {
                         'type': 'api_request_made',
                         'data': {
+                            'message': f'Request de {service}',
                             'user': agente.email,
+                            'user_email': agente.email,
                             'service': service,
                             'action': action,
                             'success': success,
                             'time_ms': elapsed_ms,
+                            'timestamp': timezone.now().isoformat(),
                         },
                     }
                 )

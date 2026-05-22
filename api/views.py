@@ -31,7 +31,7 @@ from .models import (
     AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision, default_template_tokens,
     AgentAssociation, CRMClient,
-    TerminosCondiciones, PoliticaPrivacidad, UsageLog, AccessCode
+    TerminosCondiciones, PoliticaPrivacidad, UsageLog, AccessCode, AdminAlert
 )
 from .serializers import (
     RegisterSerializer, GeneratedAssetSerializer,
@@ -63,6 +63,45 @@ def active_plan_block_response(request):
     if block_payload:
         return Response(block_payload, status=status.HTTP_402_PAYMENT_REQUIRED)
     return None
+
+
+def _notify_admin_trial_token_request(access_code_obj, email):
+    """Registra el pedido de token y avisa al dashboard admin en tiempo real."""
+    try:
+        from .tracking import emit_ws_event
+
+        alert = AdminAlert.objects.create(
+            tipo='trial_token_request',
+            severidad='info',
+            titulo='Nuevo token solicitado',
+            mensaje=f'Se solicitó un token de acceso para {email}.',
+        )
+
+        payload = {
+            'kind': 'trial_token_request',
+            'severity': 'info',
+            'message': f'Nuevo token solicitado para {email}',
+            'user_email': email,
+            'details': {
+                'alert_id': alert.id,
+                'access_code_id': access_code_obj.id,
+                'access_code': access_code_obj.code,
+                'trial_days': access_code_obj.trial_days,
+                'assigned_email': access_code_obj.assigned_email,
+            },
+        }
+
+        transaction.on_commit(lambda: emit_ws_event({'type': 'trial_token_request', 'data': payload}))
+        transaction.on_commit(
+            lambda: emit_ws_event({
+                'type': 'stats_update',
+                'data': {
+                    'pendingAlerts': AdminAlert.objects.filter(is_read=False).count(),
+                },
+            })
+        )
+    except Exception:
+        logger.exception('[TRIAL_TOKEN] No se pudo notificar al dashboard admin')
 
 def actualizar_resultados_listado(listado, tipo, resultado):
     """
@@ -2265,6 +2304,7 @@ def request_trial_token(request):
         assigned_email=email or None,
         notes=f"Solicitado token por email={email or '-'}",
     )
+    _notify_admin_trial_token_request(access_code_obj, email)
 
     # Enviar token por email usando el sender robusto de OTP
     sent = False

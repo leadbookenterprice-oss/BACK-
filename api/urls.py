@@ -39,6 +39,7 @@ from .views_admin import (
     admin_apikeys_auto_repair, admin_branding_watermark,
     admin_access_codes, admin_access_code_detail,
 )
+from .admin import admin_alerts_list
 from .views_crm import crm_client_send_email
 
 router = DefaultRouter()
@@ -154,6 +155,7 @@ urlpatterns = [
     path('admin/apikeys/pool/auto-repair/', admin_apikeys_auto_repair),
     path('admin/pool/estado/', admin_pool_estado),
     path('admin/pool/listar/', admin_apikeys_pool), # Alias
+    path('admin/alerts/', admin_alerts_list),
     path('admin/alerts/<int:alert_id>/read/', admin_alerts_read),
     path('admin/health-check/', admin_health_check),
     path('admin/access-codes/', admin_access_codes),

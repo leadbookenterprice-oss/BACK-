@@ -665,11 +665,11 @@ def admin_enviar_email(request, pk):
 def admin_alerts_list(request):
     if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
     if request.method == 'GET':
-        alerts = AdminAlert.objects.filter(is_read=False).order_by('-creado_en')[:50]
-        data = list(alerts.values('id', 'tipo', 'severidad', 'titulo', 'mensaje', 'creado_en'))
+        alerts = AdminAlert.objects.order_by('-creado_en')[:50]
+        data = list(alerts.values('id', 'tipo', 'severidad', 'titulo', 'mensaje', 'creado_en', 'is_read'))
         for a in data:
             a['type'] = a.get('tipo'); a['severity'] = a.get('severidad')
-            a['title'] = a.get('titulo'); a['message'] = a.get('mensaje'); a['created_at'] = a.get('creado_en')
+            a['title'] = a.get('titulo'); a['message'] = a.get('mensaje'); a['created_at'] = a.get('creado_en'); a['timestamp'] = a.get('creado_en')
         return Response(data)
     AdminAlert.objects.filter(id__in=request.data.get('ids', [])).update(is_read=True)
     return Response({'status': 'updated'})

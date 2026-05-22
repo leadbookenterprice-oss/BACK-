@@ -652,9 +652,9 @@ def admin_alerts_list(request):
         return Response({'error': 'Forbidden'}, status=403)
 
     if request.method == 'GET':
-        alerts = AdminAlert.objects.filter(is_read=False).order_by('-creado_en')[:50]
+        alerts = AdminAlert.objects.order_by('-creado_en')[:50]
         data = list(alerts.values(
-            'id', 'tipo', 'severidad', 'titulo', 'mensaje', 'creado_en'
+            'id', 'tipo', 'severidad', 'titulo', 'mensaje', 'creado_en', 'is_read'
         ))
         # Aliases para compatibilidad con frontend
         for a in data:
@@ -663,6 +663,7 @@ def admin_alerts_list(request):
             a['title']      = a.get('titulo')
             a['message']    = a.get('mensaje')
             a['created_at'] = a.get('creado_en')
+            a['timestamp']  = a.get('creado_en')
         return Response(data)
     else:
         ids = request.data.get('ids', [])
