@@ -2148,7 +2148,8 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def request_trial_token(request):
-    from django.core.mail import send_mail
+    from django.conf import settings
+    from .tasks import send_otp_email_async
     email = str(request.data.get('email') or '').strip().lower()
     logger.info("[TRIAL_TOKEN] request_trial_token solicitado email=%s", email)
 
@@ -2181,26 +2182,22 @@ def request_trial_token(request):
         notes=f"Solicitado token por email={email or '-'}",
     )
 
-    # Enviar token por email (flujo simple, sin Twilio)
+    # Enviar token por email usando el sender robusto de OTP
     sent = False
     send_error = None
     channel = None
     email_error = None
     try:
-        send_mail(
-            subject='Tu código de acceso LeadBook',
-            message=(
-                'Hola!\n\n'
-                'Tu código de acceso para activar la prueba Starter de 30 días es:\n\n'
-                f'{code}\n\n'
-                'Ingresalo en la app para continuar.'
-            ),
-            from_email=None,
-            recipient_list=[email],
-            fail_silently=False,
-        )
-        sent = True
-        channel = 'email'
+        logger.info("[TRIAL_TOKEN] enviando email via send_otp_email_async a=%s", email)
+        # Se ejecuta sync para no depender de worker en este paso.
+        result = send_otp_email_async(email, code)
+        result_str = str(result or '').lower()
+        if result_str.startswith('sent:'):
+            sent = True
+            channel = 'email'
+        else:
+            email_error = str(result)
+            send_error = email_error
     except Exception as e:
         email_error = str(e)
         send_error = email_error
@@ -2225,6 +2222,9 @@ def request_trial_token(request):
         response_data["send_error"] = send_error
     if email_error:
         response_data["email_error"] = email_error
+
+    if settings.DEBUG:
+        response_data["code"] = code
 
     if not sent:
         return Response(response_data, status=status.HTTP_503_SERVICE_UNAVAILABLE)
