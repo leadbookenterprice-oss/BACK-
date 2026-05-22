@@ -69,6 +69,7 @@ class Agent(AbstractBaseUser, PermissionsMixin):
     nacionalidad           = models.CharField(max_length=100, null=True, blank=True)
     sitio_web              = models.URLField(max_length=255, null=True, blank=True)
     bio                    = models.TextField(null=True, blank=True)
+    settings               = models.JSONField(default=dict, blank=True)
 
     # Plan — UN SOLO campo, fuente de verdad
     plan_nombre            = models.CharField(max_length=20, choices=PLANES, default='starter')

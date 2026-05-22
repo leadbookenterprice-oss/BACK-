@@ -278,6 +278,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'api.tasks.reset_daily_counters',
         'schedule': crontab(hour=0, minute=0),
     },
+    'weekly-notification-digest': {
+        'task': 'api.tasks.send_weekly_notification_digest',
+        'schedule': crontab(day_of_week='mon', hour=12, minute=0),
+    },
 }
 
 # Cache Configuration — usa Redis si está disponible, sino memoria local

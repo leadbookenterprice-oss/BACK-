@@ -41,7 +41,7 @@ from .serializers import (
     UserContentPreferenceSerializer, CRMClientSerializer,
 )
 from .tasks import run_asset_generation
-from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError
+from .ai_services import call_groq_api, call_gemini_api, smart_call, GeminiQuotaExhaustedError, normalize_elevenlabs_voice_choice
 from .utils import crear_notificacion
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
@@ -78,6 +78,62 @@ def actualizar_resultados_listado(listado, tipo, resultado):
     
     listado.datos_extra['resultados'][tipo] = _sanitize_listing_storage_value(resultado)
     listado.save(update_fields=['datos_extra'])
+
+
+DEFAULT_USER_SETTINGS = {
+    'notify_email': False,
+    'notify_generation': False,
+    'auto_save_drafts': True,
+    'show_tips': True,
+    'dark_mode': True,
+    'glass_effects': True,
+    'locale': 'es',
+    'timezone': 'America/Argentina/Buenos_Aires',
+}
+
+
+def _coerce_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+    return bool(value)
+
+
+def _normalize_user_settings(raw_settings=None, base_settings=None):
+    merged = dict(DEFAULT_USER_SETTINGS)
+    if isinstance(base_settings, dict):
+        merged.update({k: v for k, v in base_settings.items() if v is not None})
+    if isinstance(raw_settings, str):
+        try:
+            raw_settings = json.loads(raw_settings)
+        except Exception:
+            raw_settings = {}
+    if not isinstance(raw_settings, dict):
+        raw_settings = {}
+
+    boolean_keys = {
+        'notify_email',
+        'notify_generation',
+        'auto_save_drafts',
+        'show_tips',
+        'dark_mode',
+        'glass_effects',
+    }
+    text_keys = {'locale', 'timezone'}
+
+    for key in boolean_keys:
+        if key in raw_settings:
+            merged[key] = _coerce_bool(raw_settings.get(key))
+
+    for key in text_keys:
+        if key in raw_settings:
+            value = raw_settings.get(key)
+            merged[key] = str(value).strip() if value is not None else DEFAULT_USER_SETTINGS[key]
+
+    for key, value in raw_settings.items():
+        if key not in merged:
+            merged[key] = value
+
+    return merged
 
 
 TEMPLATE_IDS = (
@@ -1085,6 +1141,7 @@ def _sanitize_listing_payload_for_storage(payload):
     if not isinstance(payload, dict):
         return {}
     return _sanitize_listing_storage_value(payload)
+
 
 def _serialize_listing_summary(listado):
     cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
@@ -2553,7 +2610,7 @@ def generar_guion(request):
     precio = data.get('precio', '')
     recamaras = str(data.get('recamaras', '') or data.get('habitaciones', ''))
     banos = str(data.get('banos', '') or data.get('bathrooms', ''))
-    voz = data.get('voz', 'femenina')
+    voz = normalize_elevenlabs_voice_choice(data.get('voz', 'femenina'))
     tono = data.get('tono', 'profesional')
     contexto_adicional = data.get('contextoAdicional', '')
 
@@ -2564,11 +2621,14 @@ def generar_guion(request):
     }
     tono_instrucciones = tono_map.get(tono, tono_map['profesional'])
 
-    narrador_instrucciones = (
-        'voz masculina: firme y segura'
-        if voz == 'masculina'
-        else 'voz femenina: calida y cercana'
-    )
+    narrador_map = {
+        'masculina': 'voz masculina: firme, segura y confiable',
+        'femenina': 'voz femenina: calida, cercana y profesional',
+        'energetica': 'voz energetica: vibrante, directa y de alto impacto',
+        'lujosa': 'voz lujosa: pausada, sofisticada, sensorial y aspiracional',
+        'personalizada': 'voz personalizada: respetar el estilo indicado por el usuario',
+    }
+    narrador_instrucciones = narrador_map.get(voz, narrador_map['femenina'])
 
     contexto_extra = f"\nENFOQUE ADICIONAL: {contexto_adicional}" if contexto_adicional else ''
     scene_names_hint = ', '.join(rules['scene_names'])
@@ -2951,6 +3011,7 @@ class PerfilView(APIView):
         user = request.user
         default_agent = _get_default_commercial_agent(user)
         asociados = AgentAssociation.objects.filter(agente=user).select_related('asociado')
+        settings_data = _normalize_user_settings(getattr(user, 'settings', None))
         return Response({
             "email": user.email,
             "nombre": user.nombre,
@@ -2965,6 +3026,7 @@ class PerfilView(APIView):
             "bio": getattr(user, 'bio', None),
             "meta_access_token": getattr(user, 'meta_access_token', None),
             "meta_instagram_account_id": getattr(user, 'meta_instagram_account_id', None),
+            "settings": settings_data,
             "agentes_asociados": [
                 {
                     "id": rel.asociado.id,
@@ -3024,11 +3086,14 @@ class PerfilView(APIView):
             user.sitio_web = clean_website
         if 'bio' in data:
             user.bio = data['bio']
-
+        if 'settings' in data:
+            user.settings = _normalize_user_settings(data.get('settings'), getattr(user, 'settings', None))
+            
         user.save()
 
         default_agent = _get_default_commercial_agent(user)
         asociados = AgentAssociation.objects.filter(agente=user).select_related('asociado')
+        settings_data = _normalize_user_settings(getattr(user, 'settings', None))
         return Response({
             "message": "Perfil actualizado exitosamente",
             "email": user.email,
@@ -3044,6 +3109,7 @@ class PerfilView(APIView):
             "bio": getattr(user, 'bio', None),
             "meta_access_token": getattr(user, 'meta_access_token', None),
             "meta_instagram_account_id": getattr(user, 'meta_instagram_account_id', None),
+            "settings": settings_data,
             "agentes_asociados": [
                 {
                     "id": rel.asociado.id,
@@ -4350,6 +4416,12 @@ Requisitos obligatorios:
 
         if user.is_authenticated:
             incrementar_uso(user, 'image')
+            crear_notificacion(
+                user,
+                'contenido_generado',
+                'Tu carrusel ya está listo',
+                'El carrusel fue generado correctamente y ya lo tenés disponible para publicar.',
+            )
 
         return Response({
             "slides": slides_urls,
@@ -4433,6 +4505,8 @@ class OnboardingView(APIView):
             user.sitio_web = clean_website
         if 'bio' in data:
             user.bio = data['bio']
+        if 'settings' in data:
+            user.settings = _normalize_user_settings(data.get('settings'), getattr(user, 'settings', None))
             
         user.save()
         default_agent = _get_default_commercial_agent(user)
@@ -4447,6 +4521,7 @@ class OnboardingView(APIView):
             "nacionalidad": getattr(user, 'nacionalidad', None),
             "sitio_web": getattr(user, 'sitio_web', None),
             "bio": getattr(user, 'bio', None),
+            "settings": _normalize_user_settings(getattr(user, 'settings', None)),
             "default_agent": _serialize_commercial_agent(default_agent),
             "plan_nombre": getattr(user, 'plan_nombre', 'starter')
         }, status=status.HTTP_200_OK)
@@ -4530,8 +4605,8 @@ class ListadosView(APIView):
         cover_frame_url = _resolve_listing_cover_frame(payload)
         if cover_frame_url:
             payload = {**payload, 'cover_frame_url': cover_frame_url}
-
         payload = _sanitize_listing_payload_for_storage(payload)
+
         # Guardamos en datos_extra el payload limpio
         listado = Listado.objects.create(
             agente=user,
@@ -4693,11 +4768,15 @@ def generar_video(request, pk):
         from django.conf import settings
         import threading
         listado = Listado.objects.get(id=pk, agente=request.user)
+        payload_datos = request.data.get('datos') if isinstance(request.data, dict) else None
+        if isinstance(payload_datos, dict):
+            datos = _merge_listing_extra_preserving_covers(listado.datos_extra, payload_datos)
+            listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
         listado.video_status = 'queued'
         listado.video_url = None
-        listado.save(update_fields=['video_status', 'video_url'])
+        listado.save(update_fields=['datos_extra', 'video_status', 'video_url', 'updated_at'])
 
-        video_provider = config('VIDEO_PROVIDER', default='hyperframes' if settings.DEBUG else 'veo3').strip().lower()
+        video_provider = config('VIDEO_PROVIDER', default='hyperframes' if settings.DEBUG else 'leadbook_sync').strip().lower()
         default_generation_mode = 'thread' if settings.DEBUG or video_provider in {'veo3', 'veo', 'gemini_veo', 'gemini'} else 'celery'
         generation_mode = config('VIDEO_GENERATION_MODE', default=default_generation_mode).strip().lower()
 
@@ -5027,6 +5106,14 @@ def generar_pdf(request):
                 pass
 
         # Devolvemos JSON para que el frontend maneje el preview y el link de descarga
+        if request.user.is_authenticated:
+            crear_notificacion(
+                request.user,
+                'contenido_generado',
+                'Tu PDF ya está listo',
+                'La ficha PDF fue generada correctamente y ya la tenés disponible para descargar.',
+            )
+
         return Response({
             "html": html_string,
             "url": pdf_url,
@@ -5198,6 +5285,12 @@ Máximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             incrementar_uso(request.user, 'image')
             from .plan_utils import registrar_uso
             registrar_uso(request.user, 'image')
+            crear_notificacion(
+                request.user,
+                'contenido_generado',
+                'Tu imagen POST ya está lista',
+                'La pieza para feed fue generada correctamente y ya la tenés disponible en tu historial.',
+            )
 
         return Response({
             "url": img_url,
@@ -5329,6 +5422,12 @@ def generar_imagen_story(request):
             incrementar_uso(request.user, 'image')
             from .plan_utils import registrar_uso
             registrar_uso(request.user, 'image')
+            crear_notificacion(
+                request.user,
+                'contenido_generado',
+                'Tu story ya está lista',
+                'La story fue generada correctamente y ya la tenés disponible para publicar.',
+            )
 
         return Response({
             "url": img_url,
@@ -5392,6 +5491,12 @@ No des opciones, no uses títulos como "Opción 1", no expliques el caption, no 
             incrementar_uso(request.user, 'ai')
             from .plan_utils import registrar_uso
             registrar_uso(request.user, 'ai')
+            crear_notificacion(
+                request.user,
+                'contenido_generado',
+                'Tu texto para story ya está listo',
+                'El caption para story fue generado correctamente y ya lo podés usar.',
+            )
 
         return Response({"caption": caption, "texto": caption}, status=status.HTTP_200_OK)
     except GeminiQuotaExhaustedError as e:
@@ -5484,6 +5589,12 @@ Devuelve **ÚNICAMENTE** y estrictamente un objeto JSON válido (sin Markdown, s
                 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'ai')
+            crear_notificacion(
+                request.user,
+                'contenido_generado',
+                'Tu email ya está listo',
+                'El email inmobiliario fue generado correctamente y ya lo tenés disponible.',
+            )
 
         parsed_html = _sanitize_generated_email_html(parsed.get('html', ''))
         parsed_text = _sanitize_generated_email_text(parsed.get('texto_plano', '') or parsed.get('html', ''))
@@ -7873,7 +7984,7 @@ def upload_fotos_listado(request):
                 if obj:
                     response_data['fotosRecorrido'].append(obj)
                 else:
-                    return Response({"error": "error_subida", "mensaje": "No se pudo subir una foto de la galeria a la nube."}, status=502)
+                    return Response({"error": "error_subida", "mensaje": "No se pudo subir una foto de la galería a la nube."}, status=502)
             elif isinstance(foto, dict):
                 response_data['fotosRecorrido'].append(foto)
             elif foto and isinstance(foto, str) and foto.startswith('http'):

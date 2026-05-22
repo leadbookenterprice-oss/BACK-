@@ -15,7 +15,7 @@ from api.models import Listado
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
-from api.ai_services import smart_call, call_elevenlabs_api
+from api.ai_services import call_elevenlabs_api, resolve_elevenlabs_voice_profile, smart_call
 from api.services.almacenamiento import AlmacenamientoCloudinary
 from api.services.video_quality_profile import get_video_profile, get_visual_theme
 
@@ -59,27 +59,16 @@ def _detect_ffmpeg_bin_dir():
         return matches[0]
     return ''
 
-def _call_elevenlabs_direct(text: str, voz='femenina'):
+def _call_elevenlabs_direct(text: str, voz='femenina', voice_id=None, voice_settings=None):
     key = config('ELEVENLABS_API_KEY', default='').strip() or getattr(settings, 'ELEVENLABS_API_KEY', '')
     if not key:
         return None
 
-    env_male = config('ELEVENLABS_VOICE_ID_MALE', default='').strip()
-    env_female = config('ELEVENLABS_VOICE_ID_FEMALE', default='').strip()
-    default_female = "EXAVITQu4vr4xnSDxMaL"
-    default_male = "21m00Tcm4TlvDq8ikWAM"
-    legacy_male = "pNInz6obpgnuMvHLW6m8"
-
-    if voz == 'masculina':
-        voice_candidates = [env_male, default_male, env_female, default_female, legacy_male]
-    else:
-        voice_candidates = [env_female, default_female, env_male, default_male, legacy_male]
-
-    filtered_candidates = []
-    for v in voice_candidates:
-        vv = (v or '').strip()
-        if vv and vv not in filtered_candidates:
-            filtered_candidates.append(vv)
+    _, filtered_candidates, resolved_voice_settings = resolve_elevenlabs_voice_profile(
+        voz=voz,
+        voice_id=voice_id,
+        voice_settings=voice_settings,
+    )
     headers = {
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
@@ -88,7 +77,7 @@ def _call_elevenlabs_direct(text: str, voz='femenina'):
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {"stability": 0.55, "similarity_boost": 0.65},
+        "voice_settings": resolved_voice_settings,
     }
     for attempt in range(3):
         try:

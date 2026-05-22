@@ -95,19 +95,32 @@ def generar_video_task(listado_id):
 
     logger.info("[VIDEO_TASK] Inicio listado_id=%s", listado_id)
     try:
-        default_provider = 'hyperframes' if settings.DEBUG else 'veo3'
+        default_provider = 'hyperframes' if settings.DEBUG else 'leadbook_sync'
         provider = config('VIDEO_PROVIDER', default=default_provider).strip().lower()
         if provider in {'veo3', 'veo', 'gemini_veo', 'gemini'}:
             from .services.gemini_video_service import generar_video_listado_veo3
             success = generar_video_listado_veo3(listado_id)
-        else:
+        elif provider in {'hyperframes', 'legacy'}:
             from .services.video_service import generar_video_listado
             success = generar_video_listado(listado_id)
+        else:
+            from .services.lightweight_video_service import generar_video_listado_liviano
+            success = generar_video_listado_liviano(listado_id)
 
         logger.info("[VIDEO_TASK] Resultado listado_id=%s provider=%s success=%s", listado_id, provider, success)
         if success:
             listado = Listado.objects.get(id=listado_id)
             registrar_uso(listado.agente, 'video')
+            try:
+                from .utils import crear_notificacion
+                crear_notificacion(
+                    listado.agente,
+                    'contenido_generado',
+                    'Tu video ya está listo',
+                    'El video de tu listado fue generado correctamente y ya lo tenés disponible.',
+                )
+            except Exception:
+                logger.exception("[VIDEO_TASK] No se pudo crear notificación para listado_id=%s", listado_id)
             return {"status": "completado", "id": listado_id}
         return {"status": "fallido", "id": listado_id}
     except Exception as e:
@@ -347,3 +360,62 @@ def reset_monthly_counters():
         has_assignment = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
         key.status = 'assigned' if has_assignment else 'available'
         key.save(update_fields=['status', 'updated_at'])
+
+
+@shared_task
+def send_weekly_notification_digest():
+    """Envía un resumen semanal a usuarios que activaron reportes por email."""
+    from django.core.mail import EmailMultiAlternatives
+    from django.conf import settings
+
+    cutoff = timezone.now() - timedelta(days=7)
+    users = Agent.objects.filter(settings__notify_email=True, is_active=True, eliminado_en__isnull=True)
+    sent = 0
+
+    for user in users:
+        notifications = list(
+            Notificacion.objects.filter(usuario=user, creada_en__gte=cutoff)
+            .order_by('-creada_en')[:10]
+        )
+        unread_count = Notificacion.objects.filter(usuario=user, leida=False).count()
+
+        if not notifications and unread_count == 0:
+            continue
+
+        lines = [
+            f"Hola {user.nombre or user.email},",
+            "",
+            "Este es tu resumen semanal de LeadBook:",
+            f"- Notificaciones nuevas: {len(notifications)}",
+            f"- Notificaciones sin leer: {unread_count}",
+            "",
+        ]
+
+        for notif in notifications[:5]:
+            lines.append(f"- {notif.titulo}: {notif.mensaje}")
+
+        text_body = '\n'.join(lines)
+        html_items = ''.join(
+            f"<li><strong>{notif.titulo}</strong><br>{notif.mensaje}</li>"
+            for notif in notifications[:5]
+        )
+        html_body = f"""
+        <div style="font-family:Arial,sans-serif;background:#060b14;color:#fff;padding:24px;border-radius:16px;">
+          <h2 style="margin:0 0 12px;">Resumen semanal LeadBook</h2>
+          <p style="color:#a1a1aa;">Hola {user.nombre or user.email}, te dejamos tu resumen semanal.</p>
+          <ul style="padding-left:18px;color:#e4e4e7;">{html_items}</ul>
+          <p style="margin-top:18px;color:#7dd3fc;">Sin leer: {unread_count}</p>
+        </div>
+        """
+
+        msg = EmailMultiAlternatives(
+            subject='Tu resumen semanal de LeadBook',
+            body=text_body,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+            to=[user.email],
+        )
+        msg.attach_alternative(html_body, 'text/html')
+        msg.send(fail_silently=True)
+        sent += 1
+
+    return {'sent': sent}

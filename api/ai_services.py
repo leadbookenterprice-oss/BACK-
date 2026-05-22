@@ -7,10 +7,108 @@ import requests
 import os
 import random
 import re
+import unicodedata
 from api.tracking import track_api_call
 
 logger = logging.getLogger(__name__)
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
+
+
+def _settings_or_env(name, default=''):
+    return (getattr(settings, name, '') or os.environ.get(name, default) or '').strip()
+
+
+def _bool_env(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+
+def _allow_global_api_fallback():
+    return _bool_env('ALLOW_GLOBAL_API_FALLBACK', getattr(settings, 'DEBUG', False))
+
+
+def normalize_elevenlabs_voice_choice(voz='femenina'):
+    raw = str(voz or 'femenina').strip().lower()
+    raw = ''.join(
+        c for c in unicodedata.normalize('NFKD', raw)
+        if not unicodedata.combining(c)
+    )
+    raw = re.sub(r'[^a-z0-9_\- ]+', '', raw).replace('-', '_').replace(' ', '_')
+    aliases = {
+        'female': 'femenina',
+        'mujer': 'femenina',
+        'voz_femenina': 'femenina',
+        'femenino': 'femenina',
+        'male': 'masculina',
+        'hombre': 'masculina',
+        'voz_masculina': 'masculina',
+        'masculino': 'masculina',
+        'energetico': 'energetica',
+        'energia': 'energetica',
+        'vibrante': 'energetica',
+        'dinamica': 'energetica',
+        'dinamico': 'energetica',
+        'lujo': 'lujosa',
+        'luxury': 'lujosa',
+        'premium': 'lujosa',
+        'sofisticada': 'lujosa',
+        'sofisticado': 'lujosa',
+        'custom': 'personalizada',
+        'customizada': 'personalizada',
+        'personalizado': 'personalizada',
+    }
+    normalized = aliases.get(raw, raw)
+    return normalized if normalized in {'femenina', 'masculina', 'energetica', 'lujosa', 'personalizada'} else 'femenina'
+
+
+def resolve_elevenlabs_voice_profile(voz='femenina', voice_id=None, voice_settings=None):
+    choice = normalize_elevenlabs_voice_choice(voz)
+    env_female = _settings_or_env('ELEVENLABS_VOICE_ID_FEMALE')
+    env_male = _settings_or_env('ELEVENLABS_VOICE_ID_MALE')
+    env_energetic = _settings_or_env('ELEVENLABS_VOICE_ID_ENERGETIC') or _settings_or_env('ELEVENLABS_VOICE_ID_ENERGETICA')
+    env_luxury = _settings_or_env('ELEVENLABS_VOICE_ID_LUXURY') or _settings_or_env('ELEVENLABS_VOICE_ID_LUJOSA')
+    env_custom = _settings_or_env('ELEVENLABS_VOICE_ID_CUSTOM') or _settings_or_env('ELEVENLABS_VOICE_ID_PERSONALIZADA')
+
+    default_female = "EXAVITQu4vr4xnSDxMaL"
+    default_male = "21m00Tcm4TlvDq8ikWAM"
+    legacy_male = "pNInz6obpgnuMvHLW6m8"
+
+    candidate_map = {
+        'femenina': [env_female, default_female, env_male, default_male, legacy_male],
+        'masculina': [env_male, default_male, env_female, default_female, legacy_male],
+        'energetica': [env_energetic, env_female, default_female, env_male, default_male, legacy_male],
+        'lujosa': [env_luxury, env_female, default_female, env_male, default_male, legacy_male],
+        'personalizada': [voice_id, env_custom, env_female, default_female, env_male, default_male, legacy_male],
+    }
+
+    settings_map = {
+        'femenina': {'stability': 0.50, 'similarity_boost': 0.65, 'style': 0.25, 'use_speaker_boost': True},
+        'masculina': {'stability': 0.55, 'similarity_boost': 0.65, 'style': 0.20, 'use_speaker_boost': True},
+        'energetica': {'stability': 0.35, 'similarity_boost': 0.75, 'style': 0.75, 'use_speaker_boost': True},
+        'lujosa': {'stability': 0.72, 'similarity_boost': 0.85, 'style': 0.35, 'use_speaker_boost': True},
+        'personalizada': {'stability': 0.55, 'similarity_boost': 0.75, 'style': 0.45, 'use_speaker_boost': True},
+    }
+
+    filtered_candidates = []
+    for candidate in candidate_map[choice]:
+        candidate = str(candidate or '').strip()
+        if candidate and candidate not in filtered_candidates:
+            filtered_candidates.append(candidate)
+
+    resolved_settings = dict(settings_map[choice])
+    if isinstance(voice_settings, dict):
+        for key in ('stability', 'similarity_boost', 'style'):
+            if key in voice_settings:
+                try:
+                    resolved_settings[key] = float(voice_settings[key])
+                except Exception:
+                    pass
+        if 'use_speaker_boost' in voice_settings:
+            resolved_settings['use_speaker_boost'] = bool(voice_settings['use_speaker_boost'])
+
+    return choice, filtered_candidates, resolved_settings
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), 'templates_pdf')
 
@@ -609,14 +707,12 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
     return None
 
 @track_api_call(service='elevenlabs')
-def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
+def call_elevenlabs_api(text: str, agente=None, voz='femenina', voice_id=None, voice_settings=None) -> bytes:
     """Genera audio MP3 usando ElevenLabs y el Pool de APIs."""
-    fallback_env_key = getattr(settings, 'ELEVENLABS_API_KEY', '')
+    key = None
+    fallback_env_key = _settings_or_env('ELEVENLABS_API_KEY')
 
-    # En local/dev priorizamos key de entorno para evitar dependencias legacy del pool.
-    if fallback_env_key:
-        key = fallback_env_key
-    elif agente is not None:
+    if agente is not None:
         try:
             from api.pool_manager import get_next_available_api
             key = get_next_available_api(agente, 'elevenlabs')
@@ -624,33 +720,32 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
             print(f"[WARN] Fallo pool_manager ElevenLabs ({type(e).__name__}).")
             key = None
         if not key:
-            print("[ERROR] No hay ElevenLabs API Key asignada para el usuario en el Pool.")
-            raise Exception(LIMIT_REACHED_MESSAGE)
-    else:
-        key = None
+            if _allow_global_api_fallback() and fallback_env_key:
+                key = fallback_env_key
+            else:
+                print("[ERROR] No hay ElevenLabs API Key asignada para el usuario en el Pool.")
+                raise Exception(LIMIT_REACHED_MESSAGE)
+    elif fallback_env_key:
+        key = fallback_env_key
+
+    if not key and _allow_global_api_fallback() and fallback_env_key:
+        key = fallback_env_key
 
     if not key:
         print("[ERROR] No hay ElevenLabs API Key disponible.")
         return None
 
-    # Voice selection (con fallback robusto y configurable por .env)
-    env_male = getattr(settings, 'ELEVENLABS_VOICE_ID_MALE', '') or ''
-    env_female = getattr(settings, 'ELEVENLABS_VOICE_ID_FEMALE', '') or ''
-    default_female = "EXAVITQu4vr4xnSDxMaL"
-    default_male = "21m00Tcm4TlvDq8ikWAM"
-    legacy_male = "pNInz6obpgnuMvHLW6m8"
-
-    if voz == 'masculina':
-        voice_candidates = [env_male, default_male, env_female, default_female, legacy_male]
-    else:
-        voice_candidates = [env_female, default_female, env_male, default_male, legacy_male]
-
-    # dedupe conservando orden
-    filtered_candidates = []
-    for v in voice_candidates:
-        vv = (v or '').strip()
-        if vv and vv not in filtered_candidates:
-            filtered_candidates.append(vv)
+    voice_choice, filtered_candidates, resolved_voice_settings = resolve_elevenlabs_voice_profile(
+        voz=voz,
+        voice_id=voice_id,
+        voice_settings=voice_settings,
+    )
+    if not filtered_candidates:
+        if voice_choice == 'personalizada':
+            print("[ERROR] No hay voice_id personalizada disponible para ElevenLabs.")
+            return None
+        print("[ERROR] No hay voces ElevenLabs disponibles.")
+        return None
 
     headers = {
         "Accept": "audio/mpeg",
@@ -661,10 +756,7 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina') -> bytes:
     data = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.5
-        }
+        "voice_settings": resolved_voice_settings,
     }
 
     try:
