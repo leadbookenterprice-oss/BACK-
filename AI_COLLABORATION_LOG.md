@@ -77,6 +77,179 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-22 - OpenCode - CRM V1 pipeline and Meta leads
+
+Objective:
+
+- Implement CRM V1 backend for "ningun lead se queda en visto": pipeline, lead dedupe, Meta webhook ingest, SLA follow-up tasks, timeline and metrics.
+
+Files modified:
+
+- `api/models.py`
+- `api/serializers.py`
+- `api/services/crm_service.py`
+- `api/views_crm.py`
+- `api/urls.py`
+- `api/migrations/0016_lead_pipelinestage_leadevent_leadassignment_and_more.py`
+- `api/tests_crm.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added CRM models: `PipelineStage`, `Lead`, `LeadEvent`, `LeadAssignment`, `FollowUpTask`.
+- Added default pipeline stages: `nuevo`, `contactado`, `calificado`, `visita`, `cierre`, `perdido`.
+- Added lead creation/dedupe service using `leadgen_id` first, then contact + listing + time window.
+- Added initial high-priority follow-up task and SLA due date on new lead creation.
+- Added endpoints under `/api/auth/crm/` for pipeline, leads, move stage, mark contacted, task update and metrics.
+- Added Meta Leads webhook at `/api/crm/meta/webhook/` with verification, optional signature validation, idempotent ingest and `soft_rate_limited` retry contract.
+- Added CRM tests for dedupe, initial follow-up, stage transition timeline, contact completion, webhook idempotency and soft rate limit contract.
+
+Verification:
+
+- `py -3 manage.py makemigrations api` OK, generated migration `0016`.
+- `py -3 manage.py makemigrations --check --dry-run` OK.
+- `py -3 manage.py check` OK.
+- `py -3 manage.py test api.tests_crm` OK, 6 tests.
+- `git diff --check -- api/models.py api/serializers.py api/services/crm_service.py api/views_crm.py api/urls.py api/tests_crm.py api/migrations/0016_lead_pipelinestage_leadevent_leadassignment_and_more.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- Apply migration `0016` in deployment.
+- Configure production env: `CRM_META_VERIFY_TOKEN`, `META_APP_SECRET`, `CRM_META_DEFAULT_OWNER_ID` or robust page-to-owner mapping, plus Meta access token source for lead detail fetch.
+- Browser/API-test Meta webhook with a real test lead.
+- Existing unrelated dirty files (`api/views.py`, `api/tests.py`, `api/services/almacenamiento.py`, extractor/ads files) were not reverted or overwritten.
+
+### 2026-05-22 - OpenCode - Ads Studio V1 and URL extraction
+
+Objective:
+
+- Add acquisition workflow support: property URL extraction plus Meta Ads variant generation, exportable/reusable by listing.
+
+Files modified:
+
+- `api/services/listing_extractor.py`
+- `api/services/ads_studio.py`
+- `api/views.py`
+- `api/urls.py`
+- `api/tests.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added secure HTML/JSON-LD property extractor with SSRF host validation, bounded downloads, structured extraction and semistructured fallback.
+- Added `POST /api/listados/extract-from-url/` returning normalized listing data, confidence and warnings.
+- Added Ads Studio service helpers and `POST /api/ads/generate-meta-variants/` using the existing Gemini/API pool path via `smart_call`.
+- Added soft/hard quota handling for Ads Studio responses and traceable `[ADS_STUDIO]` logs.
+- Persisted generated ad variants under `Listado.datos_extra.resultados.meta_variants` without schema migration.
+- Added backend tests for structured extraction, fallback extraction, controlled extractor error, endpoint integration, persistence, soft rate limit and hard quota.
+
+Verification:
+
+- `py -3 -m py_compile api/services/listing_extractor.py api/services/ads_studio.py api/views.py api/urls.py api/tests.py` OK.
+- `py -3 manage.py test api.tests.ListingExtractorTests api.tests.AdsStudioEndpointTests` OK.
+- `py -3 manage.py check` OK.
+- `py -3 manage.py test api` OK.
+- `py -3 manage.py makemigrations --check --dry-run` OK.
+- `git diff --check` OK, only LF/CRLF warning.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- Concurrent unrelated backend changes appeared during the session (`api/models.py`, `api/serializers.py`, `api/views_crm.py`, CRM migration and service). They were not reverted.
+- Real portal scraping needs manual validation because JS-rendered or blocked pages may return low confidence/fallback-only data.
+
+### 2026-05-22 - OpenCode - Security hardening pass
+
+Objective:
+
+- Apply defensive security fixes across backend/admin auth, secrets exposure, webhooks, debug endpoints, OTP logs, WebSockets, render/video SSRF, and production env defaults.
+
+Files modified:
+
+- `subzero_core/settings.py`
+- `admin_panel/consumers.py`
+- `admin_panel/views.py`
+- `admin_panel/views_cloudinary.py`
+- `api/admin.py`
+- `api/consumers.py`
+- `api/services/gemini_video_service.py`
+- `api/services/lightweight_video_service.py`
+- `api/services/render_engine.py`
+- `api/tasks.py`
+- `api/views.py`
+- `api/views_admin.py`
+- `.env.example`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added `ALLOW_ADMIN_KEY_AUTH` and `ALLOW_DEBUG_ENDPOINTS`, both defaulting to `DEBUG`/false in production examples.
+- Removed broad CORS regexes and only allows `x-admin-key` when emergency admin key auth is explicitly enabled.
+- Gated admin key bypass behind `ALLOW_ADMIN_KEY_AUTH`; normal admin access must be authenticated staff JWT.
+- Masked API keys/global keys in admin responses and stopped returning full Meta access token from profile.
+- Added MercadoPago webhook signature validation with `MP_WEBHOOK_SECRET`.
+- Gated debug endpoints behind `ALLOW_DEBUG_ENDPOINTS`.
+- Prevented OTP codes from being printed in production logs and hardened password recovery.
+- Added JWT validation for admin and presence WebSockets.
+- Added SSRF/size protections to Playwright render and video image downloads.
+
+Verification:
+
+- `py -3 manage.py check` OK.
+- `py -3 -m py_compile api/views.py api/tasks.py api/consumers.py admin_panel/consumers.py api/services/gemini_video_service.py api/services/lightweight_video_service.py api/services/render_engine.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- Rotate leaked `ADMIN_KEY` and exposed provider API keys.
+- Set production env: `MP_WEBHOOK_SECRET`, `ALLOW_ADMIN_KEY_AUTH=False`, `ALLOW_DEBUG_ENDPOINTS=False`, strict CORS origins, private/TLS Redis.
+- Encrypt DB-stored API keys/tokens in a follow-up migration.
+- Note: repo had staged/unrelated `api/views_admin.py` work from another agent; it was not reverted.
+
+### 2026-05-22 - OpenCode - Implement API key bulk dedupe behavior
+
+Objective:
+
+- Make Admin Dashboard bulk API key upload ignore repeated pasted keys, skip keys already in SQL, and automatically remove duplicate SQL APIKey rows when safe.
+
+Files modified:
+
+- `api/views_admin.py`
+
+Changes made:
+
+- Implemented `admin_apikeys_pool_bulk` instead of returning the v2 stub.
+- Added request-level dedupe by service + api_key.
+- Added existing-key detection so repeated SQL keys are not recreated.
+- Added duplicate cleanup for affected services: keeps one canonical key and deletes duplicate rows that have no assignment/history/usage.
+- Protects duplicates with `UserAPIAssignment`, API logs, request counters, errors, or `last_used_at` and reports them as `duplicates_protected`.
+- Added the same duplicate guard to individual API key creation.
+- Returns counts expected by admin UI: `received`, `created`, `duplicates_in_request`, `duplicates_existing`, `duplicates_deleted`, `duplicates_protected`, `duplicate_groups`, `errores`.
+
+Verification:
+
+- `py -3 -m py_compile api/views_admin.py` OK.
+- `py -3 manage.py check` OK.
+
+Commit/push:
+
+- Included in commit `fix(admin): dedupe API key bulk upload`.
+
+Pending/risks:
+
+- Bulk cleanup deletes only duplicate APIKey rows without assignment/history/usage. Duplicates with active assignment or historical usage are protected and reported, not deleted, to avoid breaking existing users or audit logs.
+- Existing unrelated backend dirty files were not touched.
+
 ### 2026-05-22 - OpenCode - Add multi-agent coordination files to repos
 
 Objective:

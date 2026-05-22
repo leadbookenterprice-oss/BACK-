@@ -5,7 +5,156 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from unittest.mock import patch
 
-from api.models import AgentMediaAsset, ComercialAgentProfile
+from api.ai_services import GeminiQuotaExhaustedError, GeminiRateLimitedError
+from api.models import AgentMediaAsset, ComercialAgentProfile, Listado
+from api.services.listing_extractor import ExtractorError, extract_listing_from_url
+
+
+class _FakeRawResponse:
+    def __init__(self, content):
+        self._content = content
+
+    def read(self, *_args, **_kwargs):
+        return self._content
+
+
+class _FakeHttpResponse:
+    is_redirect = False
+    is_permanent_redirect = False
+    status_code = 200
+
+    def __init__(self, html, url='https://example.com/propiedad'):
+        self.url = url
+        self.headers = {'Content-Type': 'text/html; charset=utf-8'}
+        self.raw = _FakeRawResponse(html.encode('utf-8'))
+        self._content = b''
+
+    @property
+    def content(self):
+        return self._content
+
+    def raise_for_status(self):
+        return None
+
+
+class ListingExtractorTests(TestCase):
+    def test_structured_extraction_success(self):
+        html = '''
+        <html><head><script type="application/ld+json">
+        {"@type":"RealEstateListing","name":"Casa luminosa en Palermo","description":"Casa con patio y pileta.",
+        "image":["/foto1.jpg","https://cdn.example.com/foto2.jpg"],
+        "offers":{"price":"250000","priceCurrency":"USD"},
+        "address":{"addressLocality":"Palermo","streetAddress":"Av. Siempre Viva 123"},
+        "numberOfBedrooms":3,"numberOfBathroomsTotal":2,"floorSize":{"value":180},
+        "amenityFeature":[{"name":"Piscina"},{"name":"Parrilla"}]}
+        </script></head><body></body></html>
+        '''
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
+            result = extract_listing_from_url('https://example.com/propiedad')
+
+        self.assertTrue(result['ok'])
+        self.assertGreaterEqual(result['confidence'], 0.6)
+        self.assertEqual(result['data']['titulo'], 'Casa luminosa en Palermo')
+        self.assertEqual(result['data']['moneda'], 'USD')
+        self.assertEqual(result['data']['recamaras'], 3)
+        self.assertEqual(len(result['data']['fotos']), 2)
+
+    def test_fallback_extraction_when_no_structured_data(self):
+        html = '''
+        <html><head><title>Departamento en venta</title><meta property="og:image" content="/hero.jpg"></head>
+        <body><h1>Departamento en venta en Belgrano</h1>
+        <p>Excelente departamento en venta con 2 habitaciones, 1 baño, 74 m2, balcon y cochera. USD 120.000.</p></body></html>
+        '''
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
+            result = extract_listing_from_url('https://example.com/depto')
+
+        self.assertTrue(result['ok'])
+        self.assertIn('semiestructurada', ' '.join(result['warnings']))
+        self.assertEqual(result['data']['operacion'], 'venta')
+        self.assertEqual(result['data']['recamaras'], 2)
+        self.assertEqual(result['data']['moneda'], 'USD')
+
+    def test_invalid_url_controlled_error(self):
+        with self.assertRaises(ExtractorError) as ctx:
+            extract_listing_from_url('ftp://example.com/a')
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
+class AdsStudioEndpointTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email='ads-studio-test@leadbook.local',
+            password='test-pass',
+            nombre='Ads Tester',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_extract_endpoint_integration(self):
+        payload = {
+            'ok': True,
+            'source': 'example.com',
+            'confidence': 0.82,
+            'data': {'titulo': 'Casa importada', 'fotos': ['https://example.com/a.jpg']},
+            'warnings': [],
+            'final_url': 'https://example.com/propiedad',
+        }
+        with patch('api.views.extract_listing_from_url', return_value=payload):
+            response = self.client.post(
+                reverse('extract_listado_from_url'),
+                {'url': 'https://example.com/propiedad'},
+                format='json',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()['ok'])
+        self.assertEqual(response.json()['data']['titulo'], 'Casa importada')
+
+    def test_generate_meta_variants_persists_on_listing(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa Palermo',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={'titulo': 'Casa Palermo', 'descripcion': 'Casa premium con patio'},
+        )
+        ai_json = '''{"variants":[{"primary_text":"Una casa lista para mudarte en Palermo, con patio y detalles premium.","headline":"Casa premium en Palermo","description":"Agenda una visita privada.","cta":"Enviar mensaje","hook":"Patio y ubicacion","segmento_sugerido":"Familias buscando upgrade"}]}'''
+        with patch('api.views.smart_call', return_value=ai_json):
+            response = self.client.post(
+                reverse('generate_meta_variants'),
+                {'listado_id': listado.id, 'cantidad_variantes': 1, 'objetivo': 'leads'},
+                format='json',
+            )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(len(response.json()['variants']), 1)
+        listado.refresh_from_db()
+        self.assertIn('meta_variants', listado.datos_extra['resultados'])
+
+    def test_generate_meta_variants_soft_rate_limit(self):
+        with patch('api.views.smart_call', side_effect=GeminiRateLimitedError()):
+            response = self.client.post(
+                reverse('generate_meta_variants'),
+                {'data': {'titulo': 'Casa'}, 'cantidad_variantes': 1},
+                format='json',
+            )
+        self.assertEqual(response.status_code, 429, response.content)
+        self.assertEqual(response.json()['quota_state'], 'soft_rate_limited')
+        self.assertEqual(response.json()['error'], 'ia_rate_limited')
+
+    def test_generate_meta_variants_hard_quota(self):
+        with patch('api.views.smart_call', side_effect=GeminiQuotaExhaustedError()):
+            response = self.client.post(
+                reverse('generate_meta_variants'),
+                {'data': {'titulo': 'Casa'}, 'cantidad_variantes': 1},
+                format='json',
+            )
+        self.assertEqual(response.status_code, 429, response.content)
+        self.assertEqual(response.json()['quota_state'], 'hard_exhausted')
+        self.assertEqual(response.json()['error'], 'cuota_ia_agotada')
 
 
 class CommercialAgentPhotoFlowTests(TestCase):

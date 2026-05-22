@@ -250,6 +250,8 @@ class AlmacenamientoCloudinary:
                     'cloudinary_account': cloud_name_result,
                     'public_id': resultado.get('public_id') or public_id,
                     'resource_type': resultado.get('resource_type') or resource_type_result,
+                    'width': resultado.get('width') or 0,
+                    'height': resultado.get('height') or 0,
                     'bytes': resultado.get('bytes') or 0,
                     'format': resultado.get('format') or '',
                     'folder': resultado.get('folder') or '',
@@ -272,6 +274,10 @@ class AlmacenamientoCloudinary:
                                 'cloudinary_account': (creds or {}).get('cloud_name') or '',
                                 'public_id': public_id,
                                 'resource_type': 'image',
+                                'width': 0,
+                                'height': 0,
+                                'bytes': 0,
+                                'format': '',
                                 'storage_key_id': key_id,
                             }
                         return existing

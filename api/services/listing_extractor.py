@@ -1,0 +1,582 @@
+import ipaddress
+import json
+import logging
+import re
+import socket
+from urllib.parse import urljoin, urlparse
+
+import requests
+from lxml import html
+
+
+logger = logging.getLogger(__name__)
+
+
+MAX_HTML_BYTES = 2 * 1024 * 1024
+MAX_REDIRECTS = 4
+MAX_IMAGE_URLS = 30
+DEFAULT_TIMEOUT = (5, 12)
+USER_AGENT = 'LeadBookExtractor/1.0 (+https://leadbook.com.ar)'
+
+
+class ExtractorError(Exception):
+    def __init__(self, message, *, status_code=400, warnings=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.warnings = warnings or []
+
+
+def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None):
+    safe_url = _validate_url(url)
+    source = source_hint or urlparse(safe_url).netloc.lower()
+    warnings = []
+
+    logger.info('[EXTRACTOR] start url=%s source_hint=%s', safe_url, source_hint or '')
+    try:
+        response = _fetch_html(safe_url)
+    except ExtractorError as exc:
+        logger.warning('[EXTRACTOR] fail url=%s reason=%s', safe_url, str(exc))
+        raise
+    except Exception as exc:
+        logger.warning('[EXTRACTOR] fail url=%s reason=%s', safe_url, exc)
+        raise ExtractorError('No se pudo descargar la URL.', status_code=502) from exc
+
+    final_url = response.url or safe_url
+    try:
+        document = html.fromstring(response.content)
+    except Exception as exc:
+        logger.warning('[EXTRACTOR] fail url=%s reason=parse_error:%s', safe_url, exc)
+        raise ExtractorError('No se pudo interpretar el HTML de la propiedad.', status_code=422) from exc
+
+    structured_data = _extract_structured_data(document, final_url)
+    meta_data = _extract_meta_data(document, final_url)
+    fallback_data = _extract_semistructured_data(document, final_url)
+
+    data = _merge_data(structured_data, meta_data, fallback_data)
+    if pais and not data.get('pais'):
+        data['pais'] = _clean_text(pais)
+    if idioma:
+        data['idioma'] = _clean_text(idioma)
+
+    data = _normalize_data(data)
+    used_structured = bool(_meaningful_fields(structured_data))
+    used_fallback = not used_structured
+    if used_fallback:
+        warnings.append('No se encontraron datos estructurados confiables; se uso extraccion semiestructurada.')
+    if not data.get('fotos'):
+        warnings.append('No se detectaron fotos publicas en la URL.')
+
+    confidence = _confidence_score(data, structured=used_structured)
+    ok = confidence >= 0.25 and bool(_meaningful_fields(data))
+    if not ok:
+        warnings.append('No se pudo extraer suficiente informacion de la pagina.')
+
+    logger.info(
+        '[EXTRACTOR] success url=%s source=%s confidence=%.2f photos=%s',
+        safe_url,
+        source,
+        confidence,
+        len(data.get('fotos') or []),
+    )
+    return {
+        'ok': ok,
+        'source': source,
+        'confidence': confidence,
+        'data': data,
+        'warnings': warnings,
+        'final_url': final_url,
+    }
+
+
+def _validate_url(value):
+    url = str(value or '').strip()
+    if not url:
+        raise ExtractorError('URL requerida.', status_code=400)
+    parsed = urlparse(url)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        raise ExtractorError('URL invalida. Usa http o https.', status_code=400)
+    _assert_public_host(parsed.hostname)
+    return url
+
+
+def _assert_public_host(hostname):
+    if not hostname:
+        raise ExtractorError('Host invalido.', status_code=400)
+    host = hostname.strip().strip('[]')
+    try:
+        ips = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None)
+            ips = [ipaddress.ip_address(item[4][0]) for item in infos]
+        except Exception as exc:
+            raise ExtractorError('No se pudo resolver el host de la URL.', status_code=400) from exc
+    for ip in ips:
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            raise ExtractorError('URL bloqueada por seguridad.', status_code=400)
+
+
+def _fetch_html(url):
+    session = requests.Session()
+    current_url = url
+    for _ in range(MAX_REDIRECTS + 1):
+        _validate_url(current_url)
+        response = session.get(
+            current_url,
+            headers={'User-Agent': USER_AGENT, 'Accept': 'text/html,application/xhtml+xml'},
+            timeout=DEFAULT_TIMEOUT,
+            allow_redirects=False,
+            stream=True,
+        )
+        if response.is_redirect or response.is_permanent_redirect:
+            location = response.headers.get('Location')
+            if not location:
+                raise ExtractorError('Redirect sin destino.', status_code=502)
+            current_url = urljoin(current_url, location)
+            continue
+
+        response.raise_for_status()
+        content_type = (response.headers.get('Content-Type') or '').lower()
+        if 'html' not in content_type and 'text/plain' not in content_type and content_type:
+            raise ExtractorError('La URL no devolvio HTML.', status_code=415)
+
+        content = response.raw.read(MAX_HTML_BYTES + 1, decode_content=True)
+        if len(content) > MAX_HTML_BYTES:
+            raise ExtractorError('HTML demasiado grande para extraer de forma segura.', status_code=413)
+        response._content = content
+        return response
+
+    raise ExtractorError('Demasiados redirects al descargar la URL.', status_code=400)
+
+
+def _extract_structured_data(document, base_url):
+    items = []
+    for script in document.xpath('//script[@type="application/ld+json"]/text()'):
+        raw = script.strip()
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            continue
+        items.extend(_flatten_jsonld(parsed))
+
+    best = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_type = _jsonld_type(item)
+        if not _looks_like_listing(item, item_type):
+            continue
+        candidate = _map_jsonld_item(item, base_url)
+        if len(_meaningful_fields(candidate)) > len(_meaningful_fields(best)):
+            best = candidate
+    return best
+
+
+def _flatten_jsonld(value):
+    found = []
+    if isinstance(value, list):
+        for item in value:
+            found.extend(_flatten_jsonld(item))
+    elif isinstance(value, dict):
+        found.append(value)
+        graph = value.get('@graph')
+        if isinstance(graph, list):
+            for item in graph:
+                found.extend(_flatten_jsonld(item))
+    return found
+
+
+def _jsonld_type(item):
+    raw = item.get('@type') or item.get('type') or ''
+    if isinstance(raw, list):
+        return ' '.join(str(part) for part in raw).lower()
+    return str(raw).lower()
+
+
+def _looks_like_listing(item, item_type):
+    type_tokens = ('realestate', 'residence', 'apartment', 'house', 'product', 'offer', 'place', 'accommodation')
+    if any(token in item_type for token in type_tokens):
+        return True
+    return bool(item.get('offers') or item.get('address') or item.get('floorSize'))
+
+
+def _map_jsonld_item(item, base_url):
+    offers = item.get('offers')
+    if isinstance(offers, list):
+        offers = offers[0] if offers else {}
+    if not isinstance(offers, dict):
+        offers = {}
+
+    address = item.get('address')
+    if not isinstance(address, dict):
+        address = {}
+
+    data = {
+        'titulo': _first_text(item, 'name', 'headline', 'title'),
+        'descripcion': _first_text(item, 'description', 'disambiguatingDescription'),
+        'precio': _first_text(item, 'price') or _first_text(offers, 'price', 'lowPrice'),
+        'moneda': _first_text(item, 'priceCurrency') or _first_text(offers, 'priceCurrency'),
+        'ciudad': _first_text(address, 'addressLocality'),
+        'direccion': _first_text(address, 'streetAddress'),
+        'recamaras': _number_from_any(item.get('numberOfBedrooms') or item.get('numberOfRooms')),
+        'banos': _number_from_any(item.get('numberOfBathroomsTotal') or item.get('numberOfBathrooms')),
+        'superficie_total': _surface_from_any(item.get('floorSize') or item.get('size')),
+        'amenidades': _amenities_from_jsonld(item.get('amenityFeature')),
+        'fotos': _images_from_any(item.get('image') or item.get('photo'), base_url),
+    }
+    if address.get('addressRegion') and not data.get('ciudad'):
+        data['ciudad'] = _clean_text(address.get('addressRegion'))
+    if item.get('@type'):
+        data['tipo_propiedad'] = _infer_property_type(str(item.get('@type')))
+    return data
+
+
+def _extract_meta_data(document, base_url):
+    meta = {}
+    for node in document.xpath('//meta[@content]'):
+        key = (node.get('property') or node.get('name') or '').strip().lower()
+        content = _clean_text(node.get('content'))
+        if key and content and key not in meta:
+            meta[key] = content
+
+    title = meta.get('og:title') or meta.get('twitter:title') or _first_xpath_text(document, '//title/text()')
+    description = meta.get('og:description') or meta.get('description') or meta.get('twitter:description')
+    price = meta.get('product:price:amount') or meta.get('og:price:amount')
+    currency = meta.get('product:price:currency') or meta.get('og:price:currency')
+    images = []
+    for key, value in meta.items():
+        if key in {'og:image', 'og:image:secure_url', 'twitter:image'} or key.startswith('og:image'):
+            images.extend(_images_from_any(value, base_url))
+    images.extend(_images_from_document(document, base_url))
+
+    return {
+        'titulo': title,
+        'descripcion': description,
+        'precio': price,
+        'moneda': currency,
+        'fotos': images,
+    }
+
+
+def _extract_semistructured_data(document, base_url):
+    text = _clean_text(' '.join(document.xpath('//body//text()[normalize-space()]')))
+    title = _first_xpath_text(document, '//h1/text()') or _first_xpath_text(document, '//title/text()')
+    description = _first_long_paragraph(document)
+    price, currency = _extract_price(text)
+    surface_total = _regex_number(text, r'(\d+(?:[\.,]\d+)?)\s*(?:m2|m²|metros\s+cuadrados)')
+    surface_covered = _regex_number(text, r'(?:cubierta|construida)\D{0,24}(\d+(?:[\.,]\d+)?)\s*(?:m2|m²)')
+    return {
+        'titulo': title,
+        'descripcion': description,
+        'precio': price,
+        'moneda': currency,
+        'operacion': _infer_operation(text),
+        'tipo_propiedad': _infer_property_type(text),
+        'recamaras': _regex_number(text, r'(\d+(?:[\.,]\d+)?)\s*(?:hab|habitaciones|dormitorios|recamaras|recámaras)'),
+        'banos': _regex_number(text, r'(\d+(?:[\.,]\d+)?)\s*(?:baño|baños|bano|banos|bathrooms|baÃ±o|baÃ±os)'),
+        'superficie_total': surface_total,
+        'superficie_cubierta': surface_covered,
+        'estacionamientos': _regex_number(text, r'(\d+)\s*(?:cocheras|cochera|estacionamientos|garages|garage)'),
+        'amenidades': _extract_amenities(text),
+        'fotos': _images_from_document(document, base_url),
+    }
+
+
+def _merge_data(*sources):
+    merged = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            if key == 'fotos':
+                merged[key] = _dedupe_urls((merged.get(key) or []) + (value or []))
+            elif key == 'amenidades':
+                merged[key] = _dedupe_text((merged.get(key) or []) + (value or []))
+            elif value not in (None, '', [], {}):
+                merged.setdefault(key, value)
+    return merged
+
+
+def _normalize_data(data):
+    normalized = {
+        'titulo': _clean_text(data.get('titulo')),
+        'descripcion': _clean_text(data.get('descripcion')),
+        'precio': _clean_price(data.get('precio')),
+        'moneda': _normalize_currency(data.get('moneda'), data.get('precio')),
+        'operacion': data.get('operacion') or _infer_operation(' '.join(str(data.get(k) or '') for k in ('titulo', 'descripcion'))),
+        'tipo_propiedad': data.get('tipo_propiedad') or _infer_property_type(' '.join(str(data.get(k) or '') for k in ('titulo', 'descripcion'))),
+        'ciudad': _clean_text(data.get('ciudad')),
+        'direccion': _clean_text(data.get('direccion')),
+        'recamaras': _number_from_any(data.get('recamaras')),
+        'banos': _number_from_any(data.get('banos')),
+        'superficie_total': _number_from_any(data.get('superficie_total')),
+        'superficie_cubierta': _number_from_any(data.get('superficie_cubierta')),
+        'estacionamientos': _number_from_any(data.get('estacionamientos')),
+        'amenidades': _dedupe_text(data.get('amenidades') or [])[:20],
+        'fotos': _dedupe_urls(data.get('fotos') or [])[:MAX_IMAGE_URLS],
+    }
+    return {key: value for key, value in normalized.items() if value not in (None, '', [], {})}
+
+
+def _confidence_score(data, *, structured=False):
+    score = 0.4 if structured else 0.22
+    weights = {
+        'titulo': 0.08,
+        'descripcion': 0.10,
+        'precio': 0.10,
+        'ciudad': 0.06,
+        'direccion': 0.06,
+        'recamaras': 0.05,
+        'banos': 0.05,
+        'superficie_total': 0.05,
+        'tipo_propiedad': 0.04,
+    }
+    for key, weight in weights.items():
+        if data.get(key) not in (None, '', [], {}):
+            score += weight
+    if data.get('fotos'):
+        score += min(0.14, len(data['fotos']) * 0.02)
+    return round(min(score, 0.95 if structured else 0.72), 2)
+
+
+def _meaningful_fields(data):
+    if not isinstance(data, dict):
+        return []
+    ignored = {'moneda'}
+    return [key for key, value in data.items() if key not in ignored and value not in (None, '', [], {})]
+
+
+def _first_text(mapping, *keys):
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        value = mapping.get(key)
+        if value not in (None, '', [], {}):
+            return _clean_text(value)
+    return None
+
+
+def _first_xpath_text(document, query):
+    values = document.xpath(query)
+    for value in values:
+        cleaned = _clean_text(value)
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _first_long_paragraph(document):
+    for value in document.xpath('//p/text()'):
+        cleaned = _clean_text(value)
+        if len(cleaned) >= 80:
+            return cleaned[:2000]
+    return None
+
+
+def _clean_text(value):
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, ensure_ascii=False)
+    return re.sub(r'\s+', ' ', str(value)).strip()
+
+
+def _clean_price(value):
+    if value in (None, ''):
+        return None
+    raw = str(value)
+    match = re.search(r'(\d[\d\.,]*)', raw)
+    return match.group(1).replace(' ', '') if match else _clean_text(raw)
+
+
+def _normalize_currency(value, price_text=None):
+    raw = str(value or '').strip().upper()
+    if raw in {'US$', 'U$S', 'USD'}:
+        return 'USD'
+    if raw in {'AR$', 'ARS'}:
+        return 'ARS'
+    if raw in {'MX$', 'MXN'}:
+        return 'MXN'
+    if raw in {'COP'}:
+        return 'COP'
+    if raw in {'EUR', '€'}:
+        return 'EUR'
+    text = str(price_text or '').upper()
+    if any(token in text for token in ('USD', 'US$', 'U$S')):
+        return 'USD'
+    if '€' in text or 'EUR' in text:
+        return 'EUR'
+    if '$' in text:
+        return 'USD'
+    return raw or None
+
+
+def _number_from_any(value):
+    if value in (None, ''):
+        return None
+    if isinstance(value, dict):
+        value = value.get('value') or value.get('amount') or value.get('name')
+    match = re.search(r'\d+(?:[\.,]\d+)?', str(value))
+    if not match:
+        return None
+    number = match.group(0).replace(',', '.')
+    parsed = float(number)
+    return int(parsed) if parsed.is_integer() else parsed
+
+
+def _surface_from_any(value):
+    if isinstance(value, dict):
+        return _number_from_any(value.get('value') or value.get('amount') or value.get('name'))
+    return _number_from_any(value)
+
+
+def _regex_number(text, pattern):
+    match = re.search(pattern, text or '', flags=re.IGNORECASE)
+    return _number_from_any(match.group(1)) if match else None
+
+
+def _extract_price(text):
+    patterns = [
+        r'(USD|US\$|U\$S|ARS|MXN|COP|EUR|€|\$)\s*([\d\.,]+)',
+        r'([\d\.,]+)\s*(USD|US\$|U\$S|ARS|MXN|COP|EUR|€)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text or '', flags=re.IGNORECASE)
+        if match:
+            first, second = match.group(1), match.group(2)
+            if re.search(r'\d', first):
+                return first, _normalize_currency(second)
+            return second, _normalize_currency(first)
+    return None, None
+
+
+def _infer_operation(text):
+    source = _strip_accents(text or '').lower()
+    if any(token in source for token in ('alquiler', 'renta', 'rent')):
+        return 'alquiler'
+    if any(token in source for token in ('venta', 'sale', 'vende')):
+        return 'venta'
+    if 'temporario' in source or 'vacacional' in source:
+        return 'temporario'
+    return None
+
+
+def _infer_property_type(text):
+    source = _strip_accents(text or '').lower()
+    candidates = [
+        ('departamento', ('departamento', 'depto', 'apartment', 'apartamento')),
+        ('casa', ('casa', 'house', 'chalet')),
+        ('oficina', ('oficina', 'office')),
+        ('local', ('local', 'retail')),
+        ('terreno', ('terreno', 'lote', 'land')),
+        ('ph', ('ph',)),
+    ]
+    for label, tokens in candidates:
+        if any(token in source for token in tokens):
+            return label
+    return None
+
+
+def _extract_amenities(text):
+    source = _strip_accents(text or '').lower()
+    amenity_tokens = {
+        'piscina': ('piscina', 'pileta', 'pool'),
+        'gimnasio': ('gimnasio', 'gym'),
+        'parrilla': ('parrilla', 'asador'),
+        'balcon': ('balcon', 'balcón'),
+        'terraza': ('terraza',),
+        'seguridad': ('seguridad', 'vigilancia'),
+        'sum': ('sum', 'salon de usos multiples'),
+        'jardin': ('jardin', 'jardín'),
+        'cochera': ('cochera', 'garage', 'estacionamiento'),
+    }
+    return [label for label, tokens in amenity_tokens.items() if any(token in source for token in tokens)]
+
+
+def _amenities_from_jsonld(value):
+    if not value:
+        return []
+    items = value if isinstance(value, list) else [value]
+    amenities = []
+    for item in items:
+        if isinstance(item, dict):
+            name = item.get('name') or item.get('value')
+        else:
+            name = item
+        cleaned = _clean_text(name)
+        if cleaned:
+            amenities.append(cleaned)
+    return amenities
+
+
+def _images_from_document(document, base_url):
+    images = []
+    for node in document.xpath('//img'):
+        value = node.get('src') or node.get('data-src') or node.get('data-original') or node.get('data-lazy-src')
+        srcset = node.get('srcset') or node.get('data-srcset')
+        if srcset and not value:
+            value = srcset.split(',')[-1].strip().split(' ')[0]
+        images.extend(_images_from_any(value, base_url))
+    return _dedupe_urls(images)
+
+
+def _images_from_any(value, base_url):
+    images = []
+    if not value:
+        return images
+    if isinstance(value, str):
+        images.append(value)
+    elif isinstance(value, dict):
+        images.extend(_images_from_any(value.get('url') or value.get('contentUrl'), base_url))
+    elif isinstance(value, list):
+        for item in value:
+            images.extend(_images_from_any(item, base_url))
+    return [_absolute_media_url(item, base_url) for item in images if _absolute_media_url(item, base_url)]
+
+
+def _absolute_media_url(value, base_url):
+    url = _clean_text(value)
+    if not url or url.lower().startswith('data:'):
+        return None
+    absolute = urljoin(base_url, url)
+    parsed = urlparse(absolute)
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        return None
+    return absolute
+
+
+def _dedupe_urls(values):
+    seen = set()
+    result = []
+    for value in values or []:
+        cleaned = _clean_text(value)
+        if not cleaned or cleaned.lower().startswith('data:'):
+            continue
+        key = cleaned.split('#')[0]
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+    return result
+
+
+def _dedupe_text(values):
+    seen = set()
+    result = []
+    for value in values or []:
+        cleaned = _clean_text(value)
+        if not cleaned:
+            continue
+        key = _strip_accents(cleaned).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+    return result
+
+
+def _strip_accents(value):
+    import unicodedata
+    return ''.join(ch for ch in unicodedata.normalize('NFD', str(value)) if unicodedata.category(ch) != 'Mn')

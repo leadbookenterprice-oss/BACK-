@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.db.models import Sum
 from django.db import transaction
 import requests
@@ -19,6 +20,7 @@ import json
 import io
 import zipfile
 import base64
+from datetime import timedelta
 import html as html_lib
 import unicodedata
 from functools import wraps
@@ -31,7 +33,7 @@ from .models import (
     GeneratedAsset, Listado, OTPCode, ComercialAgentProfile,
     AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision, default_template_tokens,
-    AgentAssociation, CRMClient,
+    AgentAssociation, CRMClient, SocialPublicationLog,
     TerminosCondiciones, PoliticaPrivacidad, UsageLog, AccessCode, AdminAlert
 )
 from .serializers import (
@@ -57,6 +59,13 @@ from .utils import crear_notificacion
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
 from .plan_utils import puede_generar, incrementar_uso, registrar_uso, get_free_trial_status, get_plan_block_payload
+from .services.ads_studio import (
+    build_ads_result,
+    build_meta_ads_prompt,
+    normalize_ads_request,
+    parse_meta_ads_response,
+)
+from .services.listing_extractor import ExtractorError, extract_listing_from_url
 
 
 def require_active_plan(view_func):
@@ -159,6 +168,17 @@ def _reject_blocked_media_data_uri(payload, payload_label='payload'):
         },
         status=status.HTTP_400_BAD_REQUEST,
     )
+
+
+def _parse_media_ref_input(value):
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if trimmed.startswith('{') or trimmed.startswith('['):
+            try:
+                return json.loads(trimmed)
+            except Exception:
+                return value
+    return value
 
 
 def _upload_profile_data_image(value, user_id):
@@ -1489,6 +1509,23 @@ def _collect_property_images(data):
             seen.add(resolved)
             urls.append(resolved)
     return urls
+
+
+def resolve_listing_media(listado, payload):
+    """Fuente unica de media: portada + galeria desde payload o SQL."""
+    data = payload.copy() if isinstance(payload, dict) else {}
+    stored = listado.datos_extra if listado and isinstance(listado.datos_extra, dict) else {}
+
+    if not data.get('portadaUrl') and stored.get('portadaUrl'):
+        data['portadaUrl'] = stored.get('portadaUrl')
+    if not data.get('fotosRecorrido') and stored.get('fotosRecorrido'):
+        data['fotosRecorrido'] = stored.get('fotosRecorrido')
+
+    gallery = data.get('fotosRecorrido') or []
+    if not isinstance(gallery, list):
+        gallery = [gallery]
+    data['fotosRecorrido'] = [item for item in gallery if item]
+    return data
 
 
 def _normalize_phone_e164(value, default_country_code='54'):
@@ -4206,6 +4243,9 @@ def publicar_redes_sociales(request):
         # Opciones extra
         platforms = data.get('platforms') # ej: ['instagram', 'facebook', 'youtube']
         scheduled_at = data.get('scheduled_at') # string ISO 8601
+        scheduled_at_iso, scheduled_at_error = _normalize_scheduled_at_input(scheduled_at)
+        if scheduled_at_error:
+            return Response({"success": False, "error": scheduled_at_error}, status=status.HTTP_400_BAD_REQUEST)
         request_id = data.get('request_id')
         batch_id = data.get('batch_id')
         
@@ -4220,7 +4260,7 @@ def publicar_redes_sociales(request):
             images=images,
             document_url=document_url,
             platforms=platforms,
-            scheduled_at=scheduled_at,
+            scheduled_at=scheduled_at_iso,
             request_id=request_id,
             batch_id=batch_id,
             agente=user
@@ -4265,6 +4305,56 @@ def _extract_publish_images(payload):
     return normalized
 
 
+def _normalize_scheduled_at_input(raw_value):
+    """
+    Normaliza fechas de programacion en formato ISO para UploadPost.
+    Acepta:
+      - 2026-05-22T19:30
+      - 2026-05-22T19:30:00
+      - 2026-05-22T19:30:00Z
+      - 2026-05-22T19:30:00-03:00
+    """
+    if raw_value in (None, '', False):
+        return None, None
+
+    value = str(raw_value).strip()
+    if not value:
+        return None, None
+
+    parsed = parse_datetime(value.replace('Z', '+00:00'))
+    if parsed is None:
+        return None, "Formato de fecha inválido. Usá ISO 8601 (ej: 2026-05-22T19:30:00-03:00)."
+
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+
+    now = timezone.now()
+    if parsed < now + timedelta(minutes=1):
+        return None, "La fecha programada debe ser al menos 1 minuto en el futuro."
+
+    return parsed.isoformat(), None
+
+
+def _serialize_publication_log(log):
+    return {
+        'id': log.id,
+        'provider': log.provider,
+        'platform': log.platform,
+        'media_type': log.media_type,
+        'request_id': log.request_id,
+        'job_id': log.job_id,
+        'batch_id': log.batch_id,
+        'status': log.status,
+        'success': bool(log.success),
+        'counted': bool(log.counted),
+        'media_count': log.media_count,
+        'error_message': log.error_message,
+        'created_at': log.creado_en.isoformat() if log.creado_en else None,
+        'updated_at': log.actualizado_en.isoformat() if log.actualizado_en else None,
+        'response': log.response if isinstance(log.response, dict) else {},
+    }
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
@@ -4279,6 +4369,13 @@ def publicar_redes_todo(request):
         user = request.user
         data = request.data or {}
         batch_id = str(data.get('batch_id') or uuid.uuid4().hex[:12]).replace(' ', '-')[:64]
+        scheduled_at_raw = data.get('scheduled_at')
+        scheduled_at_iso, scheduled_at_error = _normalize_scheduled_at_input(scheduled_at_raw)
+        if scheduled_at_error:
+            return Response({
+                "success": False,
+                "error": scheduled_at_error,
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         accounts = get_upload_post_accounts(user)
         if accounts.get('success') and not any(str(red.get('platform')).lower() == 'instagram' for red in accounts.get('redes', [])):
@@ -4334,6 +4431,7 @@ def publicar_redes_todo(request):
                 image_url=image_url,
                 images=images,
                 platforms=['instagram'],
+                scheduled_at=scheduled_at_iso,
                 request_id=request_id,
                 batch_id=batch_id,
                 agente=user,
@@ -4346,6 +4444,7 @@ def publicar_redes_todo(request):
             "success": all_success,
             "partial_success": any_success and not all_success,
             "batch_id": batch_id,
+            "scheduled_at": scheduled_at_iso,
             "results": results,
             "warnings": warnings,
         }
@@ -4365,6 +4464,37 @@ def publicar_redes_status(request):
         agente=request.user,
     )
     return Response(result, status=status.HTTP_200_OK if result.get('success') else status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def publicar_redes_logs(request):
+    """
+    Devuelve trazas de publicación social para inspeccionar lote/request.
+    Soporta filtros por batch_id y request_id.
+    """
+    batch_id = str(request.query_params.get('batch_id') or '').strip()
+    request_id = str(request.query_params.get('request_id') or '').strip()
+    try:
+        limit = max(1, min(int(request.query_params.get('limit', 30)), 120))
+    except Exception:
+        limit = 30
+
+    qs = SocialPublicationLog.objects.filter(user=request.user).order_by('-creado_en')
+    if batch_id:
+        qs = qs.filter(batch_id=batch_id)
+    if request_id:
+        qs = qs.filter(request_id=request_id)
+
+    logs = list(qs[:limit])
+    payload = {
+        "success": True,
+        "batch_id": batch_id or None,
+        "request_id": request_id or None,
+        "count": len(logs),
+        "logs": [_serialize_publication_log(item) for item in logs],
+    }
+    return Response(payload, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -4390,6 +4520,10 @@ def generar_carrusel(request):
         listado_obj = None
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+        data = resolve_listing_media(listado_obj, data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
@@ -4837,6 +4971,121 @@ class ListadosView(APIView):
             "titulo": listado.titulo
         }, status=status.HTTP_201_CREATED)
 
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_active_plan
+def extract_listado_from_url(request):
+    payload = request.data if isinstance(request.data, dict) else {}
+    url = payload.get('url')
+    source_hint = payload.get('source_hint') or payload.get('sourceHint')
+    try:
+        result = extract_listing_from_url(
+            url,
+            pais=payload.get('pais'),
+            idioma=payload.get('idioma'),
+            source_hint=source_hint,
+        )
+        return Response({
+            'ok': bool(result.get('ok')),
+            'source': result.get('source') or '',
+            'confidence': result.get('confidence') or 0,
+            'data': result.get('data') or {},
+            'warnings': result.get('warnings') or [],
+            'final_url': result.get('final_url') or url,
+        }, status=status.HTTP_200_OK)
+    except ExtractorError as exc:
+        return Response({
+            'ok': False,
+            'source': source_hint or '',
+            'confidence': 0,
+            'data': {},
+            'warnings': list(exc.warnings or []) + [str(exc)],
+        }, status=getattr(exc, 'status_code', status.HTTP_400_BAD_REQUEST))
+    except Exception as exc:
+        logger.exception('[EXTRACTOR] fail url=%s reason=unexpected:%s', url, exc)
+        return Response({
+            'ok': False,
+            'source': source_hint or '',
+            'confidence': 0,
+            'data': {},
+            'warnings': ['Error inesperado al extraer la URL.'],
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_active_plan
+def generate_meta_variants(request):
+    payload = request.data if isinstance(request.data, dict) else {}
+    listado_id = payload.get('listado_id') or payload.get('listadoId')
+    listado_obj = None
+    if listado_id:
+        try:
+            listado_obj = Listado.objects.get(id=listado_id, agente=request.user)
+        except Listado.DoesNotExist:
+            return Response({'ok': False, 'error': 'listado_not_found'}, status=status.HTTP_404_NOT_FOUND)
+
+    property_data, params = normalize_ads_request(payload)
+    if not property_data and listado_obj:
+        property_data = listado_obj.datos_extra if isinstance(listado_obj.datos_extra, dict) else {}
+    blocked_media_response = _reject_blocked_media_data_uri(property_data, 'data')
+    if blocked_media_response:
+        return blocked_media_response
+    if not property_data:
+        return Response({'ok': False, 'error': 'property_data_required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    prompt = build_meta_ads_prompt(property_data, params)
+    last_parse_error = None
+    for attempt in range(1, 3):
+        logger.info(
+            '[ADS_STUDIO] ai_attempt attempt=%s user_id=%s listado_id=%s variants=%s',
+            attempt,
+            request.user.id,
+            listado_id or '',
+            params['cantidad_variantes'],
+        )
+        try:
+            raw = smart_call(
+                prompt,
+                retries=1,
+                agente=request.user,
+                system_prompt='Sos un performance marketer inmobiliario. Respondes solo JSON valido.',
+            )
+            variants = parse_meta_ads_response(raw, params['cantidad_variantes'])
+            result = build_ads_result(variants, params, listado_id=listado_obj.id if listado_obj else None)
+            if listado_obj:
+                actualizar_resultados_listado(listado_obj, 'meta_variants', result)
+            logger.info(
+                '[ADS_STUDIO] success user_id=%s listado_id=%s variants=%s',
+                request.user.id,
+                listado_id or '',
+                len(variants),
+            )
+            return Response(result, status=status.HTTP_200_OK)
+        except (GeminiRateLimitedError, ElevenLabsRateLimitedError) as exc:
+            logger.warning('[ADS_STUDIO] soft_rate_limited user_id=%s reason=%s', request.user.id, exc)
+            return _quota_error_response(exc)
+        except (GeminiQuotaExhaustedError, ElevenLabsQuotaExhaustedError) as exc:
+            logger.warning('[ADS_STUDIO] hard_quota user_id=%s reason=%s', request.user.id, exc)
+            return _quota_error_response(exc)
+        except APIKeyUnavailableError as exc:
+            logger.warning('[ADS_STUDIO] api_key_unavailable user_id=%s reason=%s', request.user.id, exc)
+            return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except ValueError as exc:
+            last_parse_error = str(exc)
+            logger.warning('[ADS_STUDIO] parse_retry attempt=%s reason=%s', attempt, exc)
+            continue
+        except Exception as exc:
+            logger.exception('[ADS_STUDIO] fail user_id=%s reason=%s', request.user.id, exc)
+            return Response({'ok': False, 'error': 'ads_generation_failed', 'message': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response({
+        'ok': False,
+        'error': 'ads_generation_unparseable',
+        'message': last_parse_error or 'No se pudieron generar variantes validas.',
+    }, status=status.HTTP_502_BAD_GATEWAY)
+
 class ListadoDetalleView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -4987,6 +5236,10 @@ def generar_video(request, pk):
             if blocked_media_response:
                 return blocked_media_response
             datos = _merge_listing_extra_preserving_covers(listado.datos_extra, payload_datos)
+            datos = resolve_listing_media(listado, datos)
+            blocked_media_response = _reject_blocked_media_data_uri(datos, 'datos')
+            if blocked_media_response:
+                return blocked_media_response
             listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
 
         video_provider = config('VIDEO_PROVIDER', default='hyperframes' if settings.DEBUG else 'leadbook_sync').strip().lower()
@@ -5234,6 +5487,14 @@ def generar_pdf(request):
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
+        listado_id_val = data.get('listado_id') or data.get('listadoId')
+        listado_obj_for_media = None
+        if listado_id_val:
+            listado_obj_for_media = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+        data = resolve_listing_media(listado_obj_for_media, data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
         
         print(f"[PAYLOAD] portadaUrl tipo: {type(data.get('portadaUrl')).__name__} | valor: {str(data.get('portadaUrl', ''))[:80]}")
         print(f"[PAYLOAD] fotosRecorrido tipo: {type(data.get('fotosRecorrido')).__name__} | largo: {len(data.get('fotosRecorrido', []))}")
@@ -5396,6 +5657,15 @@ def generar_imagen_post(request):
         print(f"[POST DEBUG] agenciaNombre: {data.get('agenciaNombre')}")
         print(f"[POST DEBUG] keys recibidas: {list(data.keys())}")
 
+        listado_id_val = data.get('listado_id') or data.get('listadoId')
+        listado_obj = None
+        if listado_id_val:
+            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+        data = resolve_listing_media(listado_obj, data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
+
         branding = _resolve_branding_payload(data, request.user)
 
         # Preparar contexto para la plantilla premium
@@ -5436,11 +5706,6 @@ def generar_imagen_post(request):
             
         context["portada_url"] = portada_post
         context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
-
-        listado_id_val = data.get('listado_id') or data.get('listadoId')
-        listado_obj = None
-        if listado_id_val:
-            listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
@@ -5559,6 +5824,10 @@ def generar_imagen_story(request):
         listado_obj = None
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+        data = resolve_listing_media(listado_obj, data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
@@ -5692,7 +5961,10 @@ def generar_caption_story(request):
         listado_obj = None
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
-
+        data = resolve_listing_media(listado_obj, data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         content_prefs = _attach_template_instructions_to_prefs(
             _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
@@ -5764,6 +6036,10 @@ def generar_email(request):
         listado_obj = None
         if listado_id_val:
             listado_obj = Listado.objects.filter(id=listado_id_val, agente=request.user).first()
+        data = resolve_listing_media(listado_obj, data)
+        blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
+        if blocked_media_response:
+            return blocked_media_response
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
@@ -8261,14 +8537,25 @@ def upload_fotos_listado(request):
     Sube fotos de propiedad (portada y galerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a) a Cloudinary a travÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s del pool del backend.
     """
     data = request.data
-    portada_input = data.get('portadaUrl')
-    fotos_input = data.get('fotosRecorrido', [])
+    portada_input = _parse_media_ref_input(data.get('portadaUrl'))
+    if hasattr(data, 'getlist'):
+        fotos_input = data.getlist('fotosRecorrido') or data.get('fotosRecorrido', [])
+    else:
+        fotos_input = data.get('fotosRecorrido', [])
     listado_id = data.get('listado_id') or data.get('listadoId')
     portada_file = request.FILES.get('portada_file')
     fotos_files = request.FILES.getlist('fotos_files')
     allow_legacy_base64 = _allow_legacy_base64_media()
     if not isinstance(fotos_input, list):
         fotos_input = [fotos_input] if fotos_input else []
+    parsed_fotos_input = []
+    for item in fotos_input:
+        parsed_item = _parse_media_ref_input(item)
+        if isinstance(parsed_item, list):
+            parsed_fotos_input.extend([sub_item for sub_item in parsed_item if sub_item])
+        elif parsed_item:
+            parsed_fotos_input.append(parsed_item)
+    fotos_input = parsed_fotos_input
 
     user_id = request.user.id
     response_data = {
@@ -8295,6 +8582,10 @@ def upload_fotos_listado(request):
                 media.setdefault('url', resolved)
                 media.setdefault('secure_url', resolved)
             media.setdefault('resource_type', 'image')
+            media.setdefault('width', 0)
+            media.setdefault('height', 0)
+            media.setdefault('bytes', 0)
+            media.setdefault('format', '')
             media['role'] = role
             media['order'] = order
             return media
@@ -8341,27 +8632,60 @@ def upload_fotos_listado(request):
                     'resource_type': 'image',
                     'role': role,
                     'order': order,
+                    'width': 0,
+                    'height': 0,
+                    'bytes': 0,
+                    'format': '',
                 }, None
             if item:
                 return None, "Formato de imagen no soportado."
             return None, None
 
-        raw_items = []
-        if portada_input:
-            raw_items.append(portada_input)
+        raw_gallery_items = []
         portada_identity = media_identity(portada_input)
         for foto in fotos_input:
             if not foto:
                 continue
             if portada_identity and media_identity(foto) == portada_identity:
                 continue
-            raw_items.append(foto)
+            raw_gallery_items.append(foto)
 
         normalized = []
         if portada_file:
             media, error_msg = upload_file(portada_file, 'portada', 0, 0)
             if error_msg:
                 return Response({"error": "error_subida", "mensaje": error_msg}, status=502)
+            if media:
+                normalized.append(media)
+        elif portada_input:
+            media, error_msg = normalize_media(portada_input, 'portada', 0)
+            if error_msg:
+                status_code = status.HTTP_400_BAD_REQUEST if 'base64' in error_msg.lower() else 502
+                return Response(
+                    {
+                        "error": "invalid_media_payload",
+                        "mensaje": error_msg,
+                        "allow_legacy_base64_media": allow_legacy_base64,
+                    },
+                    status=status_code,
+                )
+            if media:
+                normalized.append(media)
+
+        for item in raw_gallery_items:
+            role = 'portada' if not normalized else 'galeria'
+            order = 0 if role == 'portada' else len(normalized)
+            media, error_msg = normalize_media(item, role, order)
+            if error_msg:
+                status_code = status.HTTP_400_BAD_REQUEST if 'base64' in error_msg.lower() else 502
+                return Response(
+                    {
+                        "error": "invalid_media_payload",
+                        "mensaje": error_msg,
+                        "allow_legacy_base64_media": allow_legacy_base64,
+                    },
+                    status=status_code,
+                )
             if media:
                 normalized.append(media)
 
@@ -8371,23 +8695,6 @@ def upload_fotos_listado(request):
             media, error_msg = upload_file(file_item, role, order, idx)
             if error_msg:
                 return Response({"error": "error_subida", "mensaje": error_msg}, status=502)
-            if media:
-                normalized.append(media)
-
-        for item in raw_items:
-            role = 'portada' if not normalized else 'galeria'
-            order = 0 if role == 'portada' else len(normalized)
-            media, error_msg = normalize_media(item, role, order)
-            if error_msg:
-                status_code = status.HTTP_400_BAD_REQUEST if 'base64' in error_msg.lower() else 502
-                return Response(
-                    {
-                        "error": "invalid_media",
-                        "mensaje": error_msg,
-                        "allow_legacy_base64_media": allow_legacy_base64,
-                    },
-                    status=status_code,
-                )
             if media:
                 normalized.append(media)
 

@@ -3,6 +3,7 @@ from .models import (
     GeneratedAsset, Agent, ComercialAgentProfile,
     AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision, CRMClient,
+    PipelineStage, Lead, LeadEvent, LeadAssignment, FollowUpTask,
     TerminosCondiciones, PoliticaPrivacidad
 )
 import re
@@ -259,6 +260,75 @@ class CRMClientSerializer(serializers.ModelSerializer):
         if value not in allowed:
             raise serializers.ValidationError('estado invalido.')
         return value
+
+
+class PipelineStageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PipelineStage
+        fields = ['id', 'owner', 'name', 'slug', 'order', 'color', 'is_default', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'owner', 'created_at', 'updated_at']
+
+
+class LeadEventSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source='created_by.nombre', read_only=True)
+
+    class Meta:
+        model = LeadEvent
+        fields = ['id', 'lead', 'owner', 'event_type', 'title', 'message', 'metadata', 'created_by', 'created_by_name', 'created_at']
+        read_only_fields = ['id', 'lead', 'owner', 'created_by', 'created_by_name', 'created_at']
+
+
+class LeadAssignmentSerializer(serializers.ModelSerializer):
+    assigned_to_name = serializers.CharField(source='assigned_to.nombre', read_only=True)
+    assigned_to_email = serializers.EmailField(source='assigned_to.email', read_only=True)
+
+    class Meta:
+        model = LeadAssignment
+        fields = ['id', 'lead', 'owner', 'assigned_to', 'assigned_to_name', 'assigned_to_email', 'assigned_by', 'is_active', 'assigned_at']
+        read_only_fields = ['id', 'lead', 'owner', 'assigned_by', 'assigned_at']
+
+
+class FollowUpTaskSerializer(serializers.ModelSerializer):
+    assigned_to_name = serializers.CharField(source='assigned_to.nombre', read_only=True)
+
+    class Meta:
+        model = FollowUpTask
+        fields = [
+            'id', 'lead', 'owner', 'assigned_to', 'assigned_to_name', 'title', 'due_at',
+            'status', 'priority', 'reason', 'metadata', 'completed_at', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'lead', 'owner', 'created_at', 'updated_at']
+
+
+class LeadSerializer(serializers.ModelSerializer):
+    pipeline_stage = PipelineStageSerializer(read_only=True)
+    pipeline_stage_id = serializers.PrimaryKeyRelatedField(
+        queryset=PipelineStage.objects.all(),
+        source='pipeline_stage',
+        write_only=True,
+        required=False,
+    )
+    assigned_to_name = serializers.CharField(source='assigned_to.nombre', read_only=True)
+    assigned_to_email = serializers.EmailField(source='assigned_to.email', read_only=True)
+    listing_title = serializers.CharField(source='listing.titulo', read_only=True)
+    sla_status = serializers.CharField(read_only=True)
+    events = LeadEventSerializer(many=True, read_only=True)
+    follow_up_tasks = FollowUpTaskSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Lead
+        fields = [
+            'id', 'owner', 'pipeline_stage', 'pipeline_stage_id', 'assigned_to', 'assigned_to_name',
+            'assigned_to_email', 'listing', 'listing_title', 'origin', 'status', 'full_name', 'email',
+            'phone', 'message', 'contact_data', 'leadgen_id', 'form_id', 'page_id', 'campaign_id',
+            'campaign_name', 'adset_id', 'ad_id', 'raw_payload', 'dedupe_key', 'first_response_at',
+            'last_contact_at', 'sla_due_at', 'sla_status', 'created_at', 'updated_at', 'events',
+            'follow_up_tasks',
+        ]
+        read_only_fields = [
+            'id', 'owner', 'raw_payload', 'dedupe_key', 'first_response_at', 'last_contact_at',
+            'sla_due_at', 'sla_status', 'created_at', 'updated_at', 'events', 'follow_up_tasks',
+        ]
 
 
 class BrandTemplateSerializer(serializers.ModelSerializer):

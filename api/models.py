@@ -477,6 +477,196 @@ class CRMClient(models.Model):
         return f"{self.nombre} ({self.owner_id})"
 
 
+class PipelineStage(models.Model):
+    """Etapa configurable del pipeline CRM por inmobiliaria."""
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='crm_pipeline_stages')
+    name = models.CharField(max_length=80)
+    slug = models.SlugField(max_length=80)
+    order = models.PositiveSmallIntegerField(default=0)
+    color = models.CharField(max_length=24, default='#00d4ff')
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['owner', 'slug'], name='unique_crm_pipeline_stage_slug_per_owner'),
+        ]
+        indexes = [
+            models.Index(fields=['owner', 'is_active', 'order']),
+        ]
+
+    def __str__(self):
+        return f"{self.owner_id} - {self.name}"
+
+
+class Lead(models.Model):
+    """Lead capturado desde Meta, web, WhatsApp o carga manual."""
+
+    ORIGIN_CHOICES = [
+        ('meta', 'Meta'),
+        ('web', 'Web'),
+        ('whatsapp', 'WhatsApp'),
+        ('manual', 'Manual'),
+    ]
+    STATUS_CHOICES = [
+        ('open', 'Abierto'),
+        ('won', 'Ganado'),
+        ('lost', 'Perdido'),
+    ]
+
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='crm_leads')
+    pipeline_stage = models.ForeignKey(PipelineStage, on_delete=models.PROTECT, related_name='leads')
+    assigned_to = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_crm_leads')
+    listing = models.ForeignKey('Listado', on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_leads')
+
+    origin = models.CharField(max_length=24, choices=ORIGIN_CHOICES, default='manual')
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='open')
+    full_name = models.CharField(max_length=180)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=60, blank=True, null=True)
+    message = models.TextField(blank=True, null=True)
+    contact_data = models.JSONField(default=dict, blank=True)
+
+    leadgen_id = models.CharField(max_length=120, blank=True, null=True)
+    form_id = models.CharField(max_length=120, blank=True, null=True)
+    page_id = models.CharField(max_length=120, blank=True, null=True)
+    campaign_id = models.CharField(max_length=120, blank=True, null=True)
+    campaign_name = models.CharField(max_length=255, blank=True, null=True)
+    adset_id = models.CharField(max_length=120, blank=True, null=True)
+    ad_id = models.CharField(max_length=120, blank=True, null=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
+    dedupe_key = models.CharField(max_length=255, blank=True, db_index=True)
+
+    first_response_at = models.DateTimeField(null=True, blank=True)
+    last_contact_at = models.DateTimeField(null=True, blank=True)
+    sla_due_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner', 'origin', 'leadgen_id'],
+                condition=models.Q(leadgen_id__isnull=False),
+                name='unique_crm_leadgen_per_owner_origin',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['owner', 'origin', 'created_at']),
+            models.Index(fields=['owner', 'pipeline_stage', 'updated_at']),
+            models.Index(fields=['owner', 'sla_due_at']),
+            models.Index(fields=['leadgen_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.full_name} - {self.origin}"
+
+    @property
+    def sla_status(self):
+        if self.first_response_at:
+            return 'responded'
+        if self.sla_due_at and timezone.now() > self.sla_due_at:
+            return 'overdue'
+        return 'on_time'
+
+
+class LeadEvent(models.Model):
+    """Timeline inmutable de acciones del lead."""
+
+    EVENT_TYPES = [
+        ('created', 'Creado'),
+        ('assigned', 'Asignado'),
+        ('contacted', 'Contactado'),
+        ('stage_changed', 'Cambio de etapa'),
+        ('followup_created', 'Follow-up creado'),
+        ('webhook_received', 'Webhook recibido'),
+        ('note', 'Nota'),
+    ]
+
+    lead = models.ForeignKey(Lead, on_delete=models.CASCADE, related_name='events')
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='crm_lead_events')
+    event_type = models.CharField(max_length=40, choices=EVENT_TYPES)
+    title = models.CharField(max_length=160)
+    message = models.TextField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_crm_lead_events')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['lead', 'created_at']),
+            models.Index(fields=['owner', 'event_type', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.lead_id} - {self.event_type}"
+
+
+class LeadAssignment(models.Model):
+    """Historial de asignaciones del lead."""
+
+    lead = models.ForeignKey(Lead, on_delete=models.CASCADE, related_name='assignments')
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='crm_lead_assignments')
+    assigned_to = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_lead_assignment_targets')
+    assigned_by = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='crm_lead_assignment_authored')
+    is_active = models.BooleanField(default=True)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-assigned_at']
+        indexes = [
+            models.Index(fields=['lead', 'is_active']),
+            models.Index(fields=['owner', 'assigned_to', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"Lead {self.lead_id} -> {self.assigned_to_id or 'sin asignar'}"
+
+
+class FollowUpTask(models.Model):
+    """Tarea operativa para que ningun lead quede en visto."""
+
+    STATUS_CHOICES = [
+        ('pending', 'Pendiente'),
+        ('done', 'Completada'),
+        ('cancelled', 'Cancelada'),
+    ]
+    PRIORITY_CHOICES = [
+        ('low', 'Baja'),
+        ('normal', 'Normal'),
+        ('high', 'Alta'),
+    ]
+
+    lead = models.ForeignKey(Lead, on_delete=models.CASCADE, related_name='follow_up_tasks')
+    owner = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='crm_follow_up_tasks')
+    assigned_to = models.ForeignKey(Agent, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_follow_up_tasks')
+    title = models.CharField(max_length=180)
+    due_at = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='normal')
+    reason = models.CharField(max_length=120, blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['status', 'due_at']
+        indexes = [
+            models.Index(fields=['owner', 'status', 'due_at']),
+            models.Index(fields=['lead', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.status})"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PLANES Y SUSCRIPCIONES
 # ══════════════════════════════════════════════════════════════════════════════

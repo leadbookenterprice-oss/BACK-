@@ -12,7 +12,7 @@ from .views import (
     plan_status, seleccionar_plan_free, test_upload_avatar, generar_carrusel,
     amenidades_presets, field_presets_collection, field_preset_detail,
     recuperar_password, confirmar_recuperacion,
-    publicar_redes_sociales, publicar_redes_todo, publicar_redes_status,
+    publicar_redes_sociales, publicar_redes_todo, publicar_redes_status, publicar_redes_logs,
     proxy_pdf_view, proxy_pdf_thumbnail_view,
     generar_html, generar_escena, CustomTokenObtainPairView,
     upload_fotos_listado, templates_catalog,
@@ -20,6 +20,7 @@ from .views import (
     commercial_agent_detail, commercial_agent_set_default,
     commercial_agent_photo, content_preferences_detail,
     crm_clients_collection, crm_client_detail,
+    extract_listado_from_url, generate_meta_variants,
     brand_templates_collection, brand_template_detail,
     brand_template_clone, brand_templates_options,
     brand_template_set_default, brand_template_revisions_collection,
@@ -40,7 +41,17 @@ from .views_admin import (
     admin_access_codes, admin_access_code_detail,
 )
 from .admin import admin_alerts_list
-from .views_crm import crm_client_send_email
+from .views_crm import (
+    crm_client_send_email,
+    crm_followup_task_detail,
+    crm_lead_detail,
+    crm_lead_mark_contacted,
+    crm_lead_move_stage,
+    crm_leads_collection,
+    crm_metrics_view,
+    crm_pipeline_stages,
+    meta_leads_webhook,
+)
 
 router = DefaultRouter()
 router.register(r'properties', PropertyViewSet)
@@ -64,6 +75,13 @@ urlpatterns = [
     path('auth/crm/clientes/', crm_clients_collection, name='crm_clients_collection'),
     path('auth/crm/clientes/<int:client_id>/', crm_client_detail, name='crm_client_detail'),
     path('auth/crm/clientes/<int:client_id>/email/', crm_client_send_email, name='crm_client_send_email'),
+    path('auth/crm/pipeline/', crm_pipeline_stages, name='crm_pipeline_stages'),
+    path('auth/crm/leads/', crm_leads_collection, name='crm_leads_collection'),
+    path('auth/crm/leads/<int:lead_id>/', crm_lead_detail, name='crm_lead_detail'),
+    path('auth/crm/leads/<int:lead_id>/move/', crm_lead_move_stage, name='crm_lead_move_stage'),
+    path('auth/crm/leads/<int:lead_id>/contacted/', crm_lead_mark_contacted, name='crm_lead_mark_contacted'),
+    path('auth/crm/tasks/<int:task_id>/', crm_followup_task_detail, name='crm_followup_task_detail'),
+    path('auth/crm/metrics/', crm_metrics_view, name='crm_metrics'),
     path('auth/templates/', brand_templates_collection, name='brand_templates_collection'),
     path('auth/templates/options/', brand_templates_options, name='brand_templates_options'),
     path('auth/templates/clone/', brand_template_clone, name='brand_template_clone'),
@@ -87,6 +105,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard, name='dashboard'),
     path('listados/', ListadosView.as_view(), name='listados'),
     path('listados/<int:pk>/', ListadoDetalleView.as_view(), name='listado_detalle'),
+    path('listados/extract-from-url/', extract_listado_from_url, name='extract_listado_from_url'),
     path('listados/upload-fotos/', upload_fotos_listado, name='upload_fotos_listado'),
     path('listados/<int:pk>/html/', generar_html, name='generar_html'),
     path('listados/<int:pk>/export-zip/', export_listado_zip, name='export_listado_zip'),
@@ -106,17 +125,20 @@ urlpatterns = [
     path('generar-imagen-story/', generar_imagen_story, name='generar_imagen_story'),
     path('generar-caption-story/', generar_caption_story, name='generar_caption_story'),
     path('generar-email/', generar_email, name='generar_email'),
+    path('ads/generate-meta-variants/', generate_meta_variants, name='generate_meta_variants'),
     path('templates-catalog/', templates_catalog, name='templates_catalog'),
     path('publicar-instagram/', publicar_instagram, name='publicar_instagram'),
     path('publicar-redes/', publicar_redes_sociales, name='publicar_redes_sociales'),
     path('publicar-redes/todo/', publicar_redes_todo, name='publicar_redes_todo'),
     path('publicar-redes/status/', publicar_redes_status, name='publicar_redes_status'),
+    path('publicar-redes/logs/', publicar_redes_logs, name='publicar_redes_logs'),
     path('pdf/<str:uuid_str>/', serve_pdf_file, name='serve_pdf'),
     path('video-status/<int:listado_id>/', video_status, name='video_status'),
     
     path('mp/checkout/', mp_checkout,  name='mp_checkout'),
     path('mp/webhook/',  mp_webhook,   name='mp_webhook'),
     path('mp/plan/',     get_plan_info_mp,       name='mp_plan_info'),
+    path('crm/meta/webhook/', meta_leads_webhook, name='crm_meta_leads_webhook'),
 
     # Legal
     path('terminos-y-condiciones/', obtener_terminos, name='obtener_terminos'),
