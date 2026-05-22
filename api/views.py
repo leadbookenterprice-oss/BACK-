@@ -2149,6 +2149,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 @permission_classes([AllowAny])
 def request_trial_token(request):
     from django.conf import settings
+    from django.core.mail import send_mail
 
     def _normalize_whatsapp_phone(raw_phone):
         digits = re.sub(r'\D', '', str(raw_phone or '').strip())
@@ -2177,10 +2178,23 @@ def request_trial_token(request):
         return '+54' + digits
 
     telefono = str(request.data.get('telefono') or '').strip()
+    email = str(request.data.get('email') or '').strip().lower()
     digits_only = re.sub(r'\D', '', telefono)
-    logger.info("[WHATSAPP] request_trial_token solicitado telefono_raw=%s", telefono)
+    logger.info("[WHATSAPP] request_trial_token solicitado telefono_raw=%s email=%s", telefono, email)
 
-    if len(digits_only) < 10:
+    if not telefono and not email:
+        return Response({
+            "error": "contact_required",
+            "message": "Ingresá WhatsApp o email para recibir el código.",
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return Response({
+            "error": "invalid_email",
+            "message": "Ingresá un email válido para el envío de respaldo.",
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    if telefono and len(digits_only) < 10:
         return Response({
             "error": "invalid_phone",
             "message": "Ingresá un número de teléfono válido con al menos 10 dígitos.",
@@ -2189,10 +2203,16 @@ def request_trial_token(request):
     telefono_normalizado = _normalize_whatsapp_phone(telefono)
 
     # Verificar que el teléfono no esté ya registrado
-    if Agent.objects.filter(telefono=telefono_normalizado).exists():
+    if telefono_normalizado and Agent.objects.filter(telefono=telefono_normalizado).exists():
         return Response({
             "error": "phone_taken",
             "message": "Este número de teléfono ya está asociado a una cuenta existente.",
+        }, status=status.HTTP_409_CONFLICT)
+
+    if email and Agent.objects.filter(email=email).exists():
+        return Response({
+            "error": "email_taken",
+            "message": "Este email ya está asociado a una cuenta existente.",
         }, status=status.HTTP_409_CONFLICT)
 
     # Generar código de acceso
@@ -2201,31 +2221,74 @@ def request_trial_token(request):
     access_code_obj = AccessCode.objects.create(
         code=code,
         trial_days=trial_days,
-        assigned_phone=telefono_normalizado,
-        notes=f"Solicitado por WhatsApp para {telefono_normalizado}",
+        assigned_phone=telefono_normalizado or None,
+        assigned_email=email or None,
+        notes=f"Solicitado token. phone={telefono_normalizado or '-'} email={email or '-'}",
     )
 
-    # Enviar por WhatsApp
-    from .services.whatsapp_service import send_trial_token
-    sent, send_error, message_sid = send_trial_token(telefono_normalizado, code)
+    # Enviar por WhatsApp primero (si hay teléfono)
+    sent = False
+    send_error = None
+    message_sid = None
+    channel = None
+
+    if telefono_normalizado:
+        from .services.whatsapp_service import send_trial_token
+        sent, send_error, message_sid = send_trial_token(telefono_normalizado, code)
+        if sent:
+            channel = 'whatsapp'
+
+    # Fallback por email (sin costo Twilio) si WhatsApp no pudo
+    email_error = None
+    if not sent and email:
+        try:
+            send_mail(
+                subject='Tu código de acceso LeadBook',
+                message=(
+                    'Hola!\n\n'
+                    'Tu código de acceso para activar la prueba Starter de 30 días es:\n\n'
+                    f'{code}\n\n'
+                    'Ingresalo en la app para continuar.'
+                ),
+                from_email=None,
+                recipient_list=[email],
+                fail_silently=False,
+            )
+            sent = True
+            channel = 'email'
+            send_error = None
+        except Exception as e:
+            email_error = str(e)
+
     logger.info(
-        "[WHATSAPP] intento_envio telefono=%s sent=%s sid=%s error=%s",
+        "[WHATSAPP] intento_envio telefono=%s email=%s sent=%s channel=%s sid=%s error=%s email_error=%s",
         telefono_normalizado,
+        email,
         sent,
+        channel,
         message_sid,
         send_error,
+        email_error,
     )
 
     response_data = {
         "sent": sent,
-        "message": "Código enviado por WhatsApp." if sent else "Código generado. No se pudo enviar por WhatsApp.",
+        "message": (
+            "Código enviado por WhatsApp." if channel == 'whatsapp'
+            else "Código enviado por email." if channel == 'email'
+            else "Código generado. No se pudo enviar por WhatsApp ni por email."
+        ),
         "trial_days": trial_days,
         "to": telefono_normalizado,
+        "email": email or None,
+        "channel": channel,
         "message_sid": message_sid,
     }
 
     if send_error:
         response_data["send_error"] = send_error
+    if email_error:
+        response_data["email_error"] = email_error
 
     if settings.DEBUG:
         response_data["code"] = code
