@@ -2311,11 +2311,27 @@ def generar_whatsapp_url(telefono, tipo_propiedad='', ciudad='', operacion='', p
 
 
 def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio='', moneda=''):
-    import urllib.parse
+    import qrcode
     wa_url = generar_whatsapp_url(telefono, tipo_propiedad, ciudad, operacion, precio, moneda)
     if not wa_url:
         return ''
-    return f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(wa_url)}"
+    try:
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=8,
+            border=2,
+        )
+        qr.add_data(wa_url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+    except Exception:
+        logger.exception("[QR] No se pudo generar QR local")
+        return ''
 
 
 def _sanitize_generated_email_html(raw_html):
@@ -3685,8 +3701,7 @@ def brand_template_publish_revision(request, template_id, revision_id):
 
 
 def _demo_qr_image_url():
-    import urllib.parse
-    wa_url = generar_whatsapp_url(
+    return generar_qr_url(
         '+541123456789',
         tipo_propiedad='Casa',
         ciudad='Miami Beach',
@@ -3694,9 +3709,6 @@ def _demo_qr_image_url():
         precio='850.000',
         moneda='USD',
     )
-    if not wa_url:
-        return ''
-    return f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(wa_url)}"
 
 
 def _brand_template_demo_context():
@@ -4561,17 +4573,55 @@ def generar_carrusel(request):
         gallery_source = images_pool[1:] if len(images_pool) > 1 else []
         gallery_images = gallery_source[:MAX_CAROUSEL_GALLERY_IMAGES]
         gallery_omitted = max(0, len(gallery_source) - len(gallery_images))
-        recamaras = data.get('recamaras') or 'N/D'
-        banos = data.get('banos') or 'N/D'
-        superficie = data.get('superficieCubierta') or data.get('superficieTotal') or 'N/D'
+        tipo_propiedad = data.get('tipoPropiedad', 'Propiedad')
+        tipo_norm = unicodedata.normalize('NFKD', str(tipo_propiedad or '')).encode('ascii', 'ignore').decode('ascii').lower()
+        is_parking = any(token in tipo_norm for token in ('cochera', 'garage', 'garaje', 'estacionamiento', 'parking'))
+
+        def clean_spec(value):
+            value = str(value or '').strip()
+            return '' if value.lower() in {'n/d', 'nd', 'none', 'null', '-'} else value
+
+        recamaras = clean_spec(data.get('recamaras'))
+        banos = clean_spec(data.get('banos'))
+        superficie = clean_spec(
+            data.get('superficieCubierta')
+            or data.get('superficieConstruida')
+            or data.get('superficieTotal')
+            or data.get('superficieTerreno')
+        )
+        estacionamientos = clean_spec(data.get('estacionamientos'))
         amenidades = data.get('amenidades') if isinstance(data.get('amenidades'), list) else []
         amenities_text = ', '.join(amenidades[:5]) if amenidades else 'amenidades seleccionadas para vivir mejor'
-        precio_text = f"{data.get('moneda', 'USD')} {data.get('precio', '')}".strip()
+        precio_val = clean_spec(data.get('precio'))
+        moneda_val = clean_spec(data.get('moneda')) or 'USD'
+        precio_text = f"{moneda_val} {precio_val}".strip() if precio_val else ''
         descripcion = str(data.get('descripcion') or data.get('descripcionGenerada') or '').strip()
         descripcion_corta = descripcion[:180].rstrip() if descripcion else 'Una propuesta pensada para vivir, invertir y decidir con informacion clara.'
         ubicacion_text = str(data.get('ciudad') or '').strip()
-        tipo_propiedad = data.get('tipoPropiedad', 'Propiedad')
         operacion_text = data.get('operacion', 'Venta')
+
+        def build_specs_sentence():
+            parts = []
+            if is_parking:
+                if superficie:
+                    parts.append(f"{superficie} m2")
+                if estacionamientos:
+                    label = 'espacio' if estacionamientos == '1' else 'espacios'
+                    parts.append(f"{estacionamientos} {label}")
+                suffix = ', '.join(parts)
+                return f"{suffix}. " if suffix else ''
+
+            if superficie:
+                parts.append(f"{superficie} m2")
+            if recamaras:
+                parts.append(f"{recamaras} hab")
+            if banos:
+                parts.append(f"{banos} banos")
+            suffix = ', '.join(parts)
+            return f"{suffix}. " if suffix else ''
+
+        specs_sentence = build_specs_sentence()
+        specs_prompt = specs_sentence.strip().rstrip('.') or 'Ficha comercial sin medidas residenciales genericas'
 
         def pick_image(index=0):
             if not images_pool:
@@ -4638,14 +4688,14 @@ def generar_carrusel(request):
     <div class="top">{logo_html}</div>
     <main>
       <div class="headline">Contacto<br>Directo</div>
-      <div class="sub">PedÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ la ficha completa, disponibilidad y condiciones comerciales actualizadas.</div>
+      <div class="sub">Pedi la ficha completa, disponibilidad y condiciones comerciales actualizadas.</div>
     </main>
     <section class="contact">
       <div class="agent">
         {agent_photo}
         <div>
           <div class="name">{safe_agent}</div>
-          <div class="role">{safe_role} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {safe_agency}</div>
+          <div class="role">{safe_role} - {safe_agency}</div>
           {contact_line}
         </div>
       </div>
@@ -4656,9 +4706,10 @@ def generar_carrusel(request):
 </html>"""
 
         hook_title = str(data.get('titulo') or f"{tipo_propiedad} en {ubicacion_text}" or tipo_propiedad).strip()
+        price_sentence = f"{operacion_text} por {precio_text}." if precio_text else f"{operacion_text}."
         hook_subheadline = (
-            f"{operacion_text} por {precio_text}. {superficie} m2, {recamaras} hab, {banos} banos. "
-            "DeslizÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ para ver la galerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a y guardÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ esta oportunidad."
+            f"{price_sentence} {specs_sentence}"
+            "Desliza para ver la galeria y guarda esta oportunidad."
         )
 
         slides_urls = []
@@ -4729,21 +4780,21 @@ def generar_carrusel(request):
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
-        prompt_text = f"""EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ UN SOLO caption final para Instagram Carrusel, listo para publicar.
+        prompt_text = f"""Escribi UN SOLO caption final para Instagram Carrusel, listo para publicar.
 Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
-OperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y precio: {data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-Detalles: {recamaras} habitaciones, {banos} baÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os, {superficie} m2. Amenities/diferenciales: {amenities_text}. Contexto: {descripcion_corta}.
+Operacion y precio: {data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+Detalles: {specs_prompt}. Amenities/diferenciales: {amenities_text}. Contexto: {descripcion_corta}.
 
 Requisitos obligatorios:
 - 1100 a 1900 caracteres.
-- Gancho con personalidad en la primera lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­nea.
-- 2 a 4 pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafos cortos, con deseo, exclusividad, inversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y beneficio concreto.
+- Gancho con personalidad en la primera linea.
+- 2 a 4 parrafos cortos, con deseo, exclusividad, inversion y beneficio concreto.
 - Mencionar que el carrusel muestra recorrido/fotos reales y que conviene guardar o compartir.
 - CTA claro a WhatsApp/consulta privada.
-- Cerrar con 25 a 30 hashtags variados y especÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ficos, no genÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©ricos repetidos.
-- No des opciones, no uses tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos como "OpciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n 1", no expliques el caption, no menciones que sos IA.
+- Cerrar con 25 a 30 hashtags variados y especificos, no genericos repetidos.
+- No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
-        caption = smart_call(prompt_text, system_prompt="Sos un director de marketing inmobiliario digital. DevolvÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s solo copy final listo para publicar.", agente=user)
+        caption = smart_call(prompt_text, system_prompt="Sos un director de marketing inmobiliario digital. Devolves solo copy final listo para publicar.", agente=user)
         caption = _finalize_caption_text(caption, data, formato='carrusel', prefs=content_prefs, max_chars=2200)
 
         if listado_obj:
@@ -5417,18 +5468,18 @@ def construir_contexto_pdf(data, user, request=None):
     descripcion = data.get('descripcion', '')
     if not descripcion:
         amenidades_str = ', '.join(amenidades) if amenidades else 'no especificadas'
-        prompt_desc = f"""GenerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ una descripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n inmobiliaria profesional de 2 pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafos para:
+        prompt_desc = f"""Genera una descripcion inmobiliaria profesional de 2 parrafos para:
 {tipo_propiedad} en {operacion} en {ciudad}.
 Precio: {moneda} {precio}.
-RecÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡maras: {recamaras}. BaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os: {banos}.
+Recamaras: {recamaras}. Banos: {banos}.
 Superficie construida: {superficie_cubierta}m2.
 Terreno: {superficie_total}m2.
 Amenidades: {amenidades_str}.
 
-PÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafo 1: DescripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n general de la propiedad y ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n (3-4 oraciones).
-PÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
-Tono elegante y persuasivo. Solo los 2 pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafos, sin tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos ni bullets."""
-        descripcion_ia = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­s en espaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±ol, con tono sofisticado y persuasivo.", agente=user)
+Parrafo 1: Descripcion general de la propiedad y ubicacion (3-4 oraciones).
+Parrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
+Tono elegante y persuasivo. Solo los 2 parrafos, sin titulos ni bullets."""
+        descripcion_ia = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribis en espanol, con tono sofisticado y persuasivo.", agente=user)
         if descripcion_ia:
             descripcion = descripcion_ia
             from .plan_utils import registrar_uso
@@ -5531,7 +5582,6 @@ def generar_pdf(request):
         from api.services.render_engine import render_html_to_pdf
         from api.services.almacenamiento import AlmacenamientoCloudinary
         from api.ai_services import generar_html_gemini, generar_html_desde_template
-        from .models import Listado
 
         listado_obj = None
         if listado_id_hint:
