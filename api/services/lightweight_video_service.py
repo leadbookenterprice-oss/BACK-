@@ -183,6 +183,43 @@ def _resolve_render_profile(tipo_video):
             crf = fallback_crf
             preset = fallback_preset
 
+    # Guardrail por capacidad de worker (Railway / contenedores chicos):
+    # evita SIGKILL (-9) en ffmpeg cuando la configuración es demasiado agresiva.
+    runtime_guard = config('LIGHT_VIDEO_RUNTIME_GUARD', default=True, cast=bool)
+    if runtime_guard:
+        guard_max_fps = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_FPS', default=30, cast=int), 24, 30))
+        guard_max_pixels = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_PIXELS', default=921600, cast=int), 518400, 2073600))
+        guard_preset = config('LIGHT_VIDEO_RUNTIME_PRESET', default='veryfast').strip() or 'veryfast'
+        guard_crf = int(_clamp(config('LIGHT_VIDEO_RUNTIME_CRF', default=max(crf, 23), cast=int), crf, 32))
+        guard_max_photos = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_PHOTOS', default=min(max_photos, 5), cast=int), 1, max_photos))
+        guard_max_seconds = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_SECONDS', default=min(max_seconds, 26), cast=int), 10, max_seconds))
+
+        original = (width, height, fps)
+        if fps > guard_max_fps:
+            fps = guard_max_fps
+
+        pixels = width * height
+        if pixels > guard_max_pixels:
+            ratio = (guard_max_pixels / float(pixels)) ** 0.5
+            width = int(max(540, round((width * ratio) / 2.0) * 2))
+            height = int(max(960, round((height * ratio) / 2.0) * 2))
+            width = min(width, 2160)
+            height = min(height, 3840)
+
+        if (width, height, fps) != original:
+            fallback_applied = True
+            if fallback_reason:
+                fallback_reason += ' | '
+            fallback_reason += (
+                f"runtime_guard from {original[0]}x{original[1]}@{original[2]} "
+                f"to {width}x{height}@{fps}"
+            )
+            preset = guard_preset
+            crf = guard_crf
+            max_photos = min(max_photos, guard_max_photos)
+            max_seconds = min(max_seconds, guard_max_seconds)
+            min_seconds = min(min_seconds, max_seconds)
+
     return {
         'profile': profile_name,
         'width': width,
@@ -197,6 +234,18 @@ def _resolve_render_profile(tipo_video):
         'fallback_reason': fallback_reason,
         'load': load,
     }
+
+
+def _x264_low_memory_args():
+    threads = int(_clamp(config('LIGHT_VIDEO_X264_THREADS', default=1, cast=int), 1, 4))
+    params = str(
+        config('LIGHT_VIDEO_X264_PARAMS', default='rc-lookahead=6:bframes=0:ref=1:me=dia:subme=2')
+        or ''
+    ).strip()
+    args = ['-threads', str(threads)]
+    if params:
+        args.extend(['-x264-params', params])
+    return args
 
 
 def _ordered_scene_texts(datos):
@@ -439,10 +488,15 @@ def _render_image_segment(image_path, output_path, duration, width, height, fps,
         preset,
         '-crf',
         str(crf),
+    ]
+    cmd_primary.extend(_x264_low_memory_args())
+    cmd_primary.extend(
+        [
         '-pix_fmt',
         'yuv420p',
         output_path,
-    ]
+        ]
+    )
     try:
         _run(cmd_primary, timeout=timeout)
         return
@@ -476,13 +530,18 @@ def _render_image_segment(image_path, output_path, duration, width, height, fps,
         '-c:v',
         'libx264',
         '-preset',
-        'veryfast',
+        config('LIGHT_VIDEO_SEGMENT_FALLBACK_PRESET', default='ultrafast'),
         '-crf',
-        str(max(crf, 22)),
+        str(max(crf, int(_clamp(config('LIGHT_VIDEO_SEGMENT_FALLBACK_CRF', default=24, cast=int), 20, 32)))),
+    ]
+    cmd_fallback.extend(_x264_low_memory_args())
+    cmd_fallback.extend(
+        [
         '-pix_fmt',
         'yuv420p',
         output_path,
-    ]
+        ]
+    )
     _run(cmd_fallback, timeout=timeout)
 
 
