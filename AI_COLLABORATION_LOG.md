@@ -77,6 +77,39 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-22 - OpenCode - Notification mojibake repair helper
+
+Objective:
+
+- Diagnose why notification text renders as `estÃ...` and add the missing backend helper required to repair mojibake when notifications are created/listed.
+
+Files modified:
+
+- `api/utils.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Confirmed the visual issue is mojibake: UTF-8 Spanish text was previously stored/rendered after being decoded as Windows-1252/Latin-1.
+- Added `repair_mojibake_text` in `api/utils.py`, covering common double/triple-encoded Spanish accent sequences and falling back to `ftfy.fix_text`.
+- Updated `crear_notificacion` to normalize notification title/message before saving future rows.
+- The current `api/views.py` HEAD already calls `repair_mojibake_text` when listing notifications, so existing stored broken rows are repaired on response after this helper exists.
+
+Verification:
+
+- `py -3 -m py_compile api/views.py api/utils.py` OK.
+- `py -3 manage.py check` OK.
+- `git diff --check` OK.
+
+Commit/push:
+
+- Included in commit `fix(api): repair notification mojibake` and pushed to `origin/main`.
+
+Pending/risks:
+
+- Deploy backend so production uses the helper.
+- Existing DB rows remain physically mojibaked, but API responses should render clean; run a one-off DB cleanup later if desired.
+
 ### 2026-05-22 - OpenCode - CRM V1 pipeline and Meta leads
 
 Objective:
