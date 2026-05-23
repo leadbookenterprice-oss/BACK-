@@ -51,7 +51,15 @@ def _run(cmd, timeout=180):
         timeout=timeout,
     )
     if process.returncode != 0:
-        raise LightweightVideoError((process.stderr or process.stdout or 'ffmpeg fallo')[-3000:])
+        detail = (process.stderr or process.stdout or '').strip()
+        if not detail:
+            detail = f'ffmpeg fallo (returncode={process.returncode})'
+            if process.returncode < 0:
+                detail += f' signal={-process.returncode}'
+        snippet = ' '.join(str(piece) for piece in cmd[:18])
+        if len(cmd) > 18:
+            snippet += ' ...'
+        raise LightweightVideoError(f'{detail[-2400:]} | cmd: {snippet}')
     return process
 
 
@@ -405,38 +413,77 @@ def _render_image_segment(image_path, output_path, duration, width, height, fps,
     patterns = _resolve_motion_patterns()
     pattern = patterns[scene_index % len(patterns)]
     vf = _build_zoompan_filter(pattern, frames=frames, width=width, height=height, fps=fps)
-    _run(
-        [
-            _ffmpeg_bin(),
-            '-y',
-            '-hide_banner',
-            '-loglevel',
-            'error',
-            '-framerate',
-            str(fps),
-            '-loop',
-            '1',
-            '-t',
-            f'{duration:.3f}',
-            '-i',
-            image_path,
-            '-vf',
-            vf,
-            '-frames:v',
-            str(frames),
-            '-an',
-            '-c:v',
-            'libx264',
-            '-preset',
-            preset,
-            '-crf',
-            str(crf),
-            '-pix_fmt',
-            'yuv420p',
-            output_path,
-        ],
-        timeout=max(90, int(duration * 20)),
-    )
+    timeout = max(90, int(duration * 20))
+    cmd_primary = [
+        _ffmpeg_bin(),
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-framerate',
+        str(fps),
+        '-loop',
+        '1',
+        '-t',
+        f'{duration:.3f}',
+        '-i',
+        image_path,
+        '-vf',
+        vf,
+        '-frames:v',
+        str(frames),
+        '-an',
+        '-c:v',
+        'libx264',
+        '-preset',
+        preset,
+        '-crf',
+        str(crf),
+        '-pix_fmt',
+        'yuv420p',
+        output_path,
+    ]
+    try:
+        _run(cmd_primary, timeout=timeout)
+        return
+    except Exception as primary_exc:
+        logger.warning(
+            '[LIGHT_VIDEO] Segment render fallback scene=%s pattern=%s err=%s',
+            scene_index,
+            pattern,
+            str(primary_exc)[:320],
+        )
+
+    # Fallback estable para Railway: mantiene fps y resolución, sin zoompan complejo.
+    fallback_vf = f'scale={width}:{height}:flags=lanczos,fps={fps},format=yuv420p'
+    cmd_fallback = [
+        _ffmpeg_bin(),
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-loop',
+        '1',
+        '-t',
+        f'{duration:.3f}',
+        '-i',
+        image_path,
+        '-vf',
+        fallback_vf,
+        '-frames:v',
+        str(frames),
+        '-an',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        str(max(crf, 22)),
+        '-pix_fmt',
+        'yuv420p',
+        output_path,
+    ]
+    _run(cmd_fallback, timeout=timeout)
 
 
 def _concat_segments(segment_paths, output_path):
