@@ -5541,7 +5541,11 @@ Amenidades: {amenidades_str}.
 Parrafo 1: Descripcion general de la propiedad y ubicacion (3-4 oraciones).
 Parrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
 Tono elegante y persuasivo. Solo los 2 parrafos, sin titulos ni bullets."""
-        descripcion_ia = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribis en espanol, con tono sofisticado y persuasivo.", agente=user)
+        try:
+            descripcion_ia = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribis en espanol, con tono sofisticado y persuasivo.", agente=user)
+        except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as exc:
+            logger.warning("[PDF] Gemini no disponible para descripcion (%s). Usando fallback estatico.", exc)
+            descripcion_ia = None
         if descripcion_ia:
             descripcion = descripcion_ia
             from .plan_utils import registrar_uso
@@ -5669,9 +5673,16 @@ def generar_pdf(request):
 
         try:
             html_string = generar_html_desde_template(context, request.user)
+        except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as e:
+            logger.warning("[PDF] IA no disponible en template (%s). Usando render estatico.", e)
+            html_string = render_to_string('pdf/property_brochure_html.html', context)
         except Exception as e:
             print(f"[PDF] Error en sistema de templates: {e}. Usando fallback Gemini.")
-            html_string = generar_html_gemini(context, request.user)
+            try:
+                html_string = generar_html_gemini(context, request.user)
+            except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as gemini_exc:
+                logger.warning("[PDF] Fallback Gemini no disponible (%s). Usando render estatico.", gemini_exc)
+                html_string = render_to_string('pdf/property_brochure_html.html', context)
             
         if not html_string:
             print("[PDF] Fallback: Gemini fallÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³, usando render_to_string estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡tico")

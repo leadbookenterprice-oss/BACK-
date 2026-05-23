@@ -972,17 +972,32 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
             is_quota = '429' in error_msg or 'quota' in error_msg or 'exhausted' in error_msg
             
             if is_quota:
-                is_monthly = any(term in original_error_msg for term in [
-                    'GenerateRequestsPerDayPerProjectPerModel',
+                hard_quota_terms = [
+                    'generaterequestsperdayperprojectpermodel',
+                    'requests per day',
+                    'per day per project',
                     'generate_content_free_tier_requests',
-                    'limit: 0'
-                ])
-                is_minute = any(term in original_error_msg for term in [
-                    'GenerateContentInputTokensPerModelPerMinute',
-                    'GenerateRequestsPerMinutePerProjectPerModel'
-                ])
+                    'daily limit',
+                    'monthly limit',
+                    'limit: 0',
+                ]
+                soft_rate_terms = [
+                    'generaterequestsperminuteperprojectpermodel',
+                    'generatecontentinputtokenspermodelperminute',
+                    'requests per minute',
+                    'per minute per project',
+                    'tokens per minute',
+                    'too many requests',
+                    'rate limit',
+                    'resource exhausted',
+                ]
+                is_monthly = any(term in error_msg for term in hard_quota_terms)
+                is_minute = (
+                    '429' in error_msg
+                    or any(term in error_msg for term in soft_rate_terms)
+                ) and not is_monthly
                 
-                if is_monthly or (not is_minute and '429' not in error_msg):
+                if is_monthly:
                     # Agotamiento REAL de cuota
                     if agente:
                         _mark_gemini_exhausted(agente, current_key, is_monthly=True)
@@ -1000,11 +1015,12 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                         quota_state='hard_exhausted',
                     )
                 
-                if is_minute or '429' in error_msg:
+                if is_minute:
                     # Rate limit por minuto (esperar y reintentar con la misma llave)
                     if attempt < max_retries:
                         logger.warning(f"Rate limit de Gemini (minuto) alcanzado. Esperando 60s... (Intento {attempt+1})")
-                        time.sleep(60)
+                        retry_delay = max(int(getattr(settings, 'GEMINI_RATE_LIMIT_RETRY_DELAY_SECONDS', 8) or 8), 1)
+                        time.sleep(min(retry_delay, 30))
                         continue
                     raise GeminiRateLimitedError(
                         "Servicio de IA temporalmente saturado. Reintentá en 10 minutos.",
@@ -1013,7 +1029,14 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                         quota_state='soft_rate_limited',
                         retry_after_seconds=600,
                     )
-            
+                raise GeminiRateLimitedError(
+                    "Servicio de IA temporalmente saturado. Reintenta en unos minutos.",
+                    provider='gemini',
+                    scope='provider',
+                    quota_state='soft_rate_limited',
+                    retry_after_seconds=600,
+                )
+
             # Otros errores no relacionados a cuota
             raise e
 
