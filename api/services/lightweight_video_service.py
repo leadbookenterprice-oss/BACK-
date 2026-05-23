@@ -698,27 +698,222 @@ def _srt_time(seconds):
     return f'{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}'
 
 
-def _write_srt(script, duration, output_path):
+def _normalize_caption_language(raw):
+    value = str(raw or '').strip().lower()
+    if not value:
+        return ''
+    aliases = {
+        'es': 'es',
+        'spanish': 'es',
+        'espanol': 'es',
+        'espanhol': 'es',
+        'espanol_ar': 'es',
+        'en': 'en',
+        'english': 'en',
+        'ingles': 'en',
+        'pt': 'pt',
+        'portuguese': 'pt',
+        'portugues': 'pt',
+        'it': 'it',
+        'italian': 'it',
+        'italiano': 'it',
+        'fr': 'fr',
+        'french': 'fr',
+        'frances': 'fr',
+        'de': 'de',
+        'german': 'de',
+        'aleman': 'de',
+    }
+    if value in aliases:
+        return aliases[value]
+    match = re.match(r'^([a-z]{2})', value)
+    return match.group(1) if match else ''
+
+
+def _resolve_groq_key_for_whisper(agente):
+    try:
+        if agente is not None:
+            from api.pool_manager import get_next_available_api
+            key = get_next_available_api(agente, 'groq')
+            if key:
+                return key
+    except Exception:
+        pass
+
+    return (
+        str(config('GROQ_API_KEY', default='') or '').strip()
+        or str(getattr(settings, 'GROQ_API_KEY', '') or '').strip()
+    )
+
+
+def _word_chunks_from_whisper_payload(payload, chunk_size, duration):
+    words_raw = payload.get('words') if isinstance(payload, dict) else None
+    if not isinstance(words_raw, list):
+        words_raw = []
+        for segment in payload.get('segments', []) if isinstance(payload, dict) else []:
+            for item in segment.get('words', []) if isinstance(segment, dict) else []:
+                if isinstance(item, dict):
+                    words_raw.append(item)
+
+    words = []
+    for item in words_raw:
+        if not isinstance(item, dict):
+            continue
+        token = str(item.get('word') or '').strip()
+        if not token:
+            continue
+        start = _safe_float(item.get('start'), -1)
+        end = _safe_float(item.get('end'), -1)
+        if start < 0 or end <= start:
+            continue
+        words.append({'word': token, 'start': start, 'end': end})
+
+    chunks = []
+    if words:
+        for idx in range(0, len(words), chunk_size):
+            group = words[idx:idx + chunk_size]
+            if not group:
+                continue
+            start = max(0.0, _safe_float(group[0].get('start'), 0.0))
+            end = _safe_float(group[-1].get('end'), start + 0.9)
+            if end <= start:
+                end = start + 0.9
+            text = ' '.join(item['word'] for item in group).strip()
+            if text:
+                chunks.append({'start': start, 'end': min(duration, end), 'text': text.upper()})
+        return chunks
+
+    # Segment fallback if word-level timestamps are unavailable.
+    for segment in payload.get('segments', []) if isinstance(payload, dict) else []:
+        if not isinstance(segment, dict):
+            continue
+        text = str(segment.get('text') or '').strip()
+        if not text:
+            continue
+        start = max(0.0, _safe_float(segment.get('start'), -1))
+        end = _safe_float(segment.get('end'), -1)
+        if start < 0:
+            continue
+        if end <= start:
+            end = start + 1.0
+        chunks.append({'start': start, 'end': min(duration, end), 'text': text.upper()})
+    return chunks
+
+
+def _transcribe_whisper_for_captions(audio_path, script, duration, agente=None, datos=None):
+    enabled = config('LIGHT_VIDEO_WHISPER_CAPTIONS_ENABLED', default=True, cast=bool)
+    if not enabled:
+        return {'ok': False, 'engine': 'disabled'}
+    if not audio_path or not os.path.exists(audio_path):
+        return {'ok': False, 'engine': 'no_audio'}
+
+    key = _resolve_groq_key_for_whisper(agente)
+    if not key:
+        return {'ok': False, 'engine': 'no_key'}
+
+    model = str(config('LIGHT_VIDEO_WHISPER_MODEL', default='whisper-large-v3-turbo') or 'whisper-large-v3-turbo').strip()
+    endpoint = str(
+        config(
+            'LIGHT_VIDEO_WHISPER_API_URL',
+            default='https://api.groq.com/openai/v1/audio/transcriptions',
+        )
+        or 'https://api.groq.com/openai/v1/audio/transcriptions'
+    ).strip()
+    timeout = int(_clamp(config('LIGHT_VIDEO_WHISPER_TIMEOUT', default=90, cast=int), 20, 180))
+    chunk_size = int(_clamp(config('LIGHT_VIDEO_CAPTION_WORDS', default=4, cast=int), 2, 14))
+    lang = _normalize_caption_language((datos or {}).get('idioma') or (datos or {}).get('language') or '')
+    prompt = str((script or '')[:220]).strip()
+
+    form_data = [
+        ('model', model),
+        ('response_format', 'verbose_json'),
+        ('temperature', '0'),
+        ('timestamp_granularities[]', 'word'),
+        ('timestamp_granularities[]', 'segment'),
+    ]
+    if lang:
+        form_data.append(('language', lang))
+    if prompt:
+        form_data.append(('prompt', prompt))
+
+    try:
+        with open(audio_path, 'rb') as handle:
+            files = {'file': (os.path.basename(audio_path), handle, 'audio/mpeg')}
+            response = requests.post(
+                endpoint,
+                headers={'Authorization': f'Bearer {key}'},
+                data=form_data,
+                files=files,
+                timeout=timeout,
+            )
+        if response.status_code >= 400:
+            logger.warning(
+                '[LIGHT_VIDEO] Whisper captions failed status=%s detail=%s',
+                response.status_code,
+                (response.text or '')[:260],
+            )
+            return {'ok': False, 'engine': 'http_error', 'status': response.status_code}
+        payload = response.json()
+        chunks = _word_chunks_from_whisper_payload(payload, chunk_size=chunk_size, duration=duration)
+        if not chunks:
+            return {'ok': False, 'engine': 'empty_transcript'}
+        return {'ok': True, 'engine': 'groq_whisper', 'chunks': chunks, 'model': model, 'language': lang or ''}
+    except Exception as exc:
+        logger.warning('[LIGHT_VIDEO] Whisper captions exception: %s', str(exc)[:220])
+        return {'ok': False, 'engine': 'exception', 'error': str(exc)[:220]}
+
+
+def _write_srt(script, duration, output_path, audio_path='', agente=None, datos=None):
     words = [w.strip() for w in re.split(r'\s+', script or '') if w.strip()]
     if not words or duration <= 1:
-        return False
+        return {'ok': False, 'engine': 'empty_script'}
 
     chunk_size = int(_clamp(config('LIGHT_VIDEO_CAPTION_WORDS', default=4, cast=int), 2, 14))
-    chunks = [' '.join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
-    usable = max(1.0, duration - 0.8)
-    per_chunk = usable / max(1, len(chunks))
-    start_offset = 0.35
-
-    with open(output_path, 'w', encoding='utf-8') as handle:
+    whisper_result = _transcribe_whisper_for_captions(
+        audio_path=audio_path,
+        script=script,
+        duration=duration,
+        agente=agente,
+        datos=datos,
+    )
+    timed_chunks = []
+    caption_engine = 'heuristic'
+    whisper_model = ''
+    whisper_lang = ''
+    if whisper_result.get('ok'):
+        timed_chunks = whisper_result.get('chunks') or []
+        caption_engine = whisper_result.get('engine') or 'groq_whisper'
+        whisper_model = whisper_result.get('model') or ''
+        whisper_lang = whisper_result.get('language') or ''
+    else:
+        chunks = [' '.join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+        usable = max(1.0, duration - 0.8)
+        per_chunk = usable / max(1, len(chunks))
+        start_offset = 0.35
         for idx, chunk in enumerate(chunks, start=1):
             start = start_offset + ((idx - 1) * per_chunk)
             end = min(duration - 0.15, start + max(0.85, per_chunk * 0.92))
             if end <= start:
                 break
+            timed_chunks.append({'start': start, 'end': end, 'text': chunk.upper()})
+
+    with open(output_path, 'w', encoding='utf-8') as handle:
+        for idx, chunk in enumerate(timed_chunks, start=1):
+            start = max(0.0, _safe_float(chunk.get('start'), 0.0))
+            end = min(duration, _safe_float(chunk.get('end'), start + 0.9))
+            if end <= start:
+                break
             handle.write(f'{idx}\n')
             handle.write(f'{_srt_time(start)} --> {_srt_time(end)}\n')
-            handle.write(chunk.upper() + '\n\n')
-    return True
+            handle.write(str(chunk.get('text') or '').strip().upper() + '\n\n')
+    return {
+        'ok': True,
+        'engine': caption_engine,
+        'model': whisper_model,
+        'language': whisper_lang,
+        'chunks': len(timed_chunks),
+        'whisper_state': whisper_result.get('engine') if isinstance(whisper_result, dict) else '',
+    }
 
 
 def _subtitle_filter_path(path):
@@ -919,9 +1114,25 @@ def generar_video_listado_liviano(listado_id):
         _mux_audio(visual_path, mixed_audio_path, voiced_path)
 
         final_path = voiced_path
+        caption_meta = {'ok': False, 'engine': 'disabled'}
         if config('LIGHT_VIDEO_BURN_CAPTIONS', default=True, cast=bool) and script:
             srt_path = os.path.join(temp_dir, 'captions.srt')
-            if _write_srt(script, target_duration, srt_path):
+            caption_meta = _write_srt(
+                script,
+                target_duration,
+                srt_path,
+                audio_path=audio_path,
+                agente=listado.agente,
+                datos=datos,
+            )
+            logger.info(
+                '[LIGHT_VIDEO] Captions listado_id=%s engine=%s chunks=%s state=%s',
+                listado.id,
+                caption_meta.get('engine'),
+                caption_meta.get('chunks'),
+                caption_meta.get('whisper_state'),
+            )
+            if caption_meta.get('ok'):
                 subtitled_path = os.path.join(temp_dir, 'final.mp4')
                 try:
                     _burn_subtitles(voiced_path, srt_path, subtitled_path, crf=crf, preset=preset, height=height)
@@ -949,6 +1160,16 @@ def generar_video_listado_liviano(listado_id):
         datos['video_audio_mix_strategy'] = mix_strategy
         datos['video_voice_choice'] = normalize_elevenlabs_voice_choice(_value(datos, 'voz', default='femenina'))
         datos['video_voice_script'] = script
+        datos['video_captions_enabled'] = bool(config('LIGHT_VIDEO_BURN_CAPTIONS', default=True, cast=bool))
+        datos['video_caption_engine'] = caption_meta.get('engine')
+        if caption_meta.get('model'):
+            datos['video_caption_model'] = caption_meta.get('model')
+        if caption_meta.get('language'):
+            datos['video_caption_language'] = caption_meta.get('language')
+        if caption_meta.get('chunks') is not None:
+            datos['video_caption_chunks'] = caption_meta.get('chunks')
+        if caption_meta.get('whisper_state'):
+            datos['video_caption_whisper_state'] = caption_meta.get('whisper_state')
         datos['video_duration_seconds'] = round(target_duration, 2)
         datos['video_resolution'] = f'{width}x{height}'
         datos['video_fps'] = fps
