@@ -227,7 +227,7 @@ def _notify_admin_trial_token_request(access_code_obj, email):
             tipo='trial_token_request',
             severidad='info',
             titulo='Nuevo token solicitado',
-            mensaje=f'Se solicitÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ un token de acceso para {email}.',
+            mensaje=f'Se solicitó un token de acceso para {email}.',
         )
 
         payload = {
@@ -1607,7 +1607,7 @@ def _build_agent_contact_html(phone, email):
             f'<a href="mailto:{html_lib.escape(email_value)}">{html_lib.escape(email_value)}</a>'
         )
 
-    return ' &nbsp;ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·&nbsp; '.join(parts)
+    return ' &nbsp;·&nbsp; '.join(parts)
 
 
 def _get_default_commercial_agent(user):
@@ -2346,6 +2346,8 @@ def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio=
 
 
 _MOJIBAKE_REPLACEMENTS = (
+    ('ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·', '·'),
+    ('Ãƒâ€šÃ‚Â·', '·'),
     ('â€™', "'"),
     ('â€˜', "'"),
     ('â€œ', '"'),
@@ -2383,7 +2385,13 @@ def _repair_mojibake_text(value):
         # Si la dependencia no está disponible, no arriesgamos una transcodificación destructiva.
         pass
 
-    return _apply_mojibake_replacements(text)
+    text = _apply_mojibake_replacements(text)
+    text = re.sub(
+        r'(?:&nbsp;|\xa0)\s*[ÃÂÆƒâ€š™Å¡‚"\'`]*·[ÃÂÆƒâ€š™Å¡‚"\'`]*\s*(?:&nbsp;|\xa0)',
+        ' &nbsp;·&nbsp; ',
+        text,
+    )
+    return text
 
 
 def _sanitize_generated_email_html(raw_html):
@@ -4870,8 +4878,8 @@ Requisitos obligatorios:
             crear_notificacion(
                 user,
                 'contenido_generado',
-                'Tu carrusel ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ listo',
-                'El carrusel fue generado correctamente y ya lo tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible para publicar.',
+                'Tu carrusel ya está listo',
+                'El carrusel fue generado correctamente y ya lo tenés disponible para publicar.',
             )
 
         return Response({
@@ -5670,6 +5678,7 @@ def generar_pdf(request):
             html_string = render_to_string('pdf/property_brochure_html.html', context)
 
         html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
+        html_string = _repair_mojibake_text(html_string)
 
         # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ ConversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n a PDF Real con Playwright ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
         pdf_url = None
@@ -5725,8 +5734,8 @@ def generar_pdf(request):
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu PDF ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ listo',
-                'La ficha PDF fue generada correctamente y ya la tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible para descargar.',
+                'Tu PDF ya está listo',
+                'La ficha PDF fue generada correctamente y ya la tenés disponible para descargar.',
             )
 
         return Response({
@@ -5904,8 +5913,8 @@ MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ximo 2200 caracteres. {_caption_prefe
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu imagen POST ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ lista',
-                'La pieza para feed fue generada correctamente y ya la tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible en tu historial.',
+                'Tu imagen POST ya está lista',
+                'La pieza para feed fue generada correctamente y ya la tenés disponible en tu historial.',
             )
 
         return Response({
@@ -6049,8 +6058,8 @@ def generar_imagen_story(request):
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu story ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ lista',
-                'La story fue generada correctamente y ya la tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible para publicar.',
+                'Tu story ya está lista',
+                'La story fue generada correctamente y ya la tenés disponible para publicar.',
             )
 
         return Response({
@@ -6125,8 +6134,8 @@ No des opciones, no uses tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos como "
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu texto para story ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ listo',
-                'El caption para story fue generado correctamente y ya lo podÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s usar.',
+                'Tu texto para story ya está listo',
+                'El caption para story fue generado correctamente y ya lo podés usar.',
             )
 
         return Response({"caption": caption, "texto": caption}, status=status.HTTP_200_OK)
@@ -6234,8 +6243,8 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
             crear_notificacion(
                 request.user,
                 'contenido_generado',
-                'Tu email ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ listo',
-                'El email inmobiliario fue generado correctamente y ya lo tenÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s disponible.',
+                'Tu email ya está listo',
+                'El email inmobiliario fue generado correctamente y ya lo tenés disponible.',
             )
 
         parsed_html = _sanitize_generated_email_html(parsed.get('html', ''))
@@ -6588,7 +6597,7 @@ def _mp_assign_paid_extra(agent, tipo, pago):
             agent,
             'pago_aprobado',
             'Pago aprobado en revisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n',
-            'Recibimos tu pago. Estamos activando el recurso adicional y te avisaremos cuando estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© disponible.',
+            'Recibimos tu pago. Estamos activando el recurso adicional y te avisaremos cuando esté disponible.',
         )
 
     return assigned, missing
@@ -6673,7 +6682,7 @@ def _mp_process_payment(payment_data):
         ])
         from .services.pool_service import assign_apis_to_agent
         assign_apis_to_agent(agent)
-        _mp_notify(agent, 'pago_aprobado', 'Plan activado', f'Tu plan {plan} ya estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ activo.')
+        _mp_notify(agent, 'pago_aprobado', 'Plan activado', f'Tu plan {plan} ya está activo.')
         print(f"[MP] plan payment processed id={mp_payment_id} user={agent.email} plan={plan}", flush=True)
         return {'status': 'processed', 'plan': plan}
 
@@ -8355,6 +8364,7 @@ def descargar_pdf(request, listado_id):
         if not html_content:
             return Response({"error": "No hay PDF generado para este listado"}, status=404)
         from api.services.render_engine import render_html_to_pdf
+        html_content = _repair_mojibake_text(html_content)
         pdf_bytes = render_html_to_pdf(html_content)
         if not pdf_bytes:
             return Response({"error": "Error al generar PDF"}, status=500)
@@ -8566,6 +8576,7 @@ def generar_html(request, pk):
     from django.template.loader import render_to_string
     try:
         html_string = render_to_string('pdf/property_brochure_html.html', context)
+        html_string = _repair_mojibake_text(html_string)
         # Limpiar temp files ya que no generamos PDF
         import os
         for f in temp_files:
@@ -8848,12 +8859,13 @@ def upload_fotos_listado(request):
 @permission_classes([IsAuthenticated])
 def listar_notificaciones(request):
     from .models import Notificacion
+    from .utils import repair_mojibake_text
     notifs = Notificacion.objects.filter(usuario=request.user)[:20]
     data = [{
         'id': n.id,
         'tipo': n.tipo,
-        'titulo': n.titulo,
-        'mensaje': n.mensaje,
+        'titulo': repair_mojibake_text(n.titulo),
+        'mensaje': repair_mojibake_text(n.mensaje),
         'leida': n.leida,
         'creada_en': n.creada_en.isoformat(),
     } for n in notifs]
