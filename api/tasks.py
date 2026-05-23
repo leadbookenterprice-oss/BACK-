@@ -91,7 +91,22 @@ def process_video_queue(max_jobs=None):
     lock_ttl = config('VIDEO_QUEUE_LOCK_TTL_SECONDS', default=3600, cast=int)
     token = f'{timezone.now().timestamp()}:{id(object())}'
     if not cache.add(_queue_lock_key(), token, timeout=lock_ttl):
-        return {'status': 'locked', 'processed': 0}
+        queued_count = Listado.objects.filter(video_status='queued').count()
+        processing_count = Listado.objects.filter(video_status='processing').count()
+        logger.warning(
+            "[VIDEO_QUEUE] Locked; hay otro procesador activo key=%s queued=%s processing=%s ttl=%ss",
+            _queue_lock_key(),
+            queued_count,
+            processing_count,
+            lock_ttl,
+        )
+        return {
+            'status': 'locked',
+            'processed': 0,
+            'failed': 0,
+            'remaining': queued_count,
+            'processing': processing_count,
+        }
 
     attempted = 0
     processed = 0
@@ -136,16 +151,25 @@ def process_video_queue(max_jobs=None):
                 )
 
         remaining = Listado.objects.filter(video_status='queued').count()
+        processing_count = Listado.objects.filter(video_status='processing').count()
         total_elapsed = round(time.time() - run_started, 2)
         logger.info(
-            "[VIDEO_QUEUE] Run fin processed=%s failed=%s remaining=%s attempted=%s elapsed=%.2fs",
+            "[VIDEO_QUEUE] Run fin processed=%s failed=%s remaining=%s processing=%s attempted=%s elapsed=%.2fs",
             processed,
             failed,
             remaining,
+            processing_count,
             attempted,
             total_elapsed,
         )
-        return {'status': 'ok', 'processed': processed, 'failed': failed, 'remaining': remaining, 'elapsed_seconds': total_elapsed}
+        return {
+            'status': 'ok',
+            'processed': processed,
+            'failed': failed,
+            'remaining': remaining,
+            'processing': processing_count,
+            'elapsed_seconds': total_elapsed,
+        }
     finally:
         if cache.get(_queue_lock_key()) == token:
             cache.delete(_queue_lock_key())
@@ -244,8 +268,22 @@ def generar_video_task(listado_id):
 def process_video_queue_task():
     result = process_video_queue()
     try:
-        if result.get('remaining', 0) > 0 and (result.get('processed', 0) > 0 or result.get('failed', 0) > 0):
-            process_video_queue_task.delay()
+        logger.info("[VIDEO_QUEUE] Task result=%s", result)
+        remaining = int(result.get('remaining') or 0)
+        if remaining <= 0:
+            return result
+
+        from decouple import config
+        retry_seconds = max(5, config('VIDEO_QUEUE_RETRY_SECONDS', default=20, cast=int))
+        should_retry = (
+            result.get('status') == 'locked'
+            or result.get('processed', 0) > 0
+            or result.get('failed', 0) > 0
+            or result.get('processing', 0) > 0
+        )
+        if should_retry:
+            process_video_queue_task.apply_async(countdown=retry_seconds)
+            logger.info("[VIDEO_QUEUE] Reprogramado en %ss remaining=%s status=%s", retry_seconds, remaining, result.get('status'))
     except Exception:
         logger.exception("[VIDEO_QUEUE] No se pudo reprogramar cola")
     return result

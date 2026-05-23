@@ -5328,7 +5328,8 @@ def generar_video(request, pk):
         else:
             logger.info("[VIDEO] Dispatch celery listado_id=%s mode=%s eager=%s", pk, generation_mode, getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False))
             from api.tasks import process_video_queue_task
-            process_video_queue_task.delay()
+            async_result = process_video_queue_task.delay()
+            logger.info("[VIDEO] Celery task enviada listado_id=%s task_id=%s", pk, getattr(async_result, 'id', None))
 
             # Fallback opcional: si no hay worker vivo, usar thread para no dejar el video clavado en queued.
             # Mantener desactivado por defecto en prod para evitar OOM del contenedor web.
