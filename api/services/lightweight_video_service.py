@@ -18,7 +18,13 @@ from django.conf import settings
 from django.utils import timezone
 from PIL import Image, ImageOps
 
-from api.ai_services import call_elevenlabs_api, normalize_elevenlabs_voice_choice
+from api.ai_services import (
+    APIKeyUnavailableError,
+    ElevenLabsQuotaExhaustedError,
+    ElevenLabsRateLimitedError,
+    call_elevenlabs_api,
+    normalize_elevenlabs_voice_choice,
+)
 from api.services.almacenamiento import AlmacenamientoCloudinary
 from api.services.gemini_video_service import _collect_photo_urls, _value
 from api.services.video_service import (
@@ -259,14 +265,31 @@ def _generate_voice_file(listado, temp_dir, script):
         'elevenlabsVoiceId',
     )
     voice_settings = datos.get('voiceSettings') or datos.get('voice_settings')
-    audio_bytes = call_elevenlabs_api(
-        script,
-        agente=listado.agente,
-        voz=voz,
-        voice_id=custom_voice_id,
-        voice_settings=voice_settings if isinstance(voice_settings, dict) else None,
-    )
+    try:
+        audio_bytes = call_elevenlabs_api(
+            script,
+            agente=listado.agente,
+            voz=voz,
+            voice_id=custom_voice_id,
+            voice_settings=voice_settings if isinstance(voice_settings, dict) else None,
+        )
+    except (ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError, APIKeyUnavailableError) as exc:
+        fail_open = config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
+        if fail_open:
+            logger.warning(
+                '[LIGHT_VIDEO] TTS fallback sin voz listado_id=%s reason=%s quota_state=%s',
+                listado.id,
+                str(exc)[:220],
+                getattr(exc, 'quota_state', None),
+            )
+            return '', 0.0
+        raise
+
     if not audio_bytes:
+        fail_open_empty = config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
+        if fail_open_empty:
+            logger.warning('[LIGHT_VIDEO] ElevenLabs sin audio, seguimos sin voz listado_id=%s', listado.id)
+            return '', 0.0
         raise LightweightVideoError('ElevenLabs no devolvio audio')
 
     audio_path = os.path.join(temp_dir, 'voice.mp3')
