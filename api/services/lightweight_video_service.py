@@ -10,6 +10,7 @@ import tempfile
 import time
 import glob
 import random
+import unicodedata
 from urllib.parse import urlparse
 
 import requests
@@ -309,7 +310,26 @@ def _generate_voice_file(listado, temp_dir, script):
 
     datos = listado.datos or {}
     voice_enabled = str(datos.get('voiceover', True)).strip().lower() not in {'0', 'false', 'no', 'off'}
+    force_voiceover = config('LIGHT_VIDEO_FORCE_VOICEOVER', default=False, cast=bool)
     if not voice_enabled:
+        if not force_voiceover:
+            return '', 0.0
+        logger.info('[LIGHT_VIDEO] Voiceover forzado por config listado_id=%s', listado.id)
+
+    def _fallback_voice(local_reason):
+        fallback_enabled = config('LIGHT_VIDEO_TTS_FALLBACK_ENABLED', default=True, cast=bool)
+        fallback_mode = str(config('LIGHT_VIDEO_TTS_FALLBACK_MODE', default='flite') or 'flite').strip().lower()
+        if not fallback_enabled or fallback_mode != 'flite':
+            return '', 0.0
+        local_audio_path, local_duration = _generate_flite_voice_file(temp_dir=temp_dir, script=script)
+        if local_audio_path:
+            logger.warning(
+                '[LIGHT_VIDEO] Usando fallback de voz local (%s) listado_id=%s reason=%s',
+                fallback_mode,
+                listado.id,
+                str(local_reason)[:220],
+            )
+            return local_audio_path, local_duration
         return '', 0.0
 
     voz = normalize_elevenlabs_voice_choice(_value(datos, 'voz', default='femenina'))
@@ -333,6 +353,9 @@ def _generate_voice_file(listado, temp_dir, script):
     except (ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError, APIKeyUnavailableError) as exc:
         fail_open = config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
         if fail_open:
+            local_audio_path, local_duration = _fallback_voice(exc)
+            if local_audio_path:
+                return local_audio_path, local_duration
             logger.warning(
                 '[LIGHT_VIDEO] TTS fallback sin voz listado_id=%s reason=%s quota_state=%s',
                 listado.id,
@@ -345,6 +368,9 @@ def _generate_voice_file(listado, temp_dir, script):
     if not audio_bytes:
         fail_open_empty = config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
         if fail_open_empty:
+            local_audio_path, local_duration = _fallback_voice('empty_audio')
+            if local_audio_path:
+                return local_audio_path, local_duration
             logger.warning('[LIGHT_VIDEO] ElevenLabs sin audio, seguimos sin voz listado_id=%s', listado.id)
             return '', 0.0
         raise LightweightVideoError('ElevenLabs no devolvio audio')
@@ -354,6 +380,63 @@ def _generate_voice_file(listado, temp_dir, script):
         handle.write(audio_bytes)
     duration = _probe_duration(audio_path) or max(2.0, len(script.split()) / 2.25)
     return audio_path, duration
+
+
+def _normalize_text_for_flite(script):
+    cleaned = re.sub(r'\s+', ' ', str(script or '')).strip()
+    if not cleaned:
+        return ''
+    normalized = unicodedata.normalize('NFKD', cleaned).encode('ascii', 'ignore').decode('ascii')
+    normalized = re.sub(r"[^A-Za-z0-9 .,!?;:'\-]", ' ', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    max_chars = int(_clamp(config('LIGHT_VIDEO_TTS_FALLBACK_MAX_CHARS', default=900, cast=int), 120, 2200))
+    if len(normalized) > max_chars:
+        normalized = normalized[:max_chars].rsplit(' ', 1)[0].strip()
+        normalized = normalized.rstrip('.,;:') + '.'
+    return normalized
+
+
+def _generate_flite_voice_file(temp_dir, script):
+    flite_text = _normalize_text_for_flite(script)
+    if not flite_text:
+        return '', 0.0
+
+    text_path = os.path.join(temp_dir, 'voice_fallback.txt')
+    with open(text_path, 'w', encoding='utf-8') as handle:
+        handle.write(flite_text)
+
+    audio_path = os.path.join(temp_dir, 'voice_fallback.wav')
+    preferred_voice = str(config('LIGHT_VIDEO_TTS_FALLBACK_VOICE', default='slt') or 'slt').strip().lower()
+    fallback_voice = str(config('LIGHT_VIDEO_TTS_FALLBACK_VOICE_ALT', default='kal') or 'kal').strip().lower()
+    voices = [voice for voice in [preferred_voice, fallback_voice] if voice]
+
+    for voice in voices:
+        try:
+            _run(
+                [
+                    _ffmpeg_bin(),
+                    '-y',
+                    '-hide_banner',
+                    '-loglevel',
+                    'error',
+                    '-f',
+                    'lavfi',
+                    '-i',
+                    f"flite=textfile='{_subtitle_filter_path(text_path)}':voice={voice}",
+                    '-ar',
+                    '48000',
+                    '-ac',
+                    '1',
+                    audio_path,
+                ],
+                timeout=120,
+            )
+            duration = _probe_duration(audio_path) or max(2.0, len(flite_text.split()) / 2.6)
+            return audio_path, duration
+        except Exception as exc:
+            logger.warning('[LIGHT_VIDEO] Voice fallback %s fallo: %s', voice, str(exc)[:220])
+
+    return '', 0.0
 
 
 def _download_image(url, timeout=(10, 40)):
@@ -1166,6 +1249,7 @@ def _write_srt(script, duration, output_path, audio_path='', agente=None, datos=
         'model': whisper_model,
         'language': whisper_lang,
         'chunks': len(timed_chunks),
+        'timed_chunks': timed_chunks,
         'whisper_state': whisper_result.get('engine') if isinstance(whisper_result, dict) else '',
     }
 
@@ -1262,6 +1346,109 @@ def _burn_subtitles(video_path, srt_path, output_path, crf, preset, height):
         ],
         timeout=180,
     )
+
+
+def _escape_drawtext_text(value):
+    text = str(value or '')
+    text = text.replace('\\', r'\\')
+    text = text.replace(':', r'\:')
+    text = text.replace("'", r"\'")
+    text = text.replace(',', r'\,')
+    text = text.replace('[', r'\[').replace(']', r'\]')
+    text = text.replace('%', r'\%')
+    return text
+
+
+def _build_drawtext_caption_filter(caption_chunks, height):
+    if not caption_chunks:
+        return ''
+
+    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='Montserrat').strip() or 'Montserrat'
+    base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=54, cast=int)
+    size = int(_clamp(base_size * (height / 1920.0), 28, 92))
+    margin_v = config('LIGHT_VIDEO_CAPTION_MARGIN_V', default=320, cast=int)
+    margin_v = int(_clamp(margin_v * (height / 1920.0), 110, int(height * 0.40)))
+
+    text_color_hex = str(config('LIGHT_VIDEO_CAPTION_TEXT_COLOR', default='#FFFFFF') or '#FFFFFF').strip().lstrip('#')
+    if len(text_color_hex) == 3:
+        text_color_hex = ''.join(ch * 2 for ch in text_color_hex)
+    if len(text_color_hex) != 6:
+        text_color_hex = 'FFFFFF'
+    text_color = f'#{text_color_hex}'
+
+    outline_hex = str(config('LIGHT_VIDEO_CAPTION_OUTLINE_COLOR', default='#000000') or '#000000').strip().lstrip('#')
+    if len(outline_hex) == 3:
+        outline_hex = ''.join(ch * 2 for ch in outline_hex)
+    if len(outline_hex) != 6:
+        outline_hex = '000000'
+    outline_color = f'#{outline_hex}'
+
+    box_hex = str(config('LIGHT_VIDEO_CAPTION_BG_COLOR', default='#000000') or '#000000').strip().lstrip('#')
+    if len(box_hex) == 3:
+        box_hex = ''.join(ch * 2 for ch in box_hex)
+    if len(box_hex) != 6:
+        box_hex = '000000'
+    bg_alpha = int(round(_clamp(config('LIGHT_VIDEO_CAPTION_BG_ALPHA', default=0.58, cast=float), 0.0, 1.0) * 255))
+    box_color = f'#{box_hex}@0x{bg_alpha:02x}'
+
+    outline = _clamp(config('LIGHT_VIDEO_CAPTION_OUTLINE', default=2.0, cast=float), 0.5, 4.0)
+    bold = 1 if config('LIGHT_VIDEO_CAPTION_BOLD', default=True, cast=bool) else 0
+
+    base = (
+        f"font='{font_name}':fontsize={size}:fontcolor={text_color}:"
+        f"line_spacing=6:borderw={outline:.1f}:bordercolor={outline_color}:"
+        f"box=1:boxcolor={box_color}:boxborderw=20:"
+        f"x=(w-text_w)/2:y=h-{margin_v}:"
+        f"fix_bounds=1:shadowx=0:shadowy=0:"
+        f"alpha=1:"
+        f"expansion=normal"
+    )
+    if bold:
+        base += ':text_shaping=1'
+
+    filters = []
+    for chunk in caption_chunks:
+        start = max(0.0, _safe_float(chunk.get('start'), 0.0))
+        end = max(start + 0.2, _safe_float(chunk.get('end'), start + 1.0))
+        text = _escape_drawtext_text(chunk.get('text') or '')
+        if not text:
+            continue
+        filters.append(
+            f"drawtext={base}:text='{text}':enable='between(t,{start:.3f},{end:.3f})'"
+        )
+    return ','.join(filters)
+
+
+def _burn_subtitles_drawtext_fallback(video_path, output_path, crf, preset, height, caption_chunks):
+    vf = _build_drawtext_caption_filter(caption_chunks=caption_chunks, height=height)
+    if not vf:
+        raise LightweightVideoError('No hay chunks para drawtext captions')
+    cmd = [
+        _ffmpeg_bin(),
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-i',
+        video_path,
+        '-vf',
+        vf,
+        '-c:v',
+        'libx264',
+        '-preset',
+        preset,
+        '-crf',
+        str(crf),
+    ]
+    cmd.extend(_x264_low_memory_args())
+    cmd.extend(
+        [
+            '-c:a',
+            'copy',
+            output_path,
+        ]
+    )
+    _run(cmd, timeout=220)
 
 
 def generar_video_listado_liviano(listado_id):
@@ -1399,6 +1586,26 @@ def generar_video_listado_liviano(listado_id):
                     final_path = subtitled_path
                 except Exception as exc:
                     logger.warning('[LIGHT_VIDEO] No se pudieron quemar subtitulos listado_id=%s: %s', listado.id, exc)
+                    fallback_drawtext = config('LIGHT_VIDEO_CAPTION_DRAWTEXT_FALLBACK', default=True, cast=bool)
+                    if fallback_drawtext:
+                        drawtext_path = os.path.join(temp_dir, 'final_drawtext.mp4')
+                        try:
+                            _burn_subtitles_drawtext_fallback(
+                                voiced_path,
+                                drawtext_path,
+                                crf=crf,
+                                preset=preset,
+                                height=height,
+                                caption_chunks=caption_meta.get('timed_chunks') or [],
+                            )
+                            final_path = drawtext_path
+                            caption_meta['engine'] = (caption_meta.get('engine') or 'heuristic') + '+drawtext'
+                        except Exception as drawtext_exc:
+                            logger.warning(
+                                '[LIGHT_VIDEO] Drawtext captions fallback fallo listado_id=%s: %s',
+                                listado.id,
+                                str(drawtext_exc)[:260],
+                            )
 
         video_url = AlmacenamientoCloudinary.guardar_video(
             final_path,

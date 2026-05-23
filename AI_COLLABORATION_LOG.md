@@ -77,6 +77,40 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-23 - OpenCode - Leadbook Sync audio and captions hardening
+
+Objective:
+
+- Fix missing voiceover and missing burned captions in `leadbook_sync` videos while keeping queue + storage safety.
+
+Files modified:
+
+- `api/services/lightweight_video_service.py`
+- `.env.example`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added local TTS fallback for `leadbook_sync` using FFmpeg `flite` when ElevenLabs is unavailable/exhausted and fail-open is active.
+- Added optional force-voiceover mode (`LIGHT_VIDEO_FORCE_VOICEOVER`) for cases where listings are arriving with `voiceover=false` unexpectedly.
+- Added drawtext caption fallback: if ASS/libass subtitle burn fails, backend retries caption burn with FFmpeg `drawtext` using timed chunks.
+- Extended caption metadata to include timed chunks for fallback rendering.
+- Documented new env knobs for TTS fallback and caption fallback.
+
+Verification:
+
+- `python -m py_compile api/services/lightweight_video_service.py api/tasks.py api/views.py` OK.
+- `git diff -- api/services/lightweight_video_service.py .env.example` reviewed.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- `flite` voice quality is less natural than ElevenLabs; treat as resilience fallback, not premium default.
+- Drawtext fallback depends on FFmpeg `drawtext` availability in runtime image; if missing, captions still degrade gracefully to no-burn.
+
 ### 2026-05-23 - OpenCode - Leadbook Sync quality upgrade
 
 Objective:
