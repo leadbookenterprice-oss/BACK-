@@ -1317,7 +1317,7 @@ def _sanitize_listing_storage_value(value):
         stripped = value.strip()
         if stripped.startswith(('data:image', 'data:video', 'data:audio', 'data:application/pdf')):
             return None
-        return value
+        return _repair_mojibake_text(value)
     if isinstance(value, list):
         cleaned = [_sanitize_listing_storage_value(item) for item in value]
         return [item for item in cleaned if item is not None]
@@ -1339,9 +1339,20 @@ def _sanitize_listing_payload_for_storage(payload):
     return _sanitize_listing_storage_value(payload)
 
 
+def _repair_listing_response_value(value):
+    """Repara texto corrupto al devolver listados viejos sin eliminar HTML ni assets."""
+    if isinstance(value, str):
+        return _repair_mojibake_text(value)
+    if isinstance(value, list):
+        return [_repair_listing_response_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _repair_listing_response_value(item) for key, item in value.items()}
+    return value
+
+
 def _serialize_listing_summary(listado):
     cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
-    datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    datos = _repair_listing_response_value(listado.datos_extra if isinstance(listado.datos_extra, dict) else {})
     return {
         'id': listado.id,
         'titulo': listado.titulo,
@@ -5205,6 +5216,7 @@ class ListadoDetalleView(APIView):
         try:
             listado = Listado.objects.get(pk=pk, agente=request.user)
             cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
+            datos_extra = _repair_listing_response_value(listado.datos_extra if isinstance(listado.datos_extra, dict) else {})
             return Response({
                 "id": listado.id,
                 "titulo": listado.titulo,
@@ -5218,7 +5230,7 @@ class ListadoDetalleView(APIView):
                 "dashboard_image_url": cover_url,
                 "cover_frame_url": cover_url,
                 "fotoportada": cover_url,
-                "datos": listado.datos_extra
+                "datos": datos_extra
             }, status=status.HTTP_200_OK)
         except Listado.DoesNotExist:
             return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
