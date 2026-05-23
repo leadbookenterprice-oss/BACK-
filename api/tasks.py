@@ -16,21 +16,54 @@ FREE_POOL_SERVICES = ['gemini', 'elevenlabs']
 
 
 def _default_video_provider():
-    from django.conf import settings
     from decouple import config
-    return config('VIDEO_PROVIDER', default='hyperframes' if settings.DEBUG else 'leadbook_sync').strip().lower()
+    return config('VIDEO_PROVIDER', default='leadbook_sync').strip().lower()
 
 
-def _run_video_provider(listado_id, provider=None):
-    provider = (provider or _default_video_provider()).strip().lower()
+def _run_video_provider_once(listado_id, provider):
+    provider = (provider or '').strip().lower()
     if provider in {'veo3', 'veo', 'gemini_veo', 'gemini'}:
         from .services.gemini_video_service import generar_video_listado_veo3
         return generar_video_listado_veo3(listado_id), provider
     if provider in {'hyperframes', 'legacy'}:
         from .services.video_service import generar_video_listado
-        return generar_video_listado(listado_id), provider
+        return generar_video_listado(listado_id), 'hyperframes'
+    if provider not in {'leadbook_sync', 'lightweight'}:
+        logger.warning("[VIDEO_TASK] Provider desconocido '%s', usando leadbook_sync", provider)
     from .services.lightweight_video_service import generar_video_listado_liviano
-    return generar_video_listado_liviano(listado_id), provider
+    return generar_video_listado_liviano(listado_id), 'leadbook_sync'
+
+
+def _run_video_provider(listado_id, provider=None):
+    from decouple import config
+
+    primary_provider = (provider or _default_video_provider()).strip().lower()
+    success, resolved_provider = _run_video_provider_once(listado_id, primary_provider)
+    if success:
+        return success, resolved_provider
+
+    failover_enabled = config('VIDEO_PROVIDER_FAILOVER_ENABLED', default=True, cast=bool)
+    failover_target = config('VIDEO_PROVIDER_FAILOVER_TARGET', default='leadbook_sync').strip().lower()
+    normalized_target = 'leadbook_sync' if failover_target in {'lightweight', 'sync'} else failover_target
+
+    should_failover = (
+        failover_enabled
+        and resolved_provider == 'hyperframes'
+        and normalized_target
+        and normalized_target != 'hyperframes'
+    )
+    if not should_failover:
+        return False, resolved_provider
+
+    logger.warning(
+        "[VIDEO_TASK] HyperFrames fallo para listado_id=%s. Reintentando con %s",
+        listado_id,
+        normalized_target,
+    )
+    fallback_success, fallback_provider = _run_video_provider_once(listado_id, normalized_target)
+    if fallback_success:
+        return True, f"hyperframes->{fallback_provider}"
+    return False, f"hyperframes->{fallback_provider}"
 
 
 def _finalize_successful_video(listado_id):

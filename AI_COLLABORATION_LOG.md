@@ -77,6 +77,78 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-23 - OpenCode - Leadbook Sync quality upgrade
+
+Objective:
+
+- Keep `leadbook_sync` as the primary video provider and improve visual quality to get closer to HyperFrames style without reintroducing storage overload risks.
+
+Files modified:
+
+- `api/services/lightweight_video_service.py`
+- `api/tasks.py`
+- `api/views.py`
+- `.env.example`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Set backend defaults back to `leadbook_sync` for queue dispatch and provider resolution.
+- Upgraded `leadbook_sync` render pipeline with optional cinematic transitions between scenes using FFmpeg `xfade` with safe fallback to classic concat.
+- Added configurable film-look pass (contrast/saturation/brightness/gamma/sharpen/optional denoise) applied in segment rendering.
+- Tuned runtime quality guard defaults to allow better vertical resolution while keeping safety bounds for constrained workers.
+- Added env knobs for transitions/look/runtime guard to tune quality without code changes.
+- Kept queue architecture and DB-safety protections intact (no base64/data URI persistence changes were reverted).
+
+Verification:
+
+- `python -m py_compile api/services/lightweight_video_service.py api/tasks.py api/views.py` OK.
+- `git diff -- api/services/lightweight_video_service.py api/tasks.py api/views.py .env.example` reviewed.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- Visual transitions increase encode complexity; if worker pressure rises, reduce `LIGHT_VIDEO_TRANSITION_SECONDS` and/or disable transitions.
+- Keep `VIDEO_QUEUE_MAX_ACTIVE=1` and monitor worker memory during rollout.
+
+### 2026-05-23 - OpenCode - HyperFrames primary with safe failover
+
+Objective:
+
+- Recover the previous HyperFrames visual result while keeping anti-overload protections for Postgres and production stability.
+
+Files modified:
+
+- `api/tasks.py`
+- `api/views.py`
+- `.env.example`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Switched default provider resolution to `hyperframes` in queue dispatch and task defaults.
+- Added provider failover logic in `api/tasks.py`: if HyperFrames fails, worker can retry with `leadbook_sync` (controlled by env vars).
+- Added env toggles `VIDEO_PROVIDER_FAILOVER_ENABLED` and `VIDEO_PROVIDER_FAILOVER_TARGET` to make failover explicit/configurable.
+- Kept queue/worker architecture and did not touch payload sanitization/base64 rejection rules that protect Postgres from JSON bloat.
+
+Verification:
+
+- `python -m py_compile api/tasks.py api/views.py` OK.
+- `python manage.py check` FAIL in local env: `ModuleNotFoundError: No module named 'playwright'` (pre-existing environment dependency issue, unrelated to this patch logic).
+- `git diff -- api/tasks.py api/views.py .env.example` reviewed.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- In production, set `VIDEO_PROVIDER=hyperframes` and keep `VIDEO_PROVIDER_FAILOVER_ENABLED=True` to preserve quality with automatic fallback.
+- HyperFrames resource limits (`HYPERFRAMES_BROWSER_GPU_MODE=software`, workers/quality) must stay tuned to avoid render failures on Railway.
+
 ### 2026-05-22 - OpenCode - Notification mojibake repair helper
 
 Objective:

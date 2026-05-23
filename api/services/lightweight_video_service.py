@@ -188,11 +188,11 @@ def _resolve_render_profile(tipo_video):
     runtime_guard = config('LIGHT_VIDEO_RUNTIME_GUARD', default=True, cast=bool)
     if runtime_guard:
         guard_max_fps = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_FPS', default=30, cast=int), 24, 30))
-        guard_max_pixels = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_PIXELS', default=921600, cast=int), 518400, 2073600))
+        guard_max_pixels = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_PIXELS', default=1474560, cast=int), 518400, 2073600))
         guard_preset = config('LIGHT_VIDEO_RUNTIME_PRESET', default='veryfast').strip() or 'veryfast'
-        guard_crf = int(_clamp(config('LIGHT_VIDEO_RUNTIME_CRF', default=max(crf, 23), cast=int), crf, 32))
+        guard_crf = int(_clamp(config('LIGHT_VIDEO_RUNTIME_CRF', default=max(crf, 22), cast=int), crf, 32))
         guard_max_photos = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_PHOTOS', default=min(max_photos, 5), cast=int), 1, max_photos))
-        guard_max_seconds = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_SECONDS', default=min(max_seconds, 26), cast=int), 10, max_seconds))
+        guard_max_seconds = int(_clamp(config('LIGHT_VIDEO_RUNTIME_MAX_SECONDS', default=min(max_seconds, 30), cast=int), 10, max_seconds))
 
         original = (width, height, fps)
         if fps > guard_max_fps:
@@ -453,8 +453,53 @@ def _build_zoompan_filter(pattern, frames, width, height, fps):
     return (
         f"scale=iw*1.10:ih*1.10:flags=lanczos,"
         f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':d=1:s={width}x{height}:fps={fps},"
-        'format=yuv420p'
+        + _build_film_look_filter()
     )
+
+
+def _build_film_look_filter():
+    if not config('LIGHT_VIDEO_LOOK_ENABLED', default=True, cast=bool):
+        return 'format=yuv420p'
+
+    contrast = _clamp(config('LIGHT_VIDEO_LOOK_CONTRAST', default=1.06, cast=float), 0.85, 1.30)
+    saturation = _clamp(config('LIGHT_VIDEO_LOOK_SATURATION', default=1.10, cast=float), 0.70, 1.45)
+    brightness = _clamp(config('LIGHT_VIDEO_LOOK_BRIGHTNESS', default=0.015, cast=float), -0.08, 0.08)
+    gamma = _clamp(config('LIGHT_VIDEO_LOOK_GAMMA', default=1.00, cast=float), 0.80, 1.20)
+    sharpen = _clamp(config('LIGHT_VIDEO_LOOK_SHARPEN', default=0.70, cast=float), 0.0, 2.0)
+    denoise = _clamp(config('LIGHT_VIDEO_LOOK_DENOISE', default=0.0, cast=float), 0.0, 4.0)
+
+    filters = [
+        f'eq=contrast={contrast:.3f}:saturation={saturation:.3f}:brightness={brightness:.3f}:gamma={gamma:.3f}'
+    ]
+    if denoise > 0:
+        filters.append(f'hqdn3d={denoise:.2f}:{denoise:.2f}:{max(1.0, denoise * 1.5):.2f}:{max(1.0, denoise * 1.5):.2f}')
+    if sharpen > 0:
+        filters.append(f'unsharp=5:5:{sharpen:.2f}:5:5:0.00')
+    filters.append('format=yuv420p')
+    return ','.join(filters)
+
+
+def _resolve_transition_effects():
+    if not config('LIGHT_VIDEO_TRANSITIONS_ENABLED', default=True, cast=bool):
+        return []
+    allowed = {
+        'fade',
+        'fadeblack',
+        'fadegrays',
+        'dissolve',
+        'smoothleft',
+        'smoothright',
+        'slideleft',
+        'slideright',
+        'coverleft',
+        'coverright',
+        'revealleft',
+        'revealright',
+    }
+    raw = str(config('LIGHT_VIDEO_TRANSITION_EFFECTS', default='fade,dissolve,smoothleft,smoothright') or '')
+    effects = [piece.strip().lower() for piece in raw.split(',') if piece.strip()]
+    effects = [effect for effect in effects if effect in allowed]
+    return effects or ['fade']
 
 
 def _render_image_segment(image_path, output_path, duration, width, height, fps, crf, preset, scene_index):
@@ -545,31 +590,134 @@ def _render_image_segment(image_path, output_path, duration, width, height, fps,
     _run(cmd_fallback, timeout=timeout)
 
 
-def _concat_segments(segment_paths, output_path):
-    list_path = os.path.join(os.path.dirname(output_path), 'segments.txt')
-    with open(list_path, 'w', encoding='utf-8') as handle:
-        for path in segment_paths:
-            safe = path.replace('\\', '/')
-            handle.write(f"file '{safe}'\n")
-    _run(
-        [
+def _concat_segments(segment_paths, output_path, fps, crf, preset):
+    if len(segment_paths) <= 1:
+        cmd = [
             _ffmpeg_bin(),
             '-y',
             '-hide_banner',
             '-loglevel',
             'error',
-            '-f',
-            'concat',
-            '-safe',
-            '0',
             '-i',
-            list_path,
-            '-c',
-            'copy',
+            segment_paths[0],
+            '-c:v',
+            'libx264',
+            '-preset',
+            preset,
+            '-crf',
+            str(crf),
+        ]
+        cmd.extend(_x264_low_memory_args())
+        cmd.extend(
+            [
+                '-pix_fmt',
+                'yuv420p',
+                output_path,
+            ]
+        )
+        _run(cmd, timeout=120)
+        return
+
+    transitions = _resolve_transition_effects()
+    transition_seconds = _clamp(config('LIGHT_VIDEO_TRANSITION_SECONDS', default=0.30, cast=float), 0.10, 0.90)
+    if not transitions:
+        transition_seconds = 0.0
+
+    can_xfade = len(segment_paths) > 1 and transition_seconds > 0
+    if can_xfade:
+        durations = [_probe_duration(path) for path in segment_paths]
+        if any(duration <= 0 for duration in durations):
+            can_xfade = False
+        elif any(duration <= transition_seconds + 0.12 for duration in durations):
+            can_xfade = False
+
+    if can_xfade:
+        cmd = [_ffmpeg_bin(), '-y', '-hide_banner', '-loglevel', 'error']
+        for path in segment_paths:
+            cmd.extend(['-i', path])
+
+        filters = []
+        for index in range(len(segment_paths)):
+            filters.append(f'[{index}:v]settb=AVTB,format=yuv420p[v{index}]')
+
+        prev_label = 'v0'
+        elapsed = durations[0]
+        for index in range(1, len(segment_paths)):
+            effect = transitions[(index - 1) % len(transitions)]
+            offset = max(0.0, elapsed - transition_seconds)
+            out_label = f'vx{index}'
+            filters.append(
+                f'[{prev_label}][v{index}]xfade=transition={effect}:duration={transition_seconds:.3f}:offset={offset:.3f}[{out_label}]'
+            )
+            prev_label = out_label
+            elapsed += max(0.0, durations[index] - transition_seconds)
+
+        cmd.extend(
+            [
+                '-filter_complex',
+                ';'.join(filters),
+                '-map',
+                f'[{prev_label}]',
+                '-r',
+                str(fps),
+                '-c:v',
+                'libx264',
+                '-preset',
+                preset,
+                '-crf',
+                str(crf),
+            ]
+        )
+        cmd.extend(_x264_low_memory_args())
+        cmd.extend(
+            [
+                '-pix_fmt',
+                'yuv420p',
+                output_path,
+            ]
+        )
+
+        try:
+            _run(cmd, timeout=max(180, int(sum(durations) * 8)))
+            return
+        except Exception as xfade_exc:
+            logger.warning('[LIGHT_VIDEO] Xfade fallback a concat tradicional: %s', str(xfade_exc)[:320])
+
+    list_path = os.path.join(os.path.dirname(output_path), 'segments.txt')
+    with open(list_path, 'w', encoding='utf-8') as handle:
+        for path in segment_paths:
+            safe = path.replace('\\', '/')
+            handle.write(f"file '{safe}'\n")
+    cmd = [
+        _ffmpeg_bin(),
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        list_path,
+        '-c:v',
+        'libx264',
+        '-preset',
+        preset,
+        '-crf',
+        str(crf),
+        '-r',
+        str(fps),
+    ]
+    cmd.extend(_x264_low_memory_args())
+    cmd.extend(
+        [
+            '-pix_fmt',
+            'yuv420p',
             output_path,
-        ],
-        timeout=120,
+        ]
     )
+    _run(cmd, timeout=120)
 
 
 def _normalize_path(value):
@@ -1186,7 +1334,13 @@ def generar_video_listado_liviano(listado_id):
             segment_paths.append(segment_path)
 
         visual_path = os.path.join(temp_dir, 'visual.mp4')
-        _concat_segments(segment_paths, visual_path)
+        _concat_segments(
+            segment_paths,
+            visual_path,
+            fps=fps,
+            crf=crf,
+            preset=preset,
+        )
 
         music_path = _pick_music_track(datos)
         mixed_audio_path = os.path.join(temp_dir, 'mix.m4a')

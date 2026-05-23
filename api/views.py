@@ -5374,7 +5374,7 @@ def generar_video(request, pk):
                 return blocked_media_response
             listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
 
-        video_provider = config('VIDEO_PROVIDER', default='hyperframes' if settings.DEBUG else 'leadbook_sync').strip().lower()
+        video_provider = config('VIDEO_PROVIDER', default='leadbook_sync').strip().lower()
         from api.services.video_queue import get_video_queue_position, mark_video_queued
         queue_meta = mark_video_queued(listado, video_provider)
 
