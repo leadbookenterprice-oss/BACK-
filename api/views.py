@@ -2334,8 +2334,49 @@ def generar_qr_url(telefono, tipo_propiedad='', ciudad='', operacion='', precio=
         return ''
 
 
+_MOJIBAKE_REPLACEMENTS = (
+    ('â€™', "'"),
+    ('â€˜', "'"),
+    ('â€œ', '"'),
+    ('â€\x9d', '"'),
+    ('â€', '"'),
+    ('â€“', '-'),
+    ('â€”', '-'),
+    ('â€¦', '...'),
+    ('Â·', '·'),
+    ('Â ', ' '),
+    ('Â', ''),
+)
+
+
+def _apply_mojibake_replacements(text):
+    for broken, fixed in _MOJIBAKE_REPLACEMENTS:
+        text = text.replace(broken, fixed)
+    return text
+
+
+def _repair_mojibake_text(value):
+    """Repara texto UTF-8 que fue decodificado como cp1252/latin1 una o más veces."""
+    text = str(value or '')
+    if not text:
+        return ''
+
+    try:
+        from ftfy import fix_text
+        for _ in range(6):
+            fixed = fix_text(text)
+            if fixed == text:
+                break
+            text = fixed
+    except Exception:
+        # Si la dependencia no está disponible, no arriesgamos una transcodificación destructiva.
+        pass
+
+    return _apply_mojibake_replacements(text)
+
+
 def _sanitize_generated_email_html(raw_html):
-    html_text = str(raw_html or '').strip()
+    html_text = _repair_mojibake_text(raw_html).strip()
     if not html_text:
         return ''
 
@@ -2351,15 +2392,15 @@ def _sanitize_generated_email_html(raw_html):
     html_text = re.sub(r'(?i)\b[\w.+-]+@[\w-]+\.[\w.-]+\b', '', html_text)
     html_text = re.sub(r'>\s+<', '><', html_text)
     html_text = re.sub(r'\s{2,}', ' ', html_text)
-    return html_text.strip()
+    return _repair_mojibake_text(html_text).strip()
 
 
 def _sanitize_generated_email_text(raw_text):
-    text = re.sub(r'(?is)<[^>]+>', ' ', str(raw_text or ''))
+    text = re.sub(r'(?is)<[^>]+>', ' ', _repair_mojibake_text(raw_text))
     text = re.sub(r'(?i)\b(?:mailto:|tel:|https?://|www\.)\S+', '', text)
     text = re.sub(r'(?i)\b[\w.+-]+@[\w-]+\.[\w.-]+\b', '', text)
     text = re.sub(r'\s{2,}', ' ', text)
-    return text.strip()
+    return _repair_mojibake_text(text).strip()
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -6155,12 +6196,14 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
   "texto_plano": "el equivalente en texto plano bÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡sico pero atractivo"
 }}
 """
-        json_str = smart_call(prompt_text, system_prompt="Sos un asistente tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©cnico que solo responde en JSON.", agente=request.user)
+        prompt_text = _repair_mojibake_text(prompt_text)
+        json_str = smart_call(prompt_text, system_prompt="Sos un asistente técnico que solo responde en JSON.", agente=request.user)
         
         if json_str is None:
             json_str = '{"asunto": "Propiedad destacada", "html": "<div>Tenemos una excelente oportunidad para vos. ContestÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a este mail para mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s detalles.</div>", "texto_plano": "Tenemos una excelente oportunidad para vos. ContestÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a este mail para mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s detalles."}'
             
         import json
+        json_str = _repair_mojibake_text(json_str)
         try:
             parsed = json.loads(json_str)
         except:
@@ -6189,7 +6232,7 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
             fallback_body = parsed_text or 'Propiedad disponible'
             parsed_html = f'<div>{html_lib.escape(fallback_body).replace("\n", "<br>")}</div>'
 
-        parsed['asunto'] = str(parsed.get('asunto', 'Propiedad destacada')).strip() or 'Propiedad destacada'
+        parsed['asunto'] = _repair_mojibake_text(parsed.get('asunto', 'Propiedad destacada')).strip() or 'Propiedad destacada'
         parsed['html'] = parsed_html
         parsed['texto_plano'] = parsed_text or 'Propiedad disponible'
 
@@ -6253,7 +6296,7 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
                 rows.append(f'<tr>{cells}</tr>')
             gallery_block = (
                 '<tr><td style="padding:10px 34px 0 34px;">'
-                '<div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#8fb1d1;margin-bottom:8px;font-weight:700;">Galeria</div>'
+                '<div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#8fb1d1;margin-bottom:8px;font-weight:700;">Galería</div>'
                 '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
                 + ''.join(rows) +
                 '</table></td></tr>'
@@ -6271,7 +6314,7 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
                 premium_html,
                 count=1,
             )
-        parsed["html"] = premium_html
+        parsed["html"] = _repair_mojibake_text(premium_html)
         parsed["template_id"] = template_id
         parsed["brand_template_id"] = (selection.get('brand_template').id if selection.get('brand_template') else None)
         parsed["brand_template_revision"] = (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None)
