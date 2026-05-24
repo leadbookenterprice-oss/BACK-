@@ -5,8 +5,8 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from unittest.mock import patch
 
-from api.ai_services import GeminiQuotaExhaustedError, GeminiRateLimitedError
-from api.models import AgentMediaAsset, ComercialAgentProfile, Listado
+from api.ai_services import APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError
+from api.models import AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion
 from api.services.listing_extractor import ExtractorError, extract_listing_from_url
 
 
@@ -99,6 +99,8 @@ class AdsStudioEndpointTests(TestCase):
             email='ads-studio-test@leadbook.local',
             password='test-pass',
             nombre='Ads Tester',
+            plan_nombre='pro',
+            is_staff=True,
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
@@ -155,6 +157,7 @@ class AdsStudioEndpointTests(TestCase):
         self.assertEqual(response.status_code, 429, response.content)
         self.assertEqual(response.json()['quota_state'], 'soft_rate_limited')
         self.assertEqual(response.json()['error'], 'ia_rate_limited')
+        self.assertFalse(Notificacion.objects.filter(usuario=self.user, tipo='quota_agotada').exists())
 
     def test_generate_meta_variants_hard_quota(self):
         with patch('api.views.smart_call', side_effect=GeminiQuotaExhaustedError()):
@@ -166,6 +169,20 @@ class AdsStudioEndpointTests(TestCase):
         self.assertEqual(response.status_code, 429, response.content)
         self.assertEqual(response.json()['quota_state'], 'hard_exhausted')
         self.assertEqual(response.json()['error'], 'cuota_ia_agotada')
+        self.assertEqual(Notificacion.objects.filter(usuario=self.user, tipo='quota_agotada').count(), 1)
+
+    def test_generate_meta_variants_api_key_hard_quota_notifies_once(self):
+        from api.views import _quota_error_response
+
+        for _ in range(2):
+            response = _quota_error_response(
+                APIKeyUnavailableError(),
+                user=self.user,
+                source='test_api_key_hard_quota',
+            )
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.data['quota_state'], 'hard_exhausted')
+        self.assertEqual(Notificacion.objects.filter(usuario=self.user, tipo='quota_agotada').count(), 1)
 
 
 class ListingResultPersistenceTests(TestCase):
@@ -262,6 +279,30 @@ class ListingResultPersistenceTests(TestCase):
         self.assertEqual(response.content, b'%PDF-1.4 HTML')
         self.assertEqual(response['Content-Type'], 'application/pdf')
         self.assertIn('attachment;', response['Content-Disposition'])
+
+    def test_pdf_proxy_fallbacks_to_html_when_url_absent(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa con HTML PDF proxy',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={
+                'resultados': {
+                    'pdf': {'html': '<html><body><h1>Ficha proxy</h1></body></html>'}
+                }
+            },
+        )
+
+        with patch('api.services.render_engine.render_html_to_pdf', return_value=b'%PDF-1.4 PROXY'):
+            response = self.client.get(reverse('pdf_proxy', kwargs={'listado_id': listado.id}))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.content, b'%PDF-1.4 PROXY')
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertIn('inline;', response['Content-Disposition'])
 
     def test_descargar_pdf_returns_404_without_url_or_html(self):
         listado = Listado.objects.create(

@@ -104,7 +104,42 @@ def _is_hard_quota_error(exc):
     return str(getattr(exc, 'quota_state', '')).strip().lower() == 'hard_exhausted'
 
 
-def _quota_error_response(exc, fallback_status=status.HTTP_429_TOO_MANY_REQUESTS):
+def _notify_quota_exhausted(user, exc, quota_state, provider, scope, source=None):
+    if quota_state != 'hard_exhausted':
+        return
+    if not user or not getattr(user, 'is_authenticated', False):
+        return
+
+    try:
+        from .models import Notificacion
+        cutoff = timezone.now() - timedelta(minutes=30)
+        already_notified = Notificacion.objects.filter(
+            usuario=user,
+            tipo='quota_agotada',
+            creada_en__gte=cutoff,
+        ).exists()
+        if already_notified:
+            return
+
+        crear_notificacion(
+            user,
+            'quota_agotada',
+            'Alcanzaste el 100% de tu uso de IA',
+            'Tus creditos de IA se agotaron por ahora. El reset es automatico; tambien podes comprar mas usos si necesitas seguir generando.',
+        )
+        logger.info(
+            '[QUOTA] Notificacion quota_agotada user_id=%s provider=%s scope=%s source=%s exc=%s',
+            getattr(user, 'id', None),
+            provider,
+            scope,
+            source or 'unknown',
+            exc.__class__.__name__,
+        )
+    except Exception:
+        logger.exception('[QUOTA] No se pudo crear notificacion de cuota agotada')
+
+
+def _quota_error_response(exc, fallback_status=status.HTTP_429_TOO_MANY_REQUESTS, user=None, source=None):
     quota_state = str(getattr(exc, 'quota_state', '') or 'hard_exhausted').strip().lower()
     provider = str(getattr(exc, 'provider', '') or 'generic').strip().lower()
     scope = str(getattr(exc, 'scope', '') or 'provider').strip().lower()
@@ -119,6 +154,8 @@ def _quota_error_response(exc, fallback_status=status.HTTP_429_TOO_MANY_REQUESTS
         'scope': scope,
         'retry_after_seconds': retry_after_seconds,
     }
+
+    _notify_quota_exhausted(user, exc, quota_state, provider, scope, source=source)
 
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     if isinstance(exc, APIKeyUnavailableError):
@@ -3205,9 +3242,9 @@ Contenido original:
             future = ex.submit(call_gemini_api, prompt, agente=request.user)
             raw_response = future.result(timeout=25)
     except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_guion')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        return _quota_error_response(e)
+        return _quota_error_response(e, user=request.user, source='generar_guion')
     except Exception as e:
         logger.exception("Error llamando Gemini en generar_guion")
         return _fallback_response(f'gemini_no_disponible: {str(e)[:180]}')
@@ -3232,9 +3269,9 @@ Contenido original:
                         attempts.append(str(repaired).strip())
                         continue
                 except APIKeyUnavailableError as e:
-                    return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                    return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_texto_escena')
                 except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-                    return _quota_error_response(e)
+                    return _quota_error_response(e, user=request.user, source='generar_texto_escena')
                 except Exception:
                     pass
             break
@@ -3253,9 +3290,9 @@ Contenido original:
                     attempts.append(str(repaired).strip())
                     continue
             except APIKeyUnavailableError as e:
-                return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_texto_escena')
             except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-                return _quota_error_response(e)
+                return _quota_error_response(e, user=request.user, source='generar_texto_escena')
             except Exception:
                 pass
 
@@ -3306,9 +3343,9 @@ def generar_listado(request):
         try:
             result = call_gemini_api(prompt_text, system_prompt=system_prompt, agente=request.user)
         except APIKeyUnavailableError as e_gem:
-            return _quota_error_response(e_gem, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return _quota_error_response(e_gem, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_texto_escena')
         except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e_gem:
-            return _quota_error_response(e_gem)
+            return _quota_error_response(e_gem, user=request.user, source='generar_texto_escena')
         except Exception as e_gem:
             return Response({
                 "error": "IA no disponible",
@@ -4242,9 +4279,9 @@ def brand_template_draft_chat(request):
     try:
         ai_result = _template_ai_patch_from_message(message, current_tokens, base_template_id, request.user) if message else None
     except APIKeyUnavailableError as exc:
-        return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='brand_template_draft_chat')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as exc:
-        return _quota_error_response(exc)
+        return _quota_error_response(exc, user=request.user, source='brand_template_draft_chat')
     if ai_result:
         token_patch = ai_result.get('token_patch') or {}
         reply = ai_result.get('reply') or 'ApliquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© los cambios al borrador. RevisÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ la preview y guardÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ cuando te guste.'
@@ -4286,9 +4323,9 @@ def brand_template_chat(request, template_id):
     try:
         ai_result = _template_ai_patch_from_message(message, current_tokens, template.base_template_id, request.user) if message else None
     except APIKeyUnavailableError as exc:
-        return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='brand_template_chat')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as exc:
-        return _quota_error_response(exc)
+        return _quota_error_response(exc, user=request.user, source='brand_template_chat')
     token_patch = (ai_result or {}).get('token_patch') or _template_patch_from_message(message)
     merged_tokens = _resolve_brand_template_tokens(_deep_merge_dict(current_tokens, token_patch))
     reply = (ai_result or {}).get('reply') or 'ApliquÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© los cambios al borrador. RevisÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ la preview y guardÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ la revisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n si te gusta.'
@@ -4949,16 +4986,9 @@ Requisitos obligatorios:
             "gallery_omitted": gallery_omitted,
         }, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_carrusel')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        if _is_hard_quota_error(e):
-            crear_notificacion(
-                request.user,
-                'quota_agotada',
-                'Alcanzaste el 100% de tu uso de IA',
-                'La API compartida respondio limite real. Vamos a reintentar automaticamente en el proximo reset de 12 horas.'
-            )
-        return _quota_error_response(e)
+        return _quota_error_response(e, user=request.user, source='generar_carrusel')
     except Exception:
         logger.exception("Error generando carrusel")
         return Response({"error": "Error al generar carrusel"}, status=500)
@@ -5255,13 +5285,13 @@ def generate_meta_variants(request):
             return Response(result, status=status.HTTP_200_OK)
         except (GeminiRateLimitedError, ElevenLabsRateLimitedError) as exc:
             logger.warning('[ADS_STUDIO] soft_rate_limited user_id=%s reason=%s', request.user.id, exc)
-            return _quota_error_response(exc)
+            return _quota_error_response(exc, user=request.user, source='generate_meta_variants')
         except (GeminiQuotaExhaustedError, ElevenLabsQuotaExhaustedError) as exc:
             logger.warning('[ADS_STUDIO] hard_quota user_id=%s reason=%s', request.user.id, exc)
-            return _quota_error_response(exc)
+            return _quota_error_response(exc, user=request.user, source='generate_meta_variants')
         except APIKeyUnavailableError as exc:
             logger.warning('[ADS_STUDIO] api_key_unavailable user_id=%s reason=%s', request.user.id, exc)
-            return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return _quota_error_response(exc, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generate_meta_variants')
         except ValueError as exc:
             last_parse_error = str(exc)
             logger.warning('[ADS_STUDIO] parse_retry attempt=%s reason=%s', attempt, exc)
@@ -5754,6 +5784,7 @@ def generar_pdf(request):
         # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ ConversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n a PDF Real con Playwright ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
         pdf_url = None
         pdf_cover_url = None
+        pdf_error_detail = None
         try:
             print(f"[PDF] Iniciando conversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n Playwright para listado {listado_id_hint}...")
             pdf_bytes = render_html_to_pdf(html_string)
@@ -5764,6 +5795,8 @@ def generar_pdf(request):
                     user_id=request.user.id, 
                     listado_id=listado_id_hint
                 )
+                if not pdf_url:
+                    pdf_error_detail = "No se pudo subir el PDF generado a Cloudinary."
                 
                 # Persistir la URL en el listado para el historial
                 if listado_obj and pdf_url:
@@ -5790,7 +5823,7 @@ def generar_pdf(request):
                 print("[PDF] Error: Playwright devolviÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ bytes vacÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­os.")
         except Exception as pdf_err:
             print(f"[PDF ERROR] FallÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ la conversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n/subida: {pdf_err}")
-            # El fallback es seguir adelante con el HTML solo
+            pdf_error_detail = str(pdf_err)
 
         # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Limpiar archivos temporales de imÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡genes ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
         for f in temp_files:
@@ -5799,6 +5832,17 @@ def generar_pdf(request):
                     os.remove(f)
             except Exception:
                 pass
+
+        if not pdf_url:
+            detalle = pdf_error_detail or "No se pudo generar un PDF valido para guardar."
+            logger.error("[PDF] Fallo sin URL persistida listado_id=%s detalle=%s", listado_id_hint, detalle)
+            return Response(
+                {
+                    "error": "No se pudo generar un PDF valido",
+                    "detalle": detalle,
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         # Devolvemos JSON para que el frontend maneje el preview y el link de descarga
         if request.user.is_authenticated:
@@ -5821,16 +5865,9 @@ def generar_pdf(request):
         }, status=status.HTTP_200_OK)
 
     except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_pdf')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        if _is_hard_quota_error(e):
-            crear_notificacion(
-                request.user,
-                'quota_agotada',
-                'Alcanzaste el 100% de tu uso de IA',
-                'La API compartida respondio limite real. Vamos a reintentar automaticamente en el proximo reset de 12 horas.'
-            )
-        return _quota_error_response(e)
+        return _quota_error_response(e, user=request.user, source='generar_pdf')
 
     except Exception:
         logger.exception("Error generando PDF")
@@ -5998,9 +6035,9 @@ MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ximo 2200 caracteres. {_caption_prefe
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_imagen_post')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        return _quota_error_response(e)
+        return _quota_error_response(e, user=request.user, source='generar_imagen_post')
     except Exception:
         logger.exception("Error generando imagen post")
         return Response({"error": "Error al generar imagen"}, status=500)
@@ -6143,9 +6180,9 @@ def generar_imagen_story(request):
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
         }, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_imagen_story')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        return _quota_error_response(e)
+        return _quota_error_response(e, user=request.user, source='generar_imagen_story')
     except Exception:
         logger.exception("Error generando story")
         return Response({"error": "Error al generar story"}, status=500)
@@ -6211,9 +6248,9 @@ No des opciones, no uses tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos como "
 
         return Response({"caption": caption, "texto": caption}, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_caption_story')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        return _quota_error_response(e)
+        return _quota_error_response(e, user=request.user, source='generar_caption_story')
     except Exception:
         logger.exception("Error generando caption de story")
         return Response({"error": "Error al generar texto"}, status=500)
@@ -6417,9 +6454,9 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
             
         return Response(parsed, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_email')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        return _quota_error_response(e)
+        return _quota_error_response(e, user=request.user, source='generar_email')
     except Exception:
         logger.exception("Error generando email")
         return Response({"error": "Error al generar email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -8385,8 +8422,18 @@ def proxy_pdf_view(request, listado_id):
         res = listado.datos_extra.get('resultados', {}) if listado.datos_extra else {}
         pdf_data = res.get('pdf', {})
         pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else pdf_data
+        pdf_html = pdf_data.get('html', '') if isinstance(pdf_data, dict) else ''
         
         if not pdf_url:
+            if pdf_html:
+                from django.http import HttpResponse
+                from api.services.render_engine import render_html_to_pdf
+
+                pdf_bytes = render_html_to_pdf(_repair_mojibake_text(pdf_html))
+                if pdf_bytes:
+                    django_response = HttpResponse(pdf_bytes, content_type='application/pdf')
+                    django_response['Content-Disposition'] = f'inline; filename="ficha_leadbook_{listado_id}.pdf"'
+                    return django_response
             return Response({"error": "URL de PDF no encontrada"}, status=404)
 
         # Si es URL local, redirigir directamente al endpoint que sirve el archivo
@@ -8756,9 +8803,9 @@ REQUISITOS:
             return Response({"error": "No se pudo generar texto"}, status=503)
         return Response({"texto": result.strip()})
     except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_texto_escena')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        return _quota_error_response(e)
+        return _quota_error_response(e, user=request.user, source='generar_texto_escena')
     except Exception:
         logger.exception("Error generando texto de escena")
         return Response({"error": "Error al generar texto"}, status=500)
