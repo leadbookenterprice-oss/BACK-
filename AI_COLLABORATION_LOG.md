@@ -77,6 +77,36 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-24 - OpenCode - ElevenLabs narration and music variety improvements
+
+Objective:
+
+- Ensure narration uses ElevenLabs when available and improve background music variety from `musica_videos`.
+
+Files modified:
+
+- `api/services/lightweight_video_service.py`
+
+Changes made:
+
+- Extended voice generation flow to return voice engine diagnostics (`elevenlabs`, `flite_fallback`, `none`) plus error reason.
+- Persisted narration metadata (`video_voice_engine`, `video_voice_error`) in listing data for easier debugging in production.
+- Kept ElevenLabs as primary narration path and fallback to local flite only when ElevenLabs is unavailable/rate-limited and fail-open is active.
+- Expanded music discovery to scan multiple audio formats (`mp3`, `wav`, `m4a`, `aac`, `ogg`) and nested folders under `musica_videos`.
+- Improved music variation by selecting tracks deterministically per generation ID when available, avoiding same-track repetition across regenerations.
+
+Verification:
+
+- `python -m py_compile api/services/lightweight_video_service.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- If ElevenLabs credentials are blocked in provider account, fallback voice can still be used but premium voice quality depends on restoring ElevenLabs access.
+
 ### 2026-05-24 - OpenCode - Regeneration uniqueness hardening
 
 Objective:

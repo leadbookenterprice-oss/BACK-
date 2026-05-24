@@ -389,21 +389,21 @@ def _build_voice_script(listado, max_seconds):
 
 def _generate_voice_file(listado, temp_dir, script):
     if not script:
-        return '', 0.0
+        return '', 0.0, 'none', 'empty_script'
 
     datos = listado.datos or {}
     voice_enabled = str(datos.get('voiceover', True)).strip().lower() not in {'0', 'false', 'no', 'off'}
     force_voiceover = config('LIGHT_VIDEO_FORCE_VOICEOVER', default=False, cast=bool)
     if not voice_enabled:
         if not force_voiceover:
-            return '', 0.0
+            return '', 0.0, 'none', 'voiceover_disabled'
         logger.info('[LIGHT_VIDEO] Voiceover forzado por config listado_id=%s', listado.id)
 
     def _fallback_voice(local_reason):
         fallback_enabled = config('LIGHT_VIDEO_TTS_FALLBACK_ENABLED', default=True, cast=bool)
         fallback_mode = str(config('LIGHT_VIDEO_TTS_FALLBACK_MODE', default='flite') or 'flite').strip().lower()
         if not fallback_enabled or fallback_mode != 'flite':
-            return '', 0.0
+            return '', 0.0, 'none'
         local_audio_path, local_duration = _generate_flite_voice_file(temp_dir=temp_dir, script=script)
         if local_audio_path:
             logger.warning(
@@ -412,8 +412,8 @@ def _generate_voice_file(listado, temp_dir, script):
                 listado.id,
                 str(local_reason)[:220],
             )
-            return local_audio_path, local_duration
-        return '', 0.0
+            return local_audio_path, local_duration, 'flite_fallback'
+        return '', 0.0, 'none'
 
     voz = normalize_elevenlabs_voice_choice(_value(datos, 'voz', default='femenina'))
     custom_voice_id = _value(
@@ -436,33 +436,33 @@ def _generate_voice_file(listado, temp_dir, script):
     except (ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError, APIKeyUnavailableError) as exc:
         fail_open = config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
         if fail_open:
-            local_audio_path, local_duration = _fallback_voice(exc)
+            local_audio_path, local_duration, local_engine = _fallback_voice(exc)
             if local_audio_path:
-                return local_audio_path, local_duration
+                return local_audio_path, local_duration, local_engine, str(exc)[:220]
             logger.warning(
                 '[LIGHT_VIDEO] TTS fallback sin voz listado_id=%s reason=%s quota_state=%s',
                 listado.id,
                 str(exc)[:220],
                 getattr(exc, 'quota_state', None),
             )
-            return '', 0.0
+            return '', 0.0, 'none', str(exc)[:220]
         raise
 
     if not audio_bytes:
         fail_open_empty = config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
         if fail_open_empty:
-            local_audio_path, local_duration = _fallback_voice('empty_audio')
+            local_audio_path, local_duration, local_engine = _fallback_voice('empty_audio')
             if local_audio_path:
-                return local_audio_path, local_duration
+                return local_audio_path, local_duration, local_engine, 'empty_audio'
             logger.warning('[LIGHT_VIDEO] ElevenLabs sin audio, seguimos sin voz listado_id=%s', listado.id)
-            return '', 0.0
+            return '', 0.0, 'none', 'empty_audio'
         raise LightweightVideoError('ElevenLabs no devolvio audio')
 
     audio_path = os.path.join(temp_dir, 'voice.mp3')
     with open(audio_path, 'wb') as handle:
         handle.write(audio_bytes)
     duration = _probe_duration(audio_path) or max(2.0, len(script.split()) / 2.25)
-    return audio_path, duration
+    return audio_path, duration, 'elevenlabs', ''
 
 
 def _normalize_text_for_flite(script):
@@ -902,7 +902,14 @@ def _pick_music_track(datos):
         return custom
 
     music_dir = os.path.join(os.path.dirname(__file__), 'musica_videos')
-    tracks = sorted(glob.glob(os.path.join(music_dir, '*.mp3')))
+    patterns = [
+        '*.mp3', '*.wav', '*.m4a', '*.aac', '*.ogg',
+        '*/*.mp3', '*/*.wav', '*/*.m4a', '*/*.aac', '*/*.ogg',
+    ]
+    tracks = []
+    for pattern in patterns:
+        tracks.extend(glob.glob(os.path.join(music_dir, pattern)))
+    tracks = sorted({os.path.abspath(track) for track in tracks})
     if not tracks:
         return ''
 
@@ -923,6 +930,11 @@ def _pick_music_track(datos):
             if any(key in os.path.basename(track).lower() for key in ('butterflies', 'galanthus', 'phases'))
         ]
     pool = preferred or tracks
+    queue_meta = datos.get('video_queue') if isinstance(datos.get('video_queue'), dict) else {}
+    generation_id = str(queue_meta.get('generation_id') or datos.get('video_generation_id') or '')
+    if generation_id:
+        seed = sum(ord(ch) for ch in generation_id)
+        return pool[seed % len(pool)]
     return random.choice(pool)
 
 
@@ -1611,7 +1623,7 @@ def generar_video_listado_liviano(listado_id):
         temp_dir = tempfile.mkdtemp(prefix=f'leadbook_video_{listado.id}_')
         image_paths, used_urls = _prepare_images(listado, temp_dir, width, height, max_photos=max_photos)
         script = _build_voice_script(listado, max_seconds=max_seconds)
-        audio_path, audio_duration = _generate_voice_file(listado, temp_dir, script)
+        audio_path, audio_duration, voice_engine, voice_error = _generate_voice_file(listado, temp_dir, script)
 
         target_duration = max(min_seconds, audio_duration + (0.7 if audio_duration else 0))
         target_duration = min(float(max_seconds), target_duration)
@@ -1740,6 +1752,11 @@ def generar_video_listado_liviano(listado_id):
         datos['video_reference_photos'] = used_urls
         datos['video_reference_photo_count'] = len(used_urls)
         datos['video_voice_enabled'] = bool(audio_path)
+        datos['video_voice_engine'] = voice_engine
+        if voice_error:
+            datos['video_voice_error'] = str(voice_error)[:240]
+        else:
+            datos.pop('video_voice_error', None)
         datos['video_music_enabled'] = bool(music_path)
         if music_path:
             datos['video_music_track'] = os.path.basename(music_path)
