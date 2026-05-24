@@ -13,7 +13,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .models import CRMClient, FollowUpTask, Lead, PipelineStage
-from .plan_utils import get_plan_block_payload
+from .plan_utils import get_plan_block_payload, get_pro_feature_block_payload, has_pro_feature_access
 from .serializers import FollowUpTaskSerializer, LeadSerializer, PipelineStageSerializer
 from .services.crm_service import (
     CRMExternalProviderError,
@@ -49,8 +49,17 @@ def _crm_error(code, message, http_status=status.HTTP_400_BAD_REQUEST, **extra):
 
 
 def _crm_email_plan_allowed(user):
-    plan = str(getattr(user, 'plan_nombre', '') or '').strip().lower()
-    return plan in CRM_EMAIL_PLANS
+    return has_pro_feature_access(user)
+
+
+def _require_crm_access(user):
+    block_payload = get_plan_block_payload(user)
+    if block_payload:
+        return Response(block_payload, status=status.HTTP_402_PAYMENT_REQUIRED)
+    pro_payload = get_pro_feature_block_payload(user, feature='crm')
+    if pro_payload:
+        return Response(pro_payload, status=status.HTTP_403_FORBIDDEN)
+    return None
 
 
 def _render_crm_email_html(sender, client, message):
@@ -79,9 +88,9 @@ def _render_crm_email_html(sender, client, message):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def crm_client_send_email(request, client_id):
-    block_payload = get_plan_block_payload(request.user)
-    if block_payload:
-        return Response(block_payload, status=status.HTTP_402_PAYMENT_REQUIRED)
+    access_response = _require_crm_access(request.user)
+    if access_response:
+        return access_response
 
     if not _crm_email_plan_allowed(request.user):
         return Response({
@@ -128,6 +137,9 @@ def crm_client_send_email(request, client_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def crm_pipeline_stages(request):
+    access_response = _require_crm_access(request.user)
+    if access_response:
+        return access_response
     stages = ensure_default_pipeline_stages(request.user)
     return Response({'items': PipelineStageSerializer(stages, many=True).data}, status=status.HTTP_200_OK)
 
@@ -135,6 +147,9 @@ def crm_pipeline_stages(request):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def crm_leads_collection(request):
+    access_response = _require_crm_access(request.user)
+    if access_response:
+        return access_response
     if request.method == 'GET':
         ensure_default_pipeline_stages(request.user)
         leads = Lead.objects.filter(owner=request.user).select_related('pipeline_stage', 'assigned_to', 'listing').prefetch_related('follow_up_tasks')
@@ -176,6 +191,9 @@ def crm_leads_collection(request):
 @api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def crm_lead_detail(request, lead_id):
+    access_response = _require_crm_access(request.user)
+    if access_response:
+        return access_response
     lead = get_object_or_404(
         Lead.objects.select_related('pipeline_stage', 'assigned_to', 'listing').prefetch_related('events', 'follow_up_tasks'),
         id=lead_id,
@@ -204,6 +222,9 @@ def crm_lead_detail(request, lead_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def crm_lead_move_stage(request, lead_id):
+    access_response = _require_crm_access(request.user)
+    if access_response:
+        return access_response
     lead = get_object_or_404(Lead, id=lead_id, owner=request.user)
     stage = get_stage(request.user, stage_id=request.data.get('stage_id'), slug=request.data.get('stage'))
     if not stage:
@@ -216,6 +237,9 @@ def crm_lead_move_stage(request, lead_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def crm_lead_mark_contacted(request, lead_id):
+    access_response = _require_crm_access(request.user)
+    if access_response:
+        return access_response
     lead = get_object_or_404(Lead, id=lead_id, owner=request.user)
     mark_lead_contacted(lead, user=request.user, message=str(request.data.get('message') or 'Contacto registrado'))
     contact_stage = get_stage(request.user, slug='contactado')
@@ -228,6 +252,9 @@ def crm_lead_mark_contacted(request, lead_id):
 @api_view(['GET', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def crm_followup_task_detail(request, task_id):
+    access_response = _require_crm_access(request.user)
+    if access_response:
+        return access_response
     task = get_object_or_404(FollowUpTask.objects.select_related('lead'), id=task_id, owner=request.user)
     if request.method == 'GET':
         return Response(FollowUpTaskSerializer(task).data, status=status.HTTP_200_OK)
@@ -246,6 +273,9 @@ def crm_followup_task_detail(request, task_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def crm_metrics_view(request):
+    access_response = _require_crm_access(request.user)
+    if access_response:
+        return access_response
     ensure_default_pipeline_stages(request.user)
     return Response(crm_metrics(request.user), status=status.HTTP_200_OK)
 

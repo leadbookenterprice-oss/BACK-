@@ -2,6 +2,7 @@ from django.utils import timezone
 
 TRIAL_EXPIRED_CODE = 'trial_expired'
 TRIAL_EXPIRED_MESSAGE = 'Tu prueba Starter expiro. Para seguir usando LeadBook, contactanos o compra un plan.'
+PRO_FEATURE_PLANS = {'pro', 'scale', 'business'}
 
 LIMITES = {
     # Alias legacy: las cuentas nuevas con codigo usan starter.
@@ -15,6 +16,25 @@ LIMITES = {
 def get_limites(agente):
     plan = getattr(agente, 'plan_nombre', 'starter') or 'starter'
     return LIMITES.get(plan, LIMITES['starter'])
+
+def get_plan_name(agente):
+    return str(getattr(agente, 'plan_nombre', '') or 'starter').strip().lower()
+
+def has_pro_feature_access(agente):
+    if getattr(agente, 'is_staff', False):
+        return True
+    return get_plan_name(agente) in PRO_FEATURE_PLANS
+
+def get_pro_feature_block_payload(agente, feature='crm'):
+    if has_pro_feature_access(agente):
+        return None
+    return {
+        'code': 'crm_plan_required',
+        'error': 'crm_plan_required',
+        'message': 'Esta herramienta esta disponible desde el Plan Pro.',
+        'required_plan': 'pro',
+        'feature': feature,
+    }
 
 def get_free_trial_status(agente):
     now = timezone.now()

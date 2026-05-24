@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 from api.models import Agent, FollowUpTask, Lead, LeadAssignment, LeadEvent, Listado, PipelineStage
+from api.plan_utils import has_pro_feature_access
 
 
 DEFAULT_PIPELINE_STAGES = [
@@ -411,6 +412,9 @@ def ingest_meta_webhook(payload, request=None):
         owner = resolve_meta_owner(item, request=request)
         if not owner:
             results.append({'created': False, 'error': 'owner_not_found', 'leadgen_id': item.get('leadgen_id')})
+            continue
+        if not has_pro_feature_access(owner):
+            results.append({'created': False, 'error': 'crm_plan_required', 'leadgen_id': item.get('leadgen_id')})
             continue
 
         if item.get('leadgen_id') and not item.get('field_data'):

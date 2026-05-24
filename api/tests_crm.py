@@ -66,9 +66,24 @@ class CRMEndpointTests(TestCase):
             email='crm-endpoints@leadbook.local',
             password='test-pass',
             nombre='CRM Endpoint Tester',
+            plan_nombre='pro',
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
+
+    def test_starter_cannot_access_crm_endpoints(self):
+        starter = get_user_model().objects.create_user(
+            email='crm-starter@leadbook.local',
+            password='test-pass',
+            nombre='CRM Starter',
+            plan_nombre='starter',
+        )
+        self.client.force_authenticate(user=starter)
+
+        response = self.client.get(reverse('crm_pipeline_stages'))
+
+        self.assertEqual(response.status_code, 403, response.content)
+        self.assertEqual(response.json()['error'], 'crm_plan_required')
 
     def test_move_stage_creates_timeline_event(self):
         response = self.client.post(
@@ -115,6 +130,7 @@ class MetaLeadsWebhookTests(TestCase):
             email='meta-webhook@leadbook.local',
             password='test-pass',
             nombre='Meta Webhook Tester',
+            plan_nombre='pro',
         )
         self.client = APIClient()
 
@@ -146,6 +162,32 @@ class MetaLeadsWebhookTests(TestCase):
         self.assertFalse(second.json()['results'][0]['created'])
         self.assertEqual(second.json()['results'][0]['dedupe_reason'], 'leadgen_id')
         self.assertEqual(Lead.objects.filter(owner=self.user, origin='meta').count(), 1)
+
+    def test_meta_webhook_acknowledges_starter_without_creating_lead(self):
+        starter = get_user_model().objects.create_user(
+            email='meta-starter@leadbook.local',
+            password='test-pass',
+            nombre='Meta Starter',
+            plan_nombre='starter',
+        )
+        payload = {
+            'entry': [{
+                'changes': [{
+                    'value': {
+                        'leadgen_id': 'starter-leadgen-1',
+                        'field_data': [{'name': 'email', 'values': ['starter@example.com']}],
+                    },
+                }],
+            }],
+        }
+        url = f"{reverse('crm_meta_leads_webhook')}?owner_id={starter.id}"
+
+        with patch('api.views_crm._verify_meta_signature', return_value=True):
+            response = self.client.post(url, payload, format='json')
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['results'][0]['error'], 'crm_plan_required')
+        self.assertEqual(Lead.objects.filter(owner=starter, origin='meta').count(), 0)
 
     def test_meta_soft_rate_limit_returns_retryable_contract(self):
         factory = APIRequestFactory()

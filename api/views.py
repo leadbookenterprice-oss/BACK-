@@ -58,7 +58,14 @@ from .ai_services import (
 from .utils import crear_notificacion
 from django.template.loader import render_to_string
 from .services.render_engine import render_html_to_image
-from .plan_utils import puede_generar, incrementar_uso, registrar_uso, get_free_trial_status, get_plan_block_payload
+from .plan_utils import (
+    puede_generar,
+    incrementar_uso,
+    registrar_uso,
+    get_free_trial_status,
+    get_plan_block_payload,
+    get_pro_feature_block_payload,
+)
 from .services.ads_studio import (
     build_ads_result,
     build_meta_ads_prompt,
@@ -151,6 +158,21 @@ def _find_blocked_media_data_uri(value, path='payload'):
                 return found
         return None
     return None
+
+
+def require_pro_feature(feature):
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapper(request, *args, **kwargs):
+            block_response = active_plan_block_response(request)
+            if block_response:
+                return block_response
+            pro_payload = get_pro_feature_block_payload(request.user, feature=feature)
+            if pro_payload:
+                return Response(pro_payload, status=status.HTTP_403_FORBIDDEN)
+            return view_func(request, *args, **kwargs)
+        return wrapper
+    return decorator
 
 
 def _reject_blocked_media_data_uri(payload, payload_label='payload'):
@@ -1290,6 +1312,15 @@ def _merge_listing_extra_preserving_covers(existing, incoming):
     existing = existing if isinstance(existing, dict) else {}
     merged = incoming.copy() if isinstance(incoming, dict) else {}
 
+    existing_resultados = existing.get('resultados') if isinstance(existing.get('resultados'), dict) else {}
+    incoming_resultados = merged.get('resultados') if isinstance(merged.get('resultados'), dict) else None
+    if existing_resultados:
+        merged['resultados'] = (
+            _deep_merge_dict(existing_resultados, incoming_resultados)
+            if incoming_resultados is not None
+            else existing_resultados
+        )
+
     for key in ('portadaUrl', 'portada_url', 'fotoPortada', 'fotoportada', 'fotosRecorrido', 'fotos_recorrido'):
         if not merged.get(key) and existing.get(key):
             merged[key] = existing[key]
@@ -1350,6 +1381,27 @@ def _repair_listing_response_value(value):
     return value
 
 
+def _listing_generated_formats(listado, datos):
+    resultados = datos.get('resultados') if isinstance(datos.get('resultados'), dict) else {}
+    formats = []
+    for key in ('pdf', 'post', 'story', 'carrusel', 'email'):
+        value = resultados.get(key)
+        if not value:
+            continue
+        if key == 'carrusel' and isinstance(value, dict):
+            if value.get('slides') or value.get('url'):
+                formats.append(key)
+            continue
+        if isinstance(value, dict):
+            if value.get('url') or value.get('html') or value.get('caption'):
+                formats.append(key)
+            continue
+        formats.append(key)
+    if getattr(listado, 'video_url', None) or getattr(listado, 'video_status', '') in {'done', 'ready'}:
+        formats.append('video')
+    return formats
+
+
 def _serialize_listing_summary(listado):
     cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
     datos = _repair_listing_response_value(listado.datos_extra if isinstance(listado.datos_extra, dict) else {})
@@ -1368,6 +1420,7 @@ def _serialize_listing_summary(listado):
         'dashboard_image_url': cover_url,
         'cover_frame_url': cover_url,
         'fotoportada': cover_url,
+        'formatos_generados': _listing_generated_formats(listado, datos),
         'datos': datos,
     }
 
@@ -3556,6 +3609,7 @@ def commercial_agent_photo(request, agent_id):
 
 @api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated])
+@require_pro_feature('organic_content')
 def content_preferences_detail(request):
     prefs, _ = UserContentPreference.objects.get_or_create(owner=request.user)
     if request.method == 'GET':
@@ -3568,6 +3622,7 @@ def content_preferences_detail(request):
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
+@require_pro_feature('crm')
 def crm_clients_collection(request):
     if request.method == 'GET':
         clients = CRMClient.objects.filter(owner=request.user).order_by('-updated_at')
@@ -3585,6 +3640,7 @@ def crm_clients_collection(request):
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
+@require_pro_feature('crm')
 def crm_client_detail(request, client_id):
     client = get_object_or_404(CRMClient, id=client_id, owner=request.user)
 
@@ -5106,6 +5162,7 @@ class ListadosView(APIView):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
+@require_pro_feature('organic_content')
 def extract_listado_from_url(request):
     payload = request.data if isinstance(request.data, dict) else {}
     url = payload.get('url')
@@ -5147,6 +5204,7 @@ def extract_listado_from_url(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
+@require_pro_feature('meta_ads')
 def generate_meta_variants(request):
     payload = request.data if isinstance(request.data, dict) else {}
     listado_id = payload.get('listado_id') or payload.get('listadoId')
@@ -5238,6 +5296,7 @@ class ListadoDetalleView(APIView):
                 "dashboard_image_url": cover_url,
                 "cover_frame_url": cover_url,
                 "fotoportada": cover_url,
+                "formatos_generados": _listing_generated_formats(listado, datos_extra),
                 "datos": datos_extra
             }, status=status.HTTP_200_OK)
         except Listado.DoesNotExist:
@@ -8371,17 +8430,43 @@ def descargar_pdf(request, listado_id):
         listado = get_object_or_404(Listado, id=listado_id, agente=request.user)
         datos = listado.datos_extra or {}
         pdf_data = datos.get('resultados', {}).get('pdf', {})
+        pdf_url = pdf_data.get('url') if isinstance(pdf_data, dict) else (pdf_data if isinstance(pdf_data, str) else '')
         html_content = pdf_data.get('html', '') if isinstance(pdf_data, dict) else ''
-        if not html_content:
-            return Response({"error": "No hay PDF generado para este listado"}, status=404)
-        from api.services.render_engine import render_html_to_pdf
-        html_content = _repair_mojibake_text(html_content)
-        pdf_bytes = render_html_to_pdf(html_content)
-        if not pdf_bytes:
-            return Response({"error": "Error al generar PDF"}, status=500)
-        response = HttpResponse(pdf_bytes, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
-        return response
+        remote_error = None
+
+        # 1) Fuente principal: PDF ya persistido (Cloudinary)
+        if isinstance(pdf_url, str) and pdf_url.startswith('http'):
+            if not _is_safe_remote_asset_url(pdf_url, allowed_hosts=['res.cloudinary.com']):
+                return Response({"error": "URL de PDF no permitida"}, status=status.HTTP_400_BAD_REQUEST)
+
+            cloudinary_response = requests.get(pdf_url, stream=True, timeout=30, allow_redirects=False)
+            if cloudinary_response.status_code == 200:
+                response = StreamingHttpResponse(
+                    cloudinary_response.iter_content(chunk_size=8192),
+                    content_type=cloudinary_response.headers.get('content-type') or 'application/pdf',
+                )
+                response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
+                return response
+
+            remote_error = f"No se pudo descargar el PDF remoto (HTTP {cloudinary_response.status_code})"
+
+        # 2) Fallback heredado: render desde HTML guardado
+        if html_content:
+            from api.services.render_engine import render_html_to_pdf
+            html_content = _repair_mojibake_text(html_content)
+            pdf_bytes = render_html_to_pdf(html_content)
+            if not pdf_bytes:
+                return Response({"error": "Error al generar PDF"}, status=500)
+            response = HttpResponse(pdf_bytes, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="ficha_leadbook_{listado_id}.pdf"'
+            return response
+
+        # 3) Sin URL ni HTML utilizable
+        if remote_error:
+            return Response({"error": remote_error}, status=status.HTTP_502_BAD_GATEWAY)
+        if isinstance(pdf_url, str) and pdf_url and not pdf_url.startswith('http'):
+            return Response({"error": "URL de PDF no válida"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "No hay PDF generado todavía"}, status=404)
     except Listado.DoesNotExist:
         return Response({"error": "Listado no encontrado"}, status=404)
     except Exception as e:

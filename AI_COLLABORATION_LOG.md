@@ -77,6 +77,42 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-24 - OpenCode - Persist generated listing assets
+
+Objective:
+
+- Fix historical listings so opening them uses saved Cloudinary URLs/results instead of losing cached generated assets and forcing regeneration.
+
+Files modified:
+
+- `api/views.py`
+- `api/tests.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Updated listing data merging to preserve existing `datos_extra.resultados` when frontend sends cleaned listing data without generated results.
+- Deep-merge incoming partial `resultados` with existing results so one format update does not delete other generated formats.
+- Added `formatos_generados` to listing list/detail responses, derived from persisted results and video state.
+- Updated PDF download behavior to prefer saved Cloudinary PDF URLs before falling back to legacy HTML render.
+- Added tests covering result preservation and PDF streaming from a saved Cloudinary URL.
+
+Verification:
+
+- `py -3 -m py_compile api/views.py api/tests.py` OK.
+- `py -3 manage.py test api.tests.ListingResultPersistenceTests` OK.
+- `py -3 manage.py check` OK.
+- `git diff --check` OK, only expected CRLF/LF warning on Windows.
+
+Commit/push:
+
+- Included in the 2026-05-24 push request to `origin/main`; final commit hash reported in chat.
+
+Pending/risks:
+
+- Existing rows that already lost `datos_extra.resultados` cannot be recovered from Postgres alone; recover from Cloudinary by listing per-user/listing prefixes if needed.
+- Concurrent unrelated backend edits were present during final status (`api/plan_utils.py`, `api/views_crm.py`, and Pro-feature decorators in `api/views.py`); they were not reverted.
+
 ### 2026-05-24 - OpenCode - Sales script and stable motion pass
 
 Objective:

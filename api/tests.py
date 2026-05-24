@@ -37,6 +37,17 @@ class _FakeHttpResponse:
         return None
 
 
+class _FakeStreamResponse:
+    status_code = 200
+    headers = {'content-type': 'application/pdf'}
+
+    def __init__(self, content):
+        self.content = content
+
+    def iter_content(self, chunk_size=8192):
+        yield self.content
+
+
 class ListingExtractorTests(TestCase):
     def test_structured_extraction_success(self):
         html = '''
@@ -155,6 +166,140 @@ class AdsStudioEndpointTests(TestCase):
         self.assertEqual(response.status_code, 429, response.content)
         self.assertEqual(response.json()['quota_state'], 'hard_exhausted')
         self.assertEqual(response.json()['error'], 'cuota_ia_agotada')
+
+
+class ListingResultPersistenceTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email='listing-cache-test@leadbook.local',
+            password='test-pass',
+            nombre='Cache Tester',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_update_preserves_existing_generated_results(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa guardada',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={
+                'titulo': 'Casa guardada',
+                'resultados': {
+                    'post': {'url': 'https://res.cloudinary.com/demo/image/upload/post.jpg'},
+                    'carrusel': {'slides': ['https://res.cloudinary.com/demo/image/upload/slide1.jpg']},
+                },
+            },
+        )
+
+        response = self.client.put(
+            reverse('listado_detalle', kwargs={'pk': listado.id}),
+            {'datos': {'titulo': 'Casa editada', 'resultados': {'email': {'html': '<p>Mail</p>'}}}},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        listado.refresh_from_db()
+        resultados = listado.datos_extra['resultados']
+        self.assertEqual(resultados['post']['url'], 'https://res.cloudinary.com/demo/image/upload/post.jpg')
+        self.assertEqual(resultados['carrusel']['slides'][0], 'https://res.cloudinary.com/demo/image/upload/slide1.jpg')
+        self.assertEqual(resultados['email']['html'], '<p>Mail</p>')
+
+        detail = self.client.get(reverse('listado_detalle', kwargs={'pk': listado.id}))
+        self.assertEqual(detail.status_code, 200, detail.content)
+        self.assertIn('post', detail.json()['formatos_generados'])
+        self.assertIn('carrusel', detail.json()['formatos_generados'])
+        self.assertIn('email', detail.json()['formatos_generados'])
+
+    def test_descargar_pdf_streams_saved_cloudinary_url_first(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa con PDF',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={
+                'resultados': {
+                    'pdf': {'url': 'https://res.cloudinary.com/demo/raw/upload/ficha.pdf'}
+                }
+            },
+        )
+
+        with patch('api.views._is_safe_remote_asset_url', return_value=True), \
+             patch('api.views.requests.get', return_value=_FakeStreamResponse(b'%PDF-1.4')):
+            response = self.client.get(reverse('descargar_pdf', kwargs={'listado_id': listado.id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), b'%PDF-1.4')
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertIn('attachment;', response['Content-Disposition'])
+
+    def test_descargar_pdf_fallbacks_to_html_when_url_absent(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa con HTML PDF',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={
+                'resultados': {
+                    'pdf': {'html': '<html><body><h1>Ficha</h1></body></html>'}
+                }
+            },
+        )
+
+        with patch('api.services.render_engine.render_html_to_pdf', return_value=b'%PDF-1.4 HTML'):
+            response = self.client.get(reverse('descargar_pdf', kwargs={'listado_id': listado.id}))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.content, b'%PDF-1.4 HTML')
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertIn('attachment;', response['Content-Disposition'])
+
+    def test_descargar_pdf_returns_404_without_url_or_html(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa sin PDF',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={'resultados': {'pdf': {}}},
+        )
+
+        response = self.client.get(reverse('descargar_pdf', kwargs={'listado_id': listado.id}))
+        self.assertEqual(response.status_code, 404, response.content)
+        self.assertEqual(response.json().get('error'), 'No hay PDF generado todavía')
+
+    def test_descargar_pdf_rejects_non_allowed_host(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa URL no permitida',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={
+                'resultados': {
+                    'pdf': {'url': 'https://example.com/no-permitido.pdf'}
+                }
+            },
+        )
+
+        with patch('api.views._is_safe_remote_asset_url', return_value=False):
+            response = self.client.get(reverse('descargar_pdf', kwargs={'listado_id': listado.id}))
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json().get('error'), 'URL de PDF no permitida')
 
 
 class CommercialAgentPhotoFlowTests(TestCase):
