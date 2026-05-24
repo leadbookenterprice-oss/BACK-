@@ -5078,6 +5078,7 @@ def video_status(request, listado_id):
         return Response({
             "status": normalized_status,
             "video_url": listado.video_url,
+            "video_version": (listado.datos_extra or {}).get('video_generated_at') or (listado.updated_at.isoformat() if listado.updated_at else None),
             "updated_at": listado.updated_at,
             "queue_position": queue_position,
             "queue_priority": queue_meta.get('priority') if queue_meta else None,
