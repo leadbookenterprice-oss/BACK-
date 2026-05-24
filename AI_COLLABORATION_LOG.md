@@ -77,6 +77,38 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-24 - OpenCode - Image quality and Jost captions refinement
+
+Objective:
+
+- Preserve source image quality in generated videos and improve caption rendering quality/line wrapping with the requested professional typography.
+
+Files modified:
+
+- `api/services/lightweight_video_service.py`
+- `.env.example`
+
+Changes made:
+
+- Increased intermediate image encoding quality (`LIGHT_VIDEO_IMAGE_QUALITY`, JPEG quality 96 + subsampling 0) to avoid visible degradation.
+- Simplified zoompan chain to avoid extra pre-scale pass that could soften frames.
+- Added caption font resolver with optional `LIGHT_VIDEO_CAPTION_FONT_FILE` support; default family now `Jost`.
+- Added caption wrapping (`LIGHT_VIDEO_CAPTION_MAX_CHARS_PER_LINE`) to reduce broken/cut words.
+- Applied wrapping to both SRT burn path and drawtext fallback path.
+- Added optional fontsdir injection for libass subtitle rendering when a font file path is provided.
+
+Verification:
+
+- `python -m py_compile api/services/lightweight_video_service.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- To guarantee Jost in production, set `LIGHT_VIDEO_CAPTION_FONT_FILE` to a real `.ttf` path available inside the runtime container.
+
 ### 2026-05-24 - OpenCode - Persist generated listing assets
 
 Objective:

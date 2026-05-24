@@ -558,7 +558,8 @@ def _prepare_image(url, output_path, width, height):
     image = ImageOps.exif_transpose(image).convert('RGB')
     resample = getattr(getattr(Image, 'Resampling', Image), 'LANCZOS')
     image = ImageOps.fit(image, (width, height), method=resample, centering=(0.5, 0.5))
-    image.save(output_path, format='JPEG', quality=88, optimize=True)
+    image_quality = int(_clamp(config('LIGHT_VIDEO_IMAGE_QUALITY', default=96, cast=int), 82, 100))
+    image.save(output_path, format='JPEG', quality=image_quality, optimize=True, subsampling=0)
     return output_path
 
 
@@ -615,11 +616,7 @@ def _build_zoompan_filter(pattern, frames, width, height, fps):
         x_expr = 'iw/2-(iw/zoom/2)'
         y_expr = 'ih/2-(ih/zoom/2)'
 
-    return (
-        f"scale=iw*1.10:ih*1.10:flags=lanczos,"
-        f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':d=1:s={width}x{height}:fps={fps},"
-        + _build_film_look_filter()
-    )
+    return f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':d=1:s={width}x{height}:fps={fps}," + _build_film_look_filter()
 
 
 def _build_film_look_filter():
@@ -1317,6 +1314,7 @@ def _write_srt(script, duration, output_path, audio_path='', agente=None, datos=
             timed_chunks.append({'start': start, 'end': end, 'text': chunk.upper()})
 
     with open(output_path, 'w', encoding='utf-8') as handle:
+        max_chars = int(_clamp(config('LIGHT_VIDEO_CAPTION_MAX_CHARS_PER_LINE', default=30, cast=int), 20, 44))
         for idx, chunk in enumerate(timed_chunks, start=1):
             start = max(0.0, _safe_float(chunk.get('start'), 0.0))
             end = min(duration, _safe_float(chunk.get('end'), start + 0.9))
@@ -1324,7 +1322,8 @@ def _write_srt(script, duration, output_path, audio_path='', agente=None, datos=
                 break
             handle.write(f'{idx}\n')
             handle.write(f'{_srt_time(start)} --> {_srt_time(end)}\n')
-            handle.write(str(chunk.get('text') or '').strip().upper() + '\n\n')
+            wrapped = _wrap_caption_text(str(chunk.get('text') or '').strip().upper(), max_chars=max_chars)
+            handle.write(wrapped + '\n\n')
     return {
         'ok': True,
         'engine': caption_engine,
@@ -1339,6 +1338,32 @@ def _write_srt(script, duration, output_path, audio_path='', agente=None, datos=
 def _subtitle_filter_path(path):
     normalized = path.replace('\\', '/')
     return normalized.replace(':', '\\:').replace("'", "\\'")
+
+
+def _resolve_caption_font():
+    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='Jost').strip() or 'Jost'
+    font_file = str(config('LIGHT_VIDEO_CAPTION_FONT_FILE', default='') or '').strip().strip('"').strip("'")
+    if font_file and os.path.exists(font_file):
+        return font_name, os.path.abspath(font_file)
+    return font_name, ''
+
+
+def _wrap_caption_text(text, max_chars=30):
+    words = [w for w in str(text or '').strip().split() if w]
+    if not words:
+        return ''
+    lines = []
+    current = []
+    for word in words:
+        trial = ' '.join(current + [word]).strip()
+        if current and len(trial) > max_chars:
+            lines.append(' '.join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(' '.join(current))
+    return '\n'.join(lines[:2])
 
 
 def _ass_color_from_hex(value, default='#FFFFFF', opacity=1.0):
@@ -1379,7 +1404,7 @@ def _resolve_caption_alignment():
 
 
 def _subtitle_style_for_dimensions(height):
-    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='DejaVu Sans').strip() or 'DejaVu Sans'
+    font_name, _ = _resolve_caption_font()
     base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=58, cast=int)
     size = int(_clamp(base_size * (height / 1920.0), 28, 92))
     margin_v = config('LIGHT_VIDEO_CAPTION_MARGIN_V', default=320, cast=int)
@@ -1404,7 +1429,11 @@ def _subtitle_style_for_dimensions(height):
 
 def _burn_subtitles(video_path, srt_path, output_path, crf, preset, height):
     style = _subtitle_style_for_dimensions(height=height)
-    vf = f"subtitles='{_subtitle_filter_path(srt_path)}':force_style='{style}'"
+    _, font_file = _resolve_caption_font()
+    vf = f"subtitles='{_subtitle_filter_path(srt_path)}'"
+    if font_file:
+        vf += f":fontsdir='{_subtitle_filter_path(os.path.dirname(font_file))}'"
+    vf += f":force_style='{style}'"
     _run(
         [
             _ffmpeg_bin(),
@@ -1438,6 +1467,7 @@ def _escape_drawtext_text(value):
     text = text.replace(',', r'\,')
     text = text.replace('[', r'\[').replace(']', r'\]')
     text = text.replace('%', r'\%')
+    text = text.replace('\n', r'\n')
     return text
 
 
@@ -1445,7 +1475,7 @@ def _build_drawtext_caption_filter(caption_chunks, height):
     if not caption_chunks:
         return ''
 
-    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='DejaVu Sans').strip() or 'DejaVu Sans'
+    font_name, font_file = _resolve_caption_font()
     base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=58, cast=int)
     size = int(_clamp(base_size * (height / 1920.0), 28, 92))
     margin_v = config('LIGHT_VIDEO_CAPTION_MARGIN_V', default=320, cast=int)
@@ -1487,12 +1517,14 @@ def _build_drawtext_caption_filter(caption_chunks, height):
     )
     if bold:
         base += ':text_shaping=1'
+    if font_file:
+        base += f":fontfile='{_subtitle_filter_path(font_file)}'"
 
     filters = []
     for chunk in caption_chunks:
         start = max(0.0, _safe_float(chunk.get('start'), 0.0))
         end = max(start + 0.2, _safe_float(chunk.get('end'), start + 1.0))
-        text = _escape_drawtext_text(chunk.get('text') or '')
+        text = _escape_drawtext_text(_wrap_caption_text(chunk.get('text') or '', max_chars=int(_clamp(config('LIGHT_VIDEO_CAPTION_MAX_CHARS_PER_LINE', default=30, cast=int), 20, 44))))
         if not text:
             continue
         filters.append(
