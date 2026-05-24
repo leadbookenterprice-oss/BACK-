@@ -77,6 +77,37 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-24 - OpenCode - Regeneration uniqueness hardening
+
+Objective:
+
+- Ensure each video regeneration produces a fresh generation cycle and not a visually identical cached outcome.
+
+Files modified:
+
+- `api/services/video_queue.py`
+- `api/services/lightweight_video_service.py`
+- `api/views.py`
+
+Changes made:
+
+- Added `generation_id` when enqueueing each video request.
+- Updated `leadbook_sync` script variant seed to include `generation_id` so repeated regenerations rotate template variants reliably.
+- Persisted `video_generation_id` in listing metadata after successful render.
+- Exposed `video_version` in `video_status` response to support stronger cache busting in frontend.
+
+Verification:
+
+- `python -m py_compile api/services/video_queue.py api/services/lightweight_video_service.py api/views.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- If user-provided scenes are fixed and exhaustive, script text will still stay close to source text by design.
+
 ### 2026-05-24 - OpenCode - Image quality and Jost captions refinement
 
 Objective:

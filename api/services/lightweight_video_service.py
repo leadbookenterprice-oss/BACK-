@@ -330,6 +330,8 @@ def _build_voice_script(listado, max_seconds):
     features = _build_property_features(datos)
     feature_line = ', '.join(features[:4]) if features else ''
 
+    queue_meta = datos.get('video_queue') if isinstance(datos.get('video_queue'), dict) else {}
+    generation_id = str(queue_meta.get('generation_id') or datos.get('video_generation_id') or '')
     script = ' '.join(_ordered_scene_texts(datos))
     if not script:
         templates = {
@@ -371,7 +373,8 @@ def _build_voice_script(listado, max_seconds):
             ],
         }
         options = templates.get(bucket, templates['residencial'])
-        seed = int(listado.id or 0)
+        seed_source = f"{listado.id or 0}:{generation_id}" if generation_id else str(listado.id or 0)
+        seed = sum(ord(ch) for ch in seed_source)
         script = options[seed % len(options)]
 
     words_per_second = config('LIGHT_VIDEO_WORDS_PER_SECOND', default=2.25, cast=float)
@@ -1730,6 +1733,9 @@ def generar_video_listado_liviano(listado_id):
             raise LightweightVideoError('Cloudinary no devolvio URL del video')
 
         datos = listado.datos or {}
+        queue_meta = datos.get('video_queue') if isinstance(datos.get('video_queue'), dict) else {}
+        if queue_meta.get('generation_id'):
+            datos['video_generation_id'] = queue_meta.get('generation_id')
         datos['video_provider'] = 'leadbook_sync'
         datos['video_reference_photos'] = used_urls
         datos['video_reference_photo_count'] = len(used_urls)

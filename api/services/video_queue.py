@@ -1,4 +1,5 @@
 from django.utils import timezone
+import uuid
 
 
 PLAN_VIDEO_PRIORITY = {
@@ -35,6 +36,7 @@ def mark_video_queued(listado, provider):
         'priority': priority,
         'plan': str(getattr(listado.agente, 'plan_nombre', '') or 'starter').lower(),
         'queued_at': now.isoformat(),
+        'generation_id': uuid.uuid4().hex[:12],
     }
     datos.pop('video_error', None)
     listado.datos_extra = datos
