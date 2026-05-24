@@ -273,6 +273,51 @@ def _ordered_scene_texts(datos):
     return [text for _, _, text in sorted(decorated, key=lambda row: (row[0], row[1]))]
 
 
+def _property_bucket(raw_tipo):
+    tipo = str(raw_tipo or '').strip().lower()
+    if any(token in tipo for token in ('terreno', 'lote', 'parcela', 'solar')):
+        return 'terreno'
+    if any(token in tipo for token in ('cochera', 'garage', 'garaje', 'estacionamiento', 'parking')):
+        return 'cochera'
+    if any(token in tipo for token in ('oficina', 'despacho', 'consultorio', 'cowork')):
+        return 'oficina'
+    if any(token in tipo for token in ('local', 'comercial', 'negocio', 'tienda', 'shop')):
+        return 'local'
+    if any(token in tipo for token in ('depto', 'departamento', 'apartamento', 'apartment', 'ph')):
+        return 'departamento'
+    return 'residencial'
+
+
+def _clean_segment(value):
+    text = re.sub(r'\s+', ' ', str(value or '')).strip(' ,.;')
+    return text
+
+
+def _build_property_features(datos):
+    features = []
+    recamaras = _format_count(_value(datos, 'recamaras', 'habitaciones', 'dormitorios'), 'habitacion', 'habitaciones')
+    banos = _format_count(_value(datos, 'banos', 'bathrooms'), 'bano', 'banos')
+    estac = _format_count(_value(datos, 'estacionamientos', 'cocheras', 'garages'), 'cochera', 'cocheras')
+    cub = _clean_segment(_value(datos, 'superficieConstruida', 'superficie_cubierta', 'metros', 'm2'))
+    terr = _clean_segment(_value(datos, 'superficieTerreno', 'superficie_total', 'terreno_m2'))
+    amenidades = _value(datos, 'amenidades', default=[])
+    if recamaras:
+        features.append(recamaras)
+    if banos:
+        features.append(banos)
+    if estac:
+        features.append(estac)
+    if cub:
+        features.append(f"{cub} m2 cubiertos")
+    if terr:
+        features.append(f"{terr} m2 de terreno")
+    if isinstance(amenidades, list):
+        clean = [re.sub(r'\s+', ' ', str(x or '')).strip() for x in amenidades if str(x or '').strip()]
+        if clean:
+            features.append('amenidades: ' + ', '.join(clean[:3]))
+    return features
+
+
 def _build_voice_script(listado, max_seconds):
     datos = listado.datos or {}
     tipo_video = _normalize_video_type(_value(datos, 'tipoVideo', 'tipo_video', default='reel'))
@@ -281,18 +326,53 @@ def _build_voice_script(listado, max_seconds):
     operacion = _value(datos, 'operacion', default=listado.operacion or 'venta')
     moneda = _value(datos, 'moneda', default=listado.moneda or '')
     price_voice = _format_price_for_voice(listado.precio, moneda)
-    recamaras = _format_count(_value(datos, 'recamaras', 'habitaciones'), 'habitacion', 'habitaciones')
-    banos = _format_count(_value(datos, 'banos', 'bathrooms'), 'bano', 'banos')
-    detalles = ', '.join(x for x in [recamaras, banos] if x)
+    bucket = _property_bucket(tipo)
+    features = _build_property_features(datos)
+    feature_line = ', '.join(features[:4]) if features else ''
 
     script = ' '.join(_ordered_scene_texts(datos))
     if not script:
-        script = (
-            f'Conoce esta {tipo} en {operacion} en {ciudad}. '
-            f'{detalles + ". " if detalles else ""}'
-            f'Una oportunidad atractiva por ubicacion, comodidad y valor. '
-            f'Precio {price_voice}. Escribinos para coordinar una visita.'
-        )
+        templates = {
+            'residencial': [
+                f"{tipo} en {operacion} en {ciudad}. {feature_line}. Precio {price_voice}. Agenda tu visita hoy.",
+                f"Oportunidad en {ciudad}: {tipo} en {operacion}. {feature_line}. Valor {price_voice}. Consultanos disponibilidad.",
+                f"Propiedad ideal para vivir o invertir en {ciudad}. {feature_line}. Se ofrece en {operacion} por {price_voice}. Escribinos y coordinamos recorrido.",
+                f"{tipo} lista para mostrar resultados en mercado. {feature_line}. Ubicada en {ciudad}, {operacion}, precio {price_voice}. Contactanos para cerrar visita.",
+            ],
+            'departamento': [
+                f"Departamento en {operacion} en {ciudad}. {feature_line}. Precio {price_voice}. Coordinemos visita y comparativa de mercado.",
+                f"Unidad en {ciudad} con {feature_line}. Operacion: {operacion}. Valor {price_voice}. Escribinos para enviar ficha completa.",
+                f"Departamento con distribucion funcional y buen producto comercial. {feature_line}. En {operacion} por {price_voice}. Reserva tu visita.",
+                f"Opcion competitiva en {ciudad}: departamento en {operacion}. {feature_line}. Precio {price_voice}. Consultanos financiacion y tiempos.",
+            ],
+            'terreno': [
+                f"Terreno en {operacion} en {ciudad}. {feature_line}. Precio {price_voice}. Ideal para desarrollo o inversion.",
+                f"Lote con foco en rentabilidad: {feature_line}. Ubicado en {ciudad}, {operacion}, valor {price_voice}. Solicita informe tecnico.",
+                f"Oportunidad de tierra en {ciudad}. {feature_line}. Disponible en {operacion} por {price_voice}. Coordina visita al sitio.",
+                f"Terreno con potencial comercial y de valorizacion. {feature_line}. En {operacion} por {price_voice}. Contactanos para condiciones.",
+            ],
+            'cochera': [
+                f"Cochera en {operacion} en {ciudad}. {feature_line}. Precio {price_voice}. Solucion practica para uso o renta.",
+                f"Espacio de cochera con alta demanda en la zona. {feature_line}. Operacion {operacion}, valor {price_voice}. Consultanos ubicacion exacta.",
+                f"Cochera con acceso comodo y salida rapida. {feature_line}. En {ciudad}, {operacion}, precio {price_voice}. Agenda visita.",
+                f"Activo compacto para inversion: cochera en {ciudad}. {feature_line}. Valor {price_voice}. Contactanos para disponibilidad.",
+            ],
+            'oficina': [
+                f"Oficina en {operacion} en {ciudad}. {feature_line}. Precio {price_voice}. Perfil ideal para uso profesional.",
+                f"Espacio de trabajo con buena configuracion comercial. {feature_line}. En {operacion} por {price_voice}. Solicita visita técnica.",
+                f"Oficina lista para operacion en zona activa de {ciudad}. {feature_line}. Valor {price_voice}. Consultanos expensas y condiciones.",
+                f"Producto corporativo con foco en funcionalidad. {feature_line}. {operacion} en {ciudad}, precio {price_voice}. Coordinemos recorrido.",
+            ],
+            'local': [
+                f"Local comercial en {operacion} en {ciudad}. {feature_line}. Precio {price_voice}. Alta visibilidad para negocio.",
+                f"Punto comercial con traccion de demanda. {feature_line}. Operacion {operacion}, valor {price_voice}. Solicita mas informacion.",
+                f"Local listo para activar ventas en {ciudad}. {feature_line}. En {operacion} por {price_voice}. Coordina visita.",
+                f"Oportunidad comercial con buen frente y posicion. {feature_line}. Precio {price_voice}. Contactanos por condiciones de cierre.",
+            ],
+        }
+        options = templates.get(bucket, templates['residencial'])
+        seed = int(listado.id or 0)
+        script = options[seed % len(options)]
 
     words_per_second = config('LIGHT_VIDEO_WORDS_PER_SECOND', default=2.25, cast=float)
     max_words = max(10, int(max_seconds * words_per_second))
@@ -505,19 +585,21 @@ def _prepare_images(listado, temp_dir, width, height, max_photos):
 
 
 def _resolve_motion_patterns():
-    raw = config('LIGHT_VIDEO_MOTION_PATTERNS', default='in,out,drift')
-    allowed = {'in', 'out', 'drift'}
+    if config('LIGHT_VIDEO_SIMPLE_ZOOM_ONLY', default=True, cast=bool):
+        return ['in']
+    raw = config('LIGHT_VIDEO_MOTION_PATTERNS', default='in')
+    allowed = {'in', 'out'}
     patterns = [piece.strip().lower() for piece in str(raw or '').split(',') if piece.strip()]
     patterns = [pattern for pattern in patterns if pattern in allowed]
-    return patterns or ['in', 'out', 'drift']
+    return patterns or ['in']
 
 
 def _build_zoompan_filter(pattern, frames, width, height, fps):
-    base_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA', default=0.080, cast=float), 0.010, 0.220)
+    base_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA', default=0.035, cast=float), 0.010, 0.120)
     in_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA_IN', default=base_delta, cast=float), 0.010, 0.250)
     out_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA_OUT', default=max(0.010, base_delta * 0.90), cast=float), 0.010, 0.250)
-    drift_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA_DRIFT', default=max(0.010, base_delta * 0.65), cast=float), 0.010, 0.160)
-    drift_strength = _clamp(config('LIGHT_VIDEO_DRIFT_STRENGTH', default=20, cast=int), 6, 50)
+    drift_delta = _clamp(config('LIGHT_VIDEO_ZOOM_DELTA_DRIFT', default=max(0.010, base_delta * 0.65), cast=float), 0.010, 0.100)
+    drift_strength = _clamp(config('LIGHT_VIDEO_DRIFT_STRENGTH', default=10, cast=int), 0, 30)
     total = max(1, frames - 1)
 
     if pattern == 'out':
@@ -1297,8 +1379,8 @@ def _resolve_caption_alignment():
 
 
 def _subtitle_style_for_dimensions(height):
-    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='Montserrat').strip() or 'Montserrat'
-    base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=54, cast=int)
+    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='DejaVu Sans').strip() or 'DejaVu Sans'
+    base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=58, cast=int)
     size = int(_clamp(base_size * (height / 1920.0), 28, 92))
     margin_v = config('LIGHT_VIDEO_CAPTION_MARGIN_V', default=320, cast=int)
     margin_v = int(_clamp(margin_v * (height / 1920.0), 110, int(height * 0.40)))
@@ -1363,8 +1445,8 @@ def _build_drawtext_caption_filter(caption_chunks, height):
     if not caption_chunks:
         return ''
 
-    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='Montserrat').strip() or 'Montserrat'
-    base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=54, cast=int)
+    font_name = config('LIGHT_VIDEO_CAPTION_FONT', default='DejaVu Sans').strip() or 'DejaVu Sans'
+    base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=58, cast=int)
     size = int(_clamp(base_size * (height / 1920.0), 28, 92))
     margin_v = config('LIGHT_VIDEO_CAPTION_MARGIN_V', default=320, cast=int)
     margin_v = int(_clamp(margin_v * (height / 1920.0), 110, int(height * 0.40)))

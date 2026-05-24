@@ -77,6 +77,37 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-24 - OpenCode - Sales script and stable motion pass
+
+Objective:
+
+- Make `leadbook_sync` scripts more sales-focused and data-driven, diversify script structure, remove shaky motion, and improve caption readability.
+
+Files modified:
+
+- `api/services/lightweight_video_service.py`
+- `.env.example`
+
+Changes made:
+
+- Reworked `_build_voice_script` with 4 sales-oriented variants selected deterministically per listing.
+- Added property-type buckets (`terreno`, `cochera`, `oficina`, `local`, `departamento`, `residencial`) so script focus changes by asset type.
+- Prioritized user-provided listing data (operation, city, price, bedrooms, baths, parking, surfaces, amenities) in script assembly.
+- Added `LIGHT_VIDEO_SIMPLE_ZOOM_ONLY` and defaulted motion to smooth zoom-only (`in`) to eliminate shake-like drift behavior.
+- Increased caption default size slightly and switched default font to a more professional sans-serif for better readability.
+
+Verification:
+
+- `python -m py_compile api/services/lightweight_video_service.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- If tone needs stronger urgency, tweak template strings in `_build_voice_script` and keep character limits aligned with max duration.
+
 ### 2026-05-23 - OpenCode - Leadbook Sync audio and captions hardening
 
 Objective:
