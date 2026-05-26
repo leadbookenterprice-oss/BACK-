@@ -135,10 +135,10 @@ def _resolve_render_profile(tipo_video):
         defaults = {
             'width': 1080,
             'height': 1920,
-            'fps': 60,
-            'crf': 20,
-            'preset': 'fast',
-            'max_photos': 6,
+            'fps': 30,
+            'crf': 18,
+            'preset': 'medium',
+            'max_photos': 8,
             'max_seconds': 32 if is_reel else 42,
             'min_seconds': 18 if is_reel else 26,
         }
@@ -976,8 +976,8 @@ def _resolve_sfx_inputs(cut_times):
 
 def _build_audio_mix(voice_path, music_path, cut_times, duration, output_path):
     target_duration = max(2.0, float(duration or 0))
-    music_volume = _clamp(config('LIGHT_VIDEO_MUSIC_VOLUME', default=0.30, cast=float), 0.0, 1.2)
-    voice_volume = _clamp(config('LIGHT_VIDEO_VOICE_VOLUME', default=1.00, cast=float), 0.1, 2.0)
+    music_volume = _clamp(config('LIGHT_VIDEO_MUSIC_VOLUME', default=0.24, cast=float), 0.0, 1.2)
+    voice_volume = _clamp(config('LIGHT_VIDEO_VOICE_VOLUME', default=1.22, cast=float), 0.1, 2.0)
     sfx_volume = _clamp(config('LIGHT_VIDEO_SFX_VOLUME', default=0.11, cast=float), 0.0, 1.5)
     threshold = _safe_float(config('LIGHT_VIDEO_DUCKING_THRESHOLD', default='0.040'), 0.040)
     ratio = _safe_float(config('LIGHT_VIDEO_DUCKING_RATIO', default='10'), 10)
@@ -1027,7 +1027,10 @@ def _build_audio_mix(voice_path, music_path, cut_times, duration, output_path):
     if has_voice:
         filters.append(
             f"[{input_labels['voice']}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-            f"acompressor=threshold=0.12:ratio=2.2:attack=6:release=120,volume={voice_volume:.3f}[voice]"
+            'highpass=f=80,lowpass=f=13500,'
+            'acompressor=threshold=0.10:ratio=2.8:attack=5:release=110,'
+            'deesser=i=0.18:m=0.50:f=0.50:s=o,'
+            f'volume={voice_volume:.3f}[voice]'
         )
     if has_music:
         filters.append(
@@ -1057,14 +1060,24 @@ def _build_audio_mix(voice_path, music_path, cut_times, duration, output_path):
         )
         sfx_labels.append(label)
 
+    final_loudnorm = str(
+        config(
+            'LIGHT_VIDEO_FINAL_LOUDNORM',
+            default='loudnorm=I=-15:LRA=7:TP=-1.5:linear=true:print_format=summary',
+        ) or 'loudnorm=I=-15:LRA=7:TP=-1.5:linear=true:print_format=summary'
+    ).strip()
+
     if sfx_labels:
         mix_inputs = '[silence][bed]' + ''.join(f'[{label}]' for label in sfx_labels)
         filters.append(
             f"{mix_inputs}amix=inputs={2 + len(sfx_labels)}:duration=longest:dropout_transition=0:normalize=0,"
-            'alimiter=limit=0.94[mix]'
+            f'alimiter=limit=0.94,{final_loudnorm}[mix]'
         )
     else:
-        filters.append('[silence][bed]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.94[mix]')
+        filters.append(
+            f'[silence][bed]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,'
+            f'alimiter=limit=0.94,{final_loudnorm}[mix]'
+        )
 
     filters.append('[mix]atrim=duration={:.3f},asetpts=PTS-STARTPTS[aout]'.format(target_duration))
 
@@ -1418,34 +1431,137 @@ def _resolve_caption_alignment():
     return aliases.get(raw, 2)
 
 
+def _ass_time(seconds):
+    seconds = max(0.0, float(seconds or 0))
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    centis = int(round((seconds - int(seconds)) * 100.0))
+    if centis >= 100:
+        centis = 99
+    return f'{hours}:{minutes:02d}:{secs:02d}.{centis:02d}'
+
+
 def _subtitle_style_for_dimensions(height):
     font_name, _ = _resolve_caption_font()
-    base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=58, cast=int)
-    size = int(_clamp(base_size * (height / 1920.0), 28, 92))
-    margin_v = config('LIGHT_VIDEO_CAPTION_MARGIN_V', default=320, cast=int)
+    base_size = config('LIGHT_VIDEO_CAPTION_SIZE', default=62, cast=int)
+    size = int(_clamp(base_size * (height / 1920.0), 30, 96))
+    margin_v = config('LIGHT_VIDEO_CAPTION_MARGIN_V', default=260, cast=int)
     margin_v = int(_clamp(margin_v * (height / 1920.0), 110, int(height * 0.40)))
     text_color = _ass_color_from_hex(config('LIGHT_VIDEO_CAPTION_TEXT_COLOR', default='#FFFFFF'), default='#FFFFFF', opacity=1.0)
-    outline_color = _ass_color_from_hex(config('LIGHT_VIDEO_CAPTION_OUTLINE_COLOR', default='#000000'), default='#000000', opacity=0.74)
+    outline_color = _ass_color_from_hex(config('LIGHT_VIDEO_CAPTION_OUTLINE_COLOR', default='#000000'), default='#000000', opacity=0.90)
     bg_color = str(config('LIGHT_VIDEO_CAPTION_BG_COLOR', default='#000000') or '#000000')
-    bg_opacity = _clamp(config('LIGHT_VIDEO_CAPTION_BG_ALPHA', default=0.58, cast=float), 0.0, 1.0)
+    bg_opacity = _clamp(config('LIGHT_VIDEO_CAPTION_BG_ALPHA', default=0.65, cast=float), 0.0, 1.0)
     back_color = _ass_color_from_hex(bg_color, default='#000000', opacity=bg_opacity)
     alignment = _resolve_caption_alignment()
     bold = 1 if config('LIGHT_VIDEO_CAPTION_BOLD', default=True, cast=bool) else 0
-    outline = _clamp(config('LIGHT_VIDEO_CAPTION_OUTLINE', default=2.0, cast=float), 0.5, 4.0)
+    outline = _clamp(config('LIGHT_VIDEO_CAPTION_OUTLINE', default=2.8, cast=float), 0.5, 5.0)
 
     style = (
         f'FontName={font_name},FontSize={size},PrimaryColour={text_color},'
         f'OutlineColour={outline_color},BackColour={back_color},'
-        f'BorderStyle=4,Outline={outline:.1f},Shadow=0,'
+        'SecondaryColour=&H0032D9FF,BorderStyle=4,'
+        f'Outline={outline:.1f},Shadow=0.8,Spacing=0.4,'
         f'MarginV={margin_v},Alignment={alignment},Bold={bold}'
     )
     return style
+
+
+def _write_ass_from_chunks(chunks, duration, output_path, height):
+    if not isinstance(chunks, list) or not chunks:
+        return False
+
+    style = _subtitle_style_for_dimensions(height=height)
+    max_chars = int(_clamp(config('LIGHT_VIDEO_CAPTION_MAX_CHARS_PER_LINE', default=30, cast=int), 20, 44))
+    fade_in = int(_clamp(config('LIGHT_VIDEO_CAPTION_FADE_IN_MS', default=90, cast=int), 0, 800))
+    fade_out = int(_clamp(config('LIGHT_VIDEO_CAPTION_FADE_OUT_MS', default=120, cast=int), 0, 800))
+
+    lines = [
+        '[Script Info]',
+        'ScriptType: v4.00+',
+        'PlayResX: 1080',
+        'PlayResY: 1920',
+        'WrapStyle: 2',
+        'ScaledBorderAndShadow: yes',
+        '',
+        '[V4+ Styles]',
+        'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, '
+        'Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, '
+        'Alignment, MarginL, MarginR, MarginV, Encoding',
+    ]
+
+    style_fields = {part.split('=')[0]: part.split('=', 1)[1] for part in style.split(',') if '=' in part}
+    lines.append(
+        'Style: Default,'
+        f"{style_fields.get('FontName', 'Jost')},{style_fields.get('FontSize', '62')},"
+        f"{style_fields.get('PrimaryColour', '&H00FFFFFF')},{style_fields.get('SecondaryColour', '&H0032D9FF')},"
+        f"{style_fields.get('OutlineColour', '&HDD000000')},{style_fields.get('BackColour', '&H90000000')},"
+        f"{style_fields.get('Bold', '1')},0,0,0,100,100,{style_fields.get('Spacing', '0.0')},0,"
+        f"{style_fields.get('BorderStyle', '4')},{style_fields.get('Outline', '2.8')},{style_fields.get('Shadow', '0.8')},"
+        f"{style_fields.get('Alignment', '2')},70,70,{style_fields.get('MarginV', '260')},1"
+    )
+
+    lines.extend([
+        '',
+        '[Events]',
+        'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+    ])
+
+    for chunk in chunks:
+        start = max(0.0, _safe_float(chunk.get('start'), 0.0))
+        end = min(duration, _safe_float(chunk.get('end'), start + 0.9))
+        if end <= start:
+            continue
+        text = str(chunk.get('text') or '').strip().upper()
+        text = _wrap_caption_text(text, max_chars=max_chars)
+        text = text.replace('\r', '').replace('{', '').replace('}', '')
+        text = text.replace('\n', r'\N')
+        if not text:
+            continue
+        text = r'{\fad(' + str(fade_in) + ',' + str(fade_out) + ')}' + text
+        lines.append(f'Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{text}')
+
+    with open(output_path, 'w', encoding='utf-8') as handle:
+        handle.write('\n'.join(lines) + '\n')
+    return True
 
 
 def _burn_subtitles(video_path, srt_path, output_path, crf, preset, height):
     style = _subtitle_style_for_dimensions(height=height)
     _, font_file = _resolve_caption_font()
     vf = f"subtitles='{_subtitle_filter_path(srt_path)}'"
+    if font_file:
+        vf += f":fontsdir='{_subtitle_filter_path(os.path.dirname(font_file))}'"
+    vf += f":force_style='{style}'"
+    _run(
+        [
+            _ffmpeg_bin(),
+            '-y',
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-i',
+            video_path,
+            '-vf',
+            vf,
+            '-c:v',
+            'libx264',
+            '-preset',
+            preset,
+            '-crf',
+            str(crf),
+            '-c:a',
+            'copy',
+            output_path,
+        ],
+        timeout=180,
+    )
+
+
+def _burn_subtitles_ass(video_path, ass_path, output_path, crf, preset, height):
+    style = _subtitle_style_for_dimensions(height=height)
+    _, font_file = _resolve_caption_font()
+    vf = f"subtitles='{_subtitle_filter_path(ass_path)}'"
     if font_file:
         vf += f":fontsdir='{_subtitle_filter_path(os.path.dirname(font_file))}'"
     vf += f":force_style='{style}'"
@@ -1711,7 +1827,18 @@ def generar_video_listado_liviano(listado_id):
             if caption_meta.get('ok'):
                 subtitled_path = os.path.join(temp_dir, 'final.mp4')
                 try:
-                    _burn_subtitles(voiced_path, srt_path, subtitled_path, crf=crf, preset=preset, height=height)
+                    ass_path = os.path.join(temp_dir, 'captions.ass')
+                    ass_ok = _write_ass_from_chunks(
+                        chunks=caption_meta.get('timed_chunks') or [],
+                        duration=target_duration,
+                        output_path=ass_path,
+                        height=height,
+                    )
+                    if ass_ok:
+                        _burn_subtitles_ass(voiced_path, ass_path, subtitled_path, crf=crf, preset=preset, height=height)
+                        caption_meta['engine'] = (caption_meta.get('engine') or 'heuristic') + '+ass'
+                    else:
+                        _burn_subtitles(voiced_path, srt_path, subtitled_path, crf=crf, preset=preset, height=height)
                     final_path = subtitled_path
                 except Exception as exc:
                     logger.warning('[LIGHT_VIDEO] No se pudieron quemar subtitulos listado_id=%s: %s', listado.id, exc)

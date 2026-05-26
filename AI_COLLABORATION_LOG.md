@@ -77,6 +77,39 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-25 - OpenCode - Professional video quality pass (voice, captions, mix)
+
+Objective:
+
+- Raise perceived production quality of generated videos with clearer narration, stronger subtitle treatment, and more polished default render profile.
+
+Files modified:
+
+- `api/services/lightweight_video_service.py`
+
+Changes made:
+
+- Updated `IG_PRO_MAX` defaults to a more stable premium profile (`1080x1920`, `30fps`, `crf=18`, `preset=medium`, `max_photos=8`).
+- Improved voice chain in audio mix with speech-focused processing (`highpass`, `lowpass`, stronger compression, de-esser, higher default voice gain).
+- Rebalanced bed/music defaults to keep narration intelligible (lower default music level, stronger voice presence).
+- Added final loudness mastering stage (`loudnorm`) after limiter for more consistent playback loudness across outputs.
+- Upgraded caption visual defaults (larger size, better outline opacity/weight, adjusted bottom margin, stronger background alpha).
+- Added ASS subtitle generation from timed caption chunks with fade-in/fade-out per cue, then burn via ASS path for more professional subtitle motion.
+- Kept resilient fallback path: ASS burn -> SRT burn -> drawtext fallback if needed.
+
+Verification:
+
+- `python -m py_compile api/services/lightweight_video_service.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- Exact subtitle font fidelity still depends on runtime availability/configuration of `LIGHT_VIDEO_CAPTION_FONT_FILE`.
+- `loudnorm` and ASS rendering require ffmpeg builds with expected filters/libass support in production image.
+
 ### 2026-05-24 - OpenCode - ElevenLabs narration and music variety improvements
 
 Objective:
