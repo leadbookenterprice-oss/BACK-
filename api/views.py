@@ -388,6 +388,11 @@ def _normalize_user_settings(raw_settings=None, base_settings=None):
 
 
 TEMPLATE_IDS = (
+    'costa_serena',
+    'oliva_natural',
+    'terracota_suave',
+    'brisa_calida',
+    'arena_clara',
     'dubai_night',
     'beverly_hills',
     'manhattan',
@@ -396,6 +401,86 @@ TEMPLATE_IDS = (
 )
 
 TEMPLATE_CATALOG = {
+    'costa_serena': {
+        'name': 'Costa Serena',
+        'description': 'Mediterraneo luminoso con azules costeros y arena suave.',
+        'colors': {
+            'primary': '#2f5d73',
+            'secondary': '#4d7f96',
+            'accent': '#d3a45f',
+            'background': '#f5f1ea',
+            'text': '#23333b',
+        },
+        'fonts': {
+            'display': 'Libre Baskerville',
+            'body': 'Lato',
+            'mono': 'Lato',
+        },
+    },
+    'oliva_natural': {
+        'name': 'Oliva Natural',
+        'description': 'Residencial calido con tonos olivo y acento piedra.',
+        'colors': {
+            'primary': '#5c6d4a',
+            'secondary': '#7f8f66',
+            'accent': '#c89a58',
+            'background': '#f7f3ea',
+            'text': '#2f3426',
+        },
+        'fonts': {
+            'display': 'Cormorant Garamond',
+            'body': 'Lato',
+            'mono': 'Lato',
+        },
+    },
+    'terracota_suave': {
+        'name': 'Terracota Suave',
+        'description': 'Tonos tierra elegantes para una comunicacion acogedora.',
+        'colors': {
+            'primary': '#7a4a36',
+            'secondary': '#9a654e',
+            'accent': '#d79a63',
+            'background': '#f6eee7',
+            'text': '#3a281f',
+        },
+        'fonts': {
+            'display': 'Libre Baskerville',
+            'body': 'DM Sans',
+            'mono': 'DM Sans',
+        },
+    },
+    'brisa_calida': {
+        'name': 'Brisa Calida',
+        'description': 'Estilo mediterraneo comercial con clima claro y amable.',
+        'colors': {
+            'primary': '#46606b',
+            'secondary': '#6f8892',
+            'accent': '#e0ad67',
+            'background': '#fbf7f0',
+            'text': '#24343a',
+        },
+        'fonts': {
+            'display': 'Playfair Display',
+            'body': 'Lato',
+            'mono': 'DM Sans',
+        },
+    },
+    'arena_clara': {
+        'name': 'Arena Clara',
+        'description': 'Minimal calido con acentos dorados suaves.',
+        'colors': {
+            'primary': '#6b5b49',
+            'secondary': '#8a785f',
+            'accent': '#cda66d',
+            'background': '#f9f5ee',
+            'text': '#332a20',
+        },
+        'fonts': {
+            'display': 'Cormorant Garamond',
+            'body': 'DM Sans',
+            'mono': 'DM Sans',
+        },
+    },
     'dubai_night': {
         'name': 'Dubai Night',
         'description': 'Lujo nocturno con contraste alto y acento dorado.',
@@ -478,23 +563,31 @@ TEMPLATE_CATALOG = {
     },
 }
 
+TEMPLATE_FILE_BASE = {
+    'costa_serena': 'mediterraneo',
+    'oliva_natural': 'mediterraneo',
+    'terracota_suave': 'mediterraneo',
+    'brisa_calida': 'mediterraneo',
+    'arena_clara': 'mediterraneo',
+}
+
 TEMPLATE_POST_MAP = {
-    template_id: f'renders/post_{template_id}.html'
+    template_id: f"renders/post_{TEMPLATE_FILE_BASE.get(template_id, template_id)}.html"
     for template_id in TEMPLATE_IDS
 }
 
 TEMPLATE_STORY_MAP = {
-    template_id: f'renders/story_{template_id}.html'
+    template_id: f"renders/story_{TEMPLATE_FILE_BASE.get(template_id, template_id)}.html"
     for template_id in TEMPLATE_IDS
 }
 
 TEMPLATE_CAROUSEL_MAP = {
-    template_id: f'renders/carousel_{template_id}.html'
+    template_id: f"renders/carousel_{TEMPLATE_FILE_BASE.get(template_id, template_id)}.html"
     for template_id in TEMPLATE_IDS
 }
 
 TEMPLATE_EMAIL_MAP = {
-    template_id: f'emails/marketing_{template_id}.html'
+    template_id: f"emails/marketing_{TEMPLATE_FILE_BASE.get(template_id, template_id)}.html"
     for template_id in TEMPLATE_IDS
 }
 
@@ -823,6 +916,11 @@ def _default_tokens_for_base_template(base_template_id):
     mono_font = _pick_template_font(fonts.get('mono'), tokens['typography']['mono'])
 
     style_map = {
+        'costa_serena': 'mediterranean_warm',
+        'oliva_natural': 'mediterranean_warm',
+        'terracota_suave': 'mediterranean_warm',
+        'brisa_calida': 'mediterranean_warm',
+        'arena_clara': 'mediterranean_warm',
         'dubai_night': 'dark_luxury',
         'beverly_hills': 'editorial',
         'manhattan': 'urban_strong',
@@ -830,6 +928,11 @@ def _default_tokens_for_base_template(base_template_id):
         'tech_modern': 'tech_modern',
     }
     image_map = {
+        'costa_serena': 'warm',
+        'oliva_natural': 'warm',
+        'terracota_suave': 'warm',
+        'brisa_calida': 'warm',
+        'arena_clara': 'warm',
         'dubai_night': 'dark',
         'beverly_hills': 'normal',
         'manhattan': 'high_contrast',

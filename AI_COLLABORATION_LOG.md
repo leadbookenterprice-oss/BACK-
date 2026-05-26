@@ -77,6 +77,36 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-25 - OpenCode - Added five softer templates and backend file mapping
+
+Objective:
+
+- Expand template catalog with softer Mediterranean-style variants while keeping generation stable for all formats.
+
+Files modified:
+
+- `api/views.py`
+
+Changes made:
+
+- Added 5 new system templates to `TEMPLATE_IDS` and `TEMPLATE_CATALOG`: `costa_serena`, `oliva_natural`, `terracota_suave`, `brisa_calida`, `arena_clara`.
+- Added palette/font metadata for each new template so they appear differentiated in catalog and token system.
+- Added `TEMPLATE_FILE_BASE` alias mapping so these new templates reuse the existing `mediterraneo` HTML files for post/story/carrusel/email.
+- Updated template-to-file maps (`TEMPLATE_POST_MAP`, `TEMPLATE_STORY_MAP`, `TEMPLATE_CAROUSEL_MAP`, `TEMPLATE_EMAIL_MAP`) to resolve aliases safely.
+- Updated `_default_tokens_for_base_template` style/image maps to classify new templates under `mediterranean_warm` + `warm` treatment.
+
+Verification:
+
+- `python -m py_compile api/views.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- New templates are visually differentiated via tokens/colors/fonts but currently share mediterraneo structural HTML; fully unique composition requires dedicated template files.
+
 ### 2026-05-25 - OpenCode - Professional video quality pass (voice, captions, mix)
 
 Objective:
