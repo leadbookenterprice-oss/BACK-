@@ -6583,29 +6583,32 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
             "color_accent": (template_meta.get('colors') or {}).get('accent', '#c9a84c'),
         }
         premium_html = render_to_string(template_email, context)
-        if email_gallery:
-            gallery_cells = ''.join(
-                f'<td width="50%" style="padding:6px;"><img src="{url}" alt="Galeria" width="260" style="display:block;width:100%;height:150px;object-fit:cover;border:1px solid #2a2a2a;"></td>'
-                for url in email_gallery[:6]
-            )
-            rows = []
-            for idx in range(0, len(email_gallery[:6]), 2):
-                pair = email_gallery[idx:idx + 2]
-                cells = ''.join(
-                    f'<td width="50%" style="padding:6px;"><img src="{url}" alt="Galeria" width="260" style="display:block;width:100%;height:150px;object-fit:cover;border:1px solid #2a2a2a;"></td>'
-                    for url in pair
-                )
-                if len(pair) == 1:
-                    cells += '<td width="50%" style="padding:6px;"></td>'
-                rows.append(f'<tr>{cells}</tr>')
-            gallery_block = (
-                '<tr><td style="padding:10px 34px 0 34px;">'
-                '<div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#8fb1d1;margin-bottom:8px;font-weight:700;">Galería</div>'
-                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
-                + ''.join(rows) +
-                '</table></td></tr>'
-            )
-            premium_html = premium_html.replace('<tr>\n            <td style="padding:30px 34px 22px 34px;">', f'{gallery_block}\n<tr>\n            <td style="padding:30px 34px 22px 34px;">', 1)
+        # We comment out the manual HTML gallery block injection because all email templates
+        # natively loop over `galeria_urls` in Django's template engine. Manual injection causes duplicate galleries.
+        # if email_gallery:
+        #     gallery_cells = ''.join(
+        #         f'<td width="50%" style="padding:6px;"><img src="{url}" alt="Galeria" width="260" style="display:block;width:100%;height:150px;object-fit:cover;border:1px solid #2a2a2a;"></td>'
+        #         for url in email_gallery[:6]
+        #     )
+        #     rows = []
+        #     for idx in range(0, len(email_gallery[:6]), 2):
+        #         pair = email_gallery[idx:idx + 2]
+        #         cells = ''.join(
+        #             f'<td width="50%" style="padding:6px;"><img src="{url}" alt="Galeria" width="260" style="display:block;width:100%;height:150px;object-fit:cover;border:1px solid #2a2a2a;"></td>'
+        #             for url in pair
+        #         )
+        #         if len(pair) == 1:
+        #             cells += '<td width="50%" style="padding:6px;"></td>'
+        #         rows.append(f'<tr>{cells}</tr>')
+        #     gallery_block = (
+        #         '<tr><td style="padding:10px 34px 0 34px;">'
+        #         '<div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#8fb1d1;margin-bottom:8px;font-weight:700;">Galería</div>'
+        #         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+        #         + ''.join(rows) +
+        #         '</table></td></tr>'
+        #     )
+        #     premium_html = premium_html.replace('<tr>\n            <td style="padding:30px 34px 22px 34px;">', f'{gallery_block}\n<tr>\n            <td style="padding:30px 34px 22px 34px;">', 1)
+        #
         premium_html = _apply_template_tokens_to_html(premium_html, template_id, selection.get('template_tokens'))
         if branding.get('agente_foto_url'):
             agent_img = (
