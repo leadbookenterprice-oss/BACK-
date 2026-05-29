@@ -77,6 +77,33 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-29 - Antigravity - Fix double gallery in marketing emails
+
+Objective:
+
+- Fix double photo galleries appearing in generated marketing emails.
+
+Files modified:
+
+- `api/views.py`
+
+Changes made:
+
+- **generar_email**: Commented out the manual HTML gallery block injection via regex replacement at the end of email rendering. Since all premium templates natively loop over `galeria_urls` in Django's template language, this manual injection was causing duplicate gallery rows.
+
+Verification:
+
+- Compiled `api/views.py` successfully (`python -m py_compile` with zero syntax errors).
+- Double-checked email template structures (`marketing.html`, `marketing_manhattan.html`) to ensure native Django template tags loop over `galeria_urls` perfectly.
+
+Commit/push:
+
+- Committed and pushed backend changes successfully (`01663ae`).
+
+Pending/risks:
+
+- None.
+
 ### 2026-05-28 - Antigravity - Fix onboarding 400 errors, DB migrations, pricing fix & Plan seeding
 
 Objective:
