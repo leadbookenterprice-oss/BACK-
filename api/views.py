@@ -3634,15 +3634,50 @@ def commercial_agents_collection(request):
         serializer = ComercialAgentProfileSerializer(profiles, many=True)
         return Response({'items': serializer.data}, status=status.HTTP_200_OK)
 
-    serializer = ComercialAgentProfileSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    created = serializer.save(owner=request.user)
+    # --- Accept flexible field names from frontend ---
+    incoming = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+    # Map common frontend key variants
+    _alias_map = {
+        'name': 'nombre',
+        'role': 'rol',
+        'phone': 'telefono_e164',
+        'telefono': 'telefono_e164',
+        'photo_url': 'foto_url',
+        'fotoUrl': 'foto_url',
+    }
+    for alias, canonical in _alias_map.items():
+        if alias in incoming and canonical not in incoming:
+            incoming[canonical] = incoming.pop(alias)
 
-    if created.is_default:
-        ComercialAgentProfile.objects.filter(owner=request.user, activo=True).exclude(id=created.id).update(is_default=False)
-    elif not ComercialAgentProfile.objects.filter(owner=request.user, activo=True, is_default=True).exclude(id=created.id).exists():
-        created.is_default = True
-        created.save(update_fields=['is_default'])
+    # Default nombre to user's name when missing
+    if not incoming.get('nombre'):
+        incoming['nombre'] = getattr(request.user, 'nombre', None) or request.user.email.split('@')[0]
+
+    serializer = ComercialAgentProfileSerializer(data=incoming)
+    serializer.is_valid(raise_exception=True)
+
+    from django.db import IntegrityError
+    try:
+        with transaction.atomic():
+            created = serializer.save(owner=request.user)
+
+            if created.is_default:
+                ComercialAgentProfile.objects.filter(owner=request.user, activo=True).exclude(id=created.id).update(is_default=False)
+            elif not ComercialAgentProfile.objects.filter(owner=request.user, activo=True, is_default=True).exclude(id=created.id).exists():
+                created.is_default = True
+                created.save(update_fields=['is_default'])
+    except IntegrityError as exc:
+        if 'unique_default_commercial_agent_per_owner' in str(exc):
+            # Another default already exists — retry without is_default
+            logger.warning(f"[CommercialAgent] UniqueConstraint hit for user {request.user.id}, retrying without is_default")
+            incoming['is_default'] = False
+            serializer = ComercialAgentProfileSerializer(data=incoming)
+            serializer.is_valid(raise_exception=True)
+            with transaction.atomic():
+                created = serializer.save(owner=request.user)
+        else:
+            logger.exception(f"[CommercialAgent] IntegrityError creating agent for user {request.user.id}")
+            return Response({'error': 'Error de integridad al crear agente comercial.', 'detail': str(exc)[:200]}, status=status.HTTP_409_CONFLICT)
 
     return Response(ComercialAgentProfileSerializer(created).data, status=status.HTTP_201_CREATED)
 
@@ -5161,7 +5196,44 @@ class OnboardingView(APIView):
             user.settings = _normalize_user_settings(data.get('settings'), getattr(user, 'settings', None))
             
         user.save()
+
+        # --- Auto-create default ComercialAgentProfile if none exists ---
         default_agent = _get_default_commercial_agent(user)
+        if not default_agent:
+            try:
+                from django.db import IntegrityError
+                agent_nombre = getattr(user, 'nombre', None) or user.email.split('@')[0]
+                agent_email = user.email
+                agent_phone = getattr(user, 'telefono', None)
+                # Normalize phone to E.164 if possible
+                agent_phone_e164 = None
+                if agent_phone:
+                    cleaned = str(agent_phone).strip().replace(' ', '').replace('-', '')
+                    if cleaned and not cleaned.startswith('+'):
+                        cleaned = f'+{cleaned}'
+                    import re as _re
+                    if _re.match(r'^\+[1-9]\d{6,14}$', cleaned):
+                        agent_phone_e164 = cleaned
+
+                with transaction.atomic():
+                    default_agent = ComercialAgentProfile.objects.create(
+                        owner=user,
+                        nombre=agent_nombre,
+                        email=agent_email,
+                        telefono_e164=agent_phone_e164,
+                        foto_url=getattr(user, 'logo_url', None) or '',
+                        is_default=True,
+                        activo=True,
+                    )
+                logger.info(f"[Onboarding] Auto-created default ComercialAgentProfile {default_agent.id} for user {user.id}")
+            except IntegrityError:
+                # Race condition or constraint — fetch existing
+                logger.warning(f"[Onboarding] IntegrityError creating default agent for user {user.id}, fetching existing")
+                default_agent = _get_default_commercial_agent(user)
+            except Exception as exc:
+                logger.exception(f"[Onboarding] Unexpected error creating default agent for user {user.id}: {exc}")
+                default_agent = None
+
         return Response({
             "email": user.email,
             "nombre": user.nombre,

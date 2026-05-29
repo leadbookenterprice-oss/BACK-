@@ -77,6 +77,34 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-28 - Antigravity - Fix onboarding 400 errors on agentes-comerciales creation
+
+Objective:
+
+- Fix HTTP 400 errors during onboarding when frontend POST to `/api/auth/agentes-comerciales/` fails repeatedly with "Error al crear agente comercial".
+
+Files modified:
+
+- `api/views.py`
+
+Changes made:
+
+- **OnboardingView**: Auto-creates a default `ComercialAgentProfile` from user data (nombre, email, telefono, logo_url) if none exists after saving user fields. Handles `IntegrityError` gracefully for race conditions.
+- **commercial_agents_collection POST**: Added flexible field name mapping (name→nombre, phone→telefono_e164, etc.) so frontend variants are accepted. Default `nombre` to user's name when missing. Wrapped creation in `transaction.atomic()`. Added `IntegrityError` handling for the `unique_default_commercial_agent_per_owner` constraint — retries creation without `is_default` if constraint is violated.
+
+Verification:
+
+- `python -m py_compile api/views.py` OK.
+
+Commit/push:
+
+- No commit.
+
+Pending/risks:
+
+- If the frontend still sends POST to `/api/auth/agentes-comerciales/` after onboarding creates the default profile, it may create a duplicate (non-default) agent. Frontend should check if `default_agent` is already returned from onboarding before creating another.
+- Deploy to production to apply the fix.
+
 ### 2026-05-25 - OpenCode - Added five softer templates and backend file mapping
 
 Objective:
