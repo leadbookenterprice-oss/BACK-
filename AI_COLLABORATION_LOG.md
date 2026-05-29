@@ -77,33 +77,42 @@ Recent backend changes known:
 
 ## Agent Log
 
-### 2026-05-28 - Antigravity - Fix onboarding 400 errors on agentes-comerciales creation
+### 2026-05-28 - Antigravity - Fix onboarding 400 errors, DB migrations, pricing fix & Plan seeding
 
 Objective:
 
 - Fix HTTP 400 errors during onboarding when frontend POST to `/api/auth/agentes-comerciales/` fails repeatedly with "Error al crear agente comercial".
+- Run backend database migrations locally to ensure schema health.
+- Correct ARS prices and limits in database seed files, then populate the Plan table with Starter, Pro, Scale, and Business plans.
+- Update plan checking scripts to list database plans gracefully.
 
 Files modified:
 
 - `api/views.py`
+- `create_plans.py`
+- `check_plans.py`
 
 Changes made:
 
 - **OnboardingView**: Auto-creates a default `ComercialAgentProfile` from user data (nombre, email, telefono, logo_url) if none exists after saving user fields. Handles `IntegrityError` gracefully for race conditions.
 - **commercial_agents_collection POST**: Added flexible field name mapping (name→nombre, phone→telefono_e164, etc.) so frontend variants are accepted. Default `nombre` to user's name when missing. Wrapped creation in `transaction.atomic()`. Added `IntegrityError` handling for the `unique_default_commercial_agent_per_owner` constraint — retries creation without `is_default` if constraint is violated.
+- **create_plans.py**: Fully rewritten to seed the database plans (Starter, Pro, Scale, Business) according to the current model structure (precios ARS and daily API limits).
+- **check_plans.py**: Updated to output the plans and pricing currently in the database without raising an exception if a specific test agent is missing.
 
 Verification:
 
 - `python -m py_compile api/views.py` OK.
+- `python manage.py migrate` OK (Ran migrations api.0003 through api.0016 successfully).
+- `python create_plans.py` OK (Plans populated successfully).
+- `python check_plans.py` OK (Lists Starter, Pro, Scale, Business plans with correct ARS prices and limits).
 
 Commit/push:
 
-- No commit.
+- Committed and pushed backend changes.
 
 Pending/risks:
 
-- If the frontend still sends POST to `/api/auth/agentes-comerciales/` after onboarding creates the default profile, it may create a duplicate (non-default) agent. Frontend should check if `default_agent` is already returned from onboarding before creating another.
-- Deploy to production to apply the fix.
+- Deploy migrations and seed the updated plans in the production database (Postgres).
 
 ### 2026-05-25 - OpenCode - Added five softer templates and backend file mapping
 
