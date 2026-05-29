@@ -85,10 +85,12 @@ Objective:
 - Run backend database migrations locally to ensure schema health.
 - Correct ARS prices and limits in database seed files, then populate the Plan table with Starter, Pro, Scale, and Business plans.
 - Update plan checking scripts to list database plans gracefully.
+- Fix PDF template mapping resolution bug in `generar_html_desde_template` where custom Mediterranean template aliases were not normalized and mapped to their physical HTML layouts, causing fallback rendering that looked exactly the same regardless of selection.
 
 Files modified:
 
 - `api/views.py`
+- `api/ai_services.py`
 - `create_plans.py`
 - `check_plans.py`
 
@@ -98,6 +100,7 @@ Changes made:
 - **commercial_agents_collection POST**: Added flexible field name mapping (name→nombre, phone→telefono_e164, etc.) so frontend variants are accepted. Default `nombre` to user's name when missing. Wrapped creation in `transaction.atomic()`. Added `IntegrityError` handling for the `unique_default_commercial_agent_per_owner` constraint — retries creation without `is_default` if constraint is violated.
 - **create_plans.py**: Fully rewritten to seed the database plans (Starter, Pro, Scale, Business) according to the current model structure (precios ARS and daily API limits).
 - **check_plans.py**: Updated to output the plans and pricing currently in the database without raising an exception if a specific test agent is missing.
+- **api/ai_services.py**: Registered all 10 templates (including the 5 new Mediterranean custom color system variants: `costa_serena`, `oliva_natural`, `terracota_suave`, `brisa_calida`, `arena_clara`) under `TEMPLATE_IDS` and mapped them to their color configurations and the physical base template `template_mediterraneo.html` inside `_template_file_from_id`. Updated `_resolve_theme_from_context` to handle both file name matches and normalized template ID matches correctly, unlocking all visual style variations.
 
 Verification:
 

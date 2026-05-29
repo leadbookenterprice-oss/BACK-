@@ -139,17 +139,66 @@ TEMPLATE_COLORES = {
         'secundario': '#1565c0',
         'acento': '#00e5ff',
     },
+    # Nuevas variaciones mediterráneas
+    'costa_serena': {
+        'primario': '#2f5d73',
+        'secundario': '#4d7f96',
+        'acento': '#d3a45f',
+    },
+    'oliva_natural': {
+        'primario': '#3f4a3c',
+        'secundario': '#5c6b58',
+        'acento': '#bfa37a',
+    },
+    'terracota_suave': {
+        'primario': '#7d4434',
+        'secundario': '#9c5c49',
+        'acento': '#e0ad8d',
+    },
+    'brisa_calida': {
+        'primario': '#8e5539',
+        'secundario': '#b07153',
+        'acento': '#e2a76f',
+    },
+    'arena_clara': {
+        'primario': '#6b6355',
+        'secundario': '#877e70',
+        'acento': '#ccae85',
+    },
 }
 
-TEMPLATE_IDS = tuple(
-    filename.replace('template_', '').replace('.html', '')
-    for filename in TEMPLATE_COLORES.keys()
+TEMPLATE_IDS = (
+    'costa_serena',
+    'oliva_natural',
+    'terracota_suave',
+    'brisa_calida',
+    'arena_clara',
+    'dubai_night',
+    'beverly_hills',
+    'manhattan',
+    'mediterraneo',
+    'tech_modern',
 )
 
 
 def _resolve_theme_from_context(context, template_file):
     tokens = context.get('template_tokens') if isinstance(context, dict) else None
-    base = TEMPLATE_COLORES.get(template_file, {})
+    
+    # 1. Determinar el template_id para buscar los colores correctos
+    template_id = None
+    if isinstance(context, dict) and context.get('template_id'):
+        template_id = _normalize_template_id(context.get('template_id'))
+        
+    if not template_id and template_file:
+        template_id = template_file.replace('template_', '').replace('.html', '')
+
+    # 2. Buscar en TEMPLATE_COLORES usando el id o el nombre del archivo
+    base = {}
+    if template_id:
+        base = TEMPLATE_COLORES.get(template_id, {})
+    if not base and template_file:
+        base = TEMPLATE_COLORES.get(template_file, {})
+        
     if not isinstance(tokens, dict):
         return {
             'primario': base.get('primario', '#0d47a1'),
@@ -188,7 +237,21 @@ def _template_file_from_id(template_id):
     normalized = _normalize_template_id(template_id)
     if not normalized:
         return None
-    return f'template_{normalized}.html'
+        
+    # Mapeo de plantilla a archivo HTML base físico
+    base_files = {
+        'costa_serena': 'template_mediterraneo.html',
+        'oliva_natural': 'template_mediterraneo.html',
+        'terracota_suave': 'template_mediterraneo.html',
+        'brisa_calida': 'template_mediterraneo.html',
+        'arena_clara': 'template_mediterraneo.html',
+        'dubai_night': 'template_dubai_night.html',
+        'beverly_hills': 'template_beverly_hills.html',
+        'manhattan': 'template_manhattan.html',
+        'mediterraneo': 'template_mediterraneo.html',
+        'tech_modern': 'template_tech_modern.html',
+    }
+    return base_files.get(normalized, f'template_{normalized}.html')
 
 
 def _render_conditional_block(html_text, key, enabled, replacements=None):
