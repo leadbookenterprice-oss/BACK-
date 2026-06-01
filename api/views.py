@@ -1069,20 +1069,25 @@ def _resolve_template_selection(data, user, listado_obj=None, listado_id_hint=No
     payload_template_id = _extract_template_id_from_payload(data)
 
     brand_template = None
-    if payload_brand_template_id:
-        brand_template = BrandTemplate.objects.filter(
-            id=payload_brand_template_id,
-            owner=user,
-            is_active=True,
-        ).first()
+    
+    # If the user explicitly selects a system template, we do NOT override it with a brand template default
+    is_explicit_system_template = payload_template_id in TEMPLATE_IDS
+    
+    if not is_explicit_system_template:
+        if payload_brand_template_id:
+            brand_template = BrandTemplate.objects.filter(
+                id=payload_brand_template_id,
+                owner=user,
+                is_active=True,
+            ).first()
 
-    if not brand_template and listado_obj and listado_obj.brand_template_id:
-        candidate = listado_obj.brand_template
-        if candidate and candidate.owner_id == user.id and candidate.is_active:
-            brand_template = candidate
+        if not brand_template and listado_obj and listado_obj.brand_template_id:
+            candidate = listado_obj.brand_template
+            if candidate and candidate.owner_id == user.id and candidate.is_active:
+                brand_template = candidate
 
-    if not brand_template:
-        brand_template = _get_default_brand_template(user)
+        if not brand_template:
+            brand_template = _get_default_brand_template(user)
 
     published_revision = None
     tokens = None
@@ -2084,6 +2089,38 @@ def _resolve_content_preferences(user, template_tokens=None, payload=None):
         'use_emojis': bool(use_emojis),
         'tone': tone,
     }
+
+
+def _get_random_caption_style_instructions():
+    import random
+    styles = [
+        {
+            "name": "Storytelling y Emocional",
+            "instructions": (
+                "- Enfoque Narrativo/Emocional: Centrado en la experiencia de vida, el hogar, la calidez, la familia, "
+                "el estilo de vida y las sensaciones/experiencias que evoca habitar este espacio. Evitá sonar frío "
+                "o como una simple lista de datos. Hacé que el lector se imagine viviendo allí y disfrutando el lugar."
+            )
+        },
+        {
+            "name": "Comercial de Alto Impacto y Características Destacadas",
+            "instructions": (
+                "- Enfoque Comercial Directo: Centrado en las características de valor de la propiedad (especificaciones técnicas, "
+                "distribución, materiales premium, amenities, diseño funcional y precio de oportunidad). Sé directo, "
+                "claro y sumamente persuasivo, destacando por qué es una excelente compra en términos de confort y estatus."
+            )
+        },
+        {
+            "name": "Oportunidad de Inversión y Negocio Premium",
+            "instructions": (
+                "- Enfoque de Inversión e Inversores: Centrado en la rentabilidad (ROI), plusvalía, la ubicación estratégica premium, "
+                "seguridad del capital, exclusividad, escasez en el mercado inmobiliario y el valor de la propiedad como activo "
+                "financiero inteligente. Usá un tono sofisticado, exclusivo y con foco en la solidez del negocio inmobiliario."
+            )
+        }
+    ]
+    selected = random.choice(styles)
+    return selected["name"], selected["instructions"]
 
 
 def _caption_preference_prompt(prefs):
@@ -5071,12 +5108,17 @@ def generar_carrusel(request):
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
+        style_name, style_instructions = _get_random_caption_style_instructions()
+        print(f"[CARRUSEL] Generando caption con estilo: {style_name}")
+
         prompt_text = f"""Escribi UN SOLO caption final para Instagram Carrusel, listo para publicar.
 Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
 Operacion y precio: {data.get('operacion', 'Venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
 Detalles: {specs_prompt}. Amenities/diferenciales: {amenities_text}. Contexto: {descripcion_corta}.
 
 Requisitos obligatorios:
+- Enfoque de estilo requerido:
+{style_instructions}
 - 1100 a 1900 caracteres.
 - Gancho con personalidad en la primera linea.
 - 2 a 4 parrafos cortos, con deseo, exclusividad, inversion y beneficio concreto.
@@ -6142,22 +6184,27 @@ def generar_imagen_post(request):
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
-        prompt_text = f"""EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ UN SOLO caption final para Instagram Feed, listo para publicar.
+        style_name, style_instructions = _get_random_caption_style_instructions()
+        print(f"[POST] Generando caption con estilo: {style_name}")
+
+        prompt_text = f"""Escribi UN SOLO caption final para Instagram Feed, listo para publicar.
 Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
-OperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-Datos: habitaciones {data.get('recamaras', '')}, baÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os {data.get('banos', '')}, superficie {data.get('superficieCubierta') or data.get('superficieTotal') or ''}. Amenities: {', '.join(data.get('amenidades', [])) if isinstance(data.get('amenidades'), list) else ''}.
+Operacion y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+Datos: habitaciones {data.get('recamaras', '')}, banos {data.get('banos', '')}, superficie {data.get('superficieCubierta') or data.get('superficieTotal') or ''}. Amenities: {', '.join(data.get('amenidades', [])) if isinstance(data.get('amenidades'), list) else ''}.
 Contexto adicional: {data.get('contextoAdicional', '') or data.get('notasAdicionales', '')}.
 
 Requisitos obligatorios:
+- Enfoque de estilo requerido:
+{style_instructions}
 - 1100 a 1900 caracteres.
-- Primera lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­nea con gancho fuerte y personalidad, no genÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©rica.
-- 2 a 4 pÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rrafos cortos con deseo, valor comercial, inversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n/estilo de vida y urgencia elegante.
+- Primera linea con gancho fuerte y personalidad, no generica.
+- 2 a 4 parrafos cortos con deseo, valor comercial, inversion/estilo de vida y urgencia elegante.
 - Incluir detalles concretos, no solo adjetivos.
 - CTA directo a WhatsApp o mensaje privado para ficha completa, disponibilidad y visita.
-- Cerrar con 25 a 30 hashtags variados, mezclando ciudad, paÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­s, tipo de propiedad, operaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, inversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, lujo y real estate.
-- No des opciones, no uses tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos como "OpciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n 1", no expliques el caption, no menciones que sos IA.
-MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
-        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales. DevolvÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s solo copy final listo para publicar.", agente=request.user)
+- Cerrar con 25 a 30 hashtags variados, mezclando ciudad, pais, tipo de propiedad, operacion, inversion, lujo y real estate.
+- No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
+Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
+        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales. Devolves solo copy final listo para publicar.", agente=request.user)
         caption = _finalize_caption_text(caption, data, formato='post', prefs=content_prefs, max_chars=2200)
 
         # Intentar subir a Cloudinary via Almacenamiento
@@ -6387,16 +6434,23 @@ def generar_caption_story(request):
             selection,
         )
 
-        prompt_text = f"""EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ UN SOLO caption opcional para Instagram Story, listo para publicar.
+        style_name, style_instructions = _get_random_caption_style_instructions()
+        print(f"[STORY] Generando caption con estilo: {style_name}")
+
+        prompt_text = f"""Escribi UN SOLO caption opcional para Instagram Story, listo para publicar.
 Propiedad: {data.get('tipoPropiedad', 'Propiedad')} en {data.get('ciudad', '')}, {data.get('pais', '')}.
-OperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
-MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ximo 650 caracteres.
-Debe tener: gancho breve, sensaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n premium, razÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n concreta para consultar, CTA a responder la story o escribir por WhatsApp y 8 a 12 hashtags.
-No des opciones, no uses tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tulos como "OpciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n 1", no expliques el caption, no menciones que sos IA.
+Operacion y precio: {data.get('operacion', 'venta')} por {data.get('moneda', 'USD')} {data.get('precio', '')}.
+Maximo 650 caracteres.
+
+Requisitos obligatorios:
+- Enfoque de estilo requerido:
+{style_instructions}
+- Debe tener: gancho breve, sensacion premium, razon concreta para consultar, CTA a responder la story o escribir por WhatsApp y 8 a 12 hashtags.
+- No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
         raw_caption = smart_call(
             prompt_text,
-            system_prompt="Sos un experto en marketing inmobiliario para stories. DevolvÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s solo copy final listo para publicar.",
+            system_prompt="Sos un experto en marketing inmobiliario para stories. Devolves solo copy final listo para publicar.",
             agente=request.user,
         )
         caption = _finalize_caption_text(raw_caption, data, formato='story', prefs=content_prefs, max_chars=650)

@@ -19,6 +19,8 @@ def _render_allowed_hosts():
     return set(hosts + ['fonts.googleapis.com', 'fonts.gstatic.com'])
 
 
+_SAFE_HOSTNAME_CACHE = {}
+
 def _is_safe_render_url(url):
     parsed = urlparse(str(url or '').strip())
     if parsed.scheme in {'about', 'data', 'blob'}:
@@ -26,16 +28,24 @@ def _is_safe_render_url(url):
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
         return False
     hostname = parsed.hostname.lower().rstrip('.')
+    
+    if hostname in _SAFE_HOSTNAME_CACHE:
+        return _SAFE_HOSTNAME_CACHE[hostname]
+        
     if not any(hostname == host or hostname.endswith(f'.{host}') for host in _render_allowed_hosts()):
+        _SAFE_HOSTNAME_CACHE[hostname] = False
         return False
     try:
         for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
             ip = ipaddress.ip_address(sockaddr[0])
             if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                _SAFE_HOSTNAME_CACHE[hostname] = False
                 return False
+        _SAFE_HOSTNAME_CACHE[hostname] = True
+        return True
     except Exception:
+        _SAFE_HOSTNAME_CACHE[hostname] = False
         return False
-    return True
 
 
 def _install_network_guard(page):
@@ -93,16 +103,20 @@ def render_html_to_pdf(html_content: str) -> bytes:
         _install_network_guard(page)
         try:
             # networkidle es clave para asegurar que se carguen imágenes y fuentes antes de imprimir
-            page.set_content(html_content, wait_until="networkidle", timeout=30000)
-            # Asegurar estado idle por si acaso set_content no fue suficiente
-            page.wait_for_load_state('networkidle', timeout=30000)
+            # Reducido timeout a 12s para set_content (load) y luego wait_for_load_state (networkidle) de 8s
+            # para asegurar responder antes de los 30s de Railway
+            page.set_content(html_content, wait_until="load", timeout=12000)
+            try:
+                page.wait_for_load_state('networkidle', timeout=8000)
+            except PlaywrightTimeoutError:
+                logger.warning("[Render Engine] Timeout esperando networkidle en wait_for_load_state, procediendo.")
         except PlaywrightTimeoutError:
-            logger.warning("[Render Engine] Timeout esperando networkidle para PDF, procediendo de todas formas.")
+            logger.warning("[Render Engine] Timeout esperando load en set_content para PDF, procediendo de todas formas.")
         except Exception as e:
             logger.error(f"[Render Engine] Error cargando contenido para PDF: {e}")
             
-        # 3 segundos extra para asegurar renderizado completo de fuentes de Google y animaciones iniciales
-        page.wait_for_timeout(3000) 
+        # 1.5 segundos de delay para asegurar renderizado completo de fuentes de Google
+        page.wait_for_timeout(1500) 
         
         pdf_bytes = page.pdf(
             format="A4", 
