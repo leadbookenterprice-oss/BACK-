@@ -3168,22 +3168,22 @@ def generar_guion(request):
         if tipo_video == 'tour':
             if is_land:
                 return [
-                    {'nombre': 'Gancho', 'texto': f'ConocÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© este {tipo} en {ciudad}, una oportunidad para evaluar con calma por ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, superficie y potencial de desarrollo.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã¢â‚¬â„¢Ãƒâ€šÃ‚Â'},
-                    {'nombre': 'UbicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n', 'texto': f'El entorno de {ciudad} permite pensar en un proyecto con buena conexiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, servicios cercanos y proyecciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de valorizaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â'},
-                    {'nombre': 'Superficie', 'texto': f'La superficie disponible abre posibilidades para construir, invertir o planificar un desarrollo adaptado a tus objetivos.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â'},
-                    {'nombre': 'Potencial', 'texto': 'Es una alternativa interesante para quien busca tierra con margen de crecimiento y visiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de mediano plazo.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬'},
-                    {'nombre': 'InversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n', 'texto': f'Con un valor de referencia de {moneda} {precio}, este terreno puede convertirse en una decisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n estratÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©gica.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢Ãƒâ€šÃ‚Â¼'},
-                    {'nombre': 'Recorrido', 'texto': 'Recorrerlo permite entender mejor sus accesos, orientaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, entorno inmediato y posibilidades reales de uso.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‹Å“Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â'},
-                    {'nombre': 'Cierre', 'texto': 'Escribinos para recibir mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s informaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, resolver dudas y coordinar una visita personalizada al lugar.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€¦Ã‚Â¾'},
+                    {'nombre': 'Gancho', 'texto': f'Conocé este {tipo} en {ciudad}, una oportunidad para evaluar con calma por ubicación, superficie y potencial de desarrollo.', 'icono': '📈'},
+                    {'nombre': 'Ubicación', 'texto': f'El entorno de {ciudad} permite pensar en un proyecto con buena conexión, servicios cercanos y proyección de valorización.', 'icono': '📍'},
+                    {'nombre': 'Superficie', 'texto': f'La superficie disponible abre posibilidades para construir, invertir o planificar un desarrollo adaptado a tus objetivos.', 'icono': '📐'},
+                    {'nombre': 'Potencial', 'texto': 'Es una alternativa interesante para quien busca tierra con margen de crecimiento y visión de mediano plazo.', 'icono': '💡'},
+                    {'nombre': 'Inversión', 'texto': f'Con un valor de referencia de {moneda} {precio}, este terreno puede convertirse en una decisión estratégica.', 'icono': '📈'},
+                    {'nombre': 'Recorrido', 'texto': 'Recorrerlo permite entender mejor sus accesos, orientación, entorno inmediato y posibilidades reales de uso.', 'icono': '🚶'},
+                    {'nombre': 'Cierre', 'texto': 'Escribinos para recibir más información, resolver dudas y coordinar una visita personalizada al lugar.', 'icono': '📞'},
                 ]
             return [
-                {'nombre': 'Gancho', 'texto': f'Bienvenido a esta {tipo} en {ciudad}, una propiedad pensada para disfrutarse desde el primer recorrido.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â '},
-                {'nombre': 'Fachada y entorno', 'texto': 'La primera impresiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n combina presencia, ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n y una propuesta visual clara para vivir o invertir.', 'icono': 'ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“Ãƒâ€šÃ‚Â¨'},
-                {'nombre': 'Zona social', 'texto': 'Los espacios principales ofrecen amplitud, circulaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³moda y una atmÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³sfera ideal para compartir cada dÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂºÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â'},
-                {'nombre': 'Cocina y detalles', 'texto': 'La distribuciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n acompaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±a una vida prÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ctica, con detalles que elevan la experiencia y simplifican la rutina.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â³'},
-                {'nombre': 'Habitaciones', 'texto': f'Cuenta con {recamaras or "varios"} dormitorios y {banos or "baÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os funcionales"}, pensados para descanso, privacidad y confort.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂºÃƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â'},
-                {'nombre': 'Beneficio de inversion', 'texto': f'Por {moneda} {precio}, esta propiedad reÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºne ubicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n, prestaciones y potencial de valorizaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢Ãƒâ€šÃ‚Â¼'},
-                {'nombre': 'Cierre con CTA', 'texto': 'Contactanos para recibir la ficha completa y coordinar una visita personalizada.', 'icono': 'ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€¦Ã‚Â¾'},
+                {'nombre': 'Gancho', 'texto': f'Bienvenido a esta {tipo} en {ciudad}, una propiedad pensada para disfrutarse desde el primer recorrido.', 'icono': '🏠'},
+                {'nombre': 'Fachada y entorno', 'texto': 'La primera impresión combina presencia, ubicación y una propuesta visual clara para vivir o invertir.', 'icono': '🌇'},
+                {'nombre': 'Zona social', 'texto': 'Los espacios principales ofrecen amplitud, circulación cómoda y una atmósfera ideal para compartir cada día.', 'icono': '🛋️'},
+                {'nombre': 'Cocina y detalles', 'texto': 'La distribución acompaña una vida práctica, con detalles que elevan la experiencia y simplifican la rutina.', 'icono': '🍳'},
+                {'nombre': 'Habitaciones', 'texto': f'Cuenta con {recamaras or "varios"} dormitorios y {banos or "baños funcionales"}, pensados para descanso, privacidad y confort.', 'icono': '🛏️'},
+                {'nombre': 'Beneficio de inversion', 'texto': f'Por {moneda} {precio}, esta propiedad reúne ubicación, prestaciones y potencial de valorización.', 'icono': '📈'},
+                {'nombre': 'Cierre con CTA', 'texto': 'Contactanos para recibir la ficha completa y coordinar una visita personalizada.', 'icono': '📞'},
             ]
 
         if is_land:
@@ -6138,9 +6138,9 @@ def generar_imagen_post(request):
             "agente_email": branding.get('agente_email', ''),
             "logo_url": branding.get('logo_url', ''),
             "caracteristicas": [
-                {"label": "mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
+                {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
                 {"label": "Hab", "valor": data.get('recamaras')},
-                {"label": "BaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os", "valor": data.get('banos')},
+                {"label": "Baños", "valor": data.get('banos')},
             ],
             "agente_nombre": branding.get('agente_nombre', ''),
             "agente_telefono": branding.get('agente_telefono', ''),
@@ -6335,9 +6335,9 @@ def generar_imagen_story(request):
                 moneda=data.get('moneda', ''),
             ),
             "caracteristicas": [
-                {"label": "mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
+                {"label": "m²", "valor": data.get('superficieCubierta') or data.get('superficieTotal')},
                 {"label": "Hab", "valor": data.get('recamaras')},
-                {"label": "BaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±os", "valor": data.get('banos')},
+                {"label": "Baños", "valor": data.get('banos')},
             ]
         }
         context["caracteristicas"] = [c for c in context["caracteristicas"] if c["valor"]]
