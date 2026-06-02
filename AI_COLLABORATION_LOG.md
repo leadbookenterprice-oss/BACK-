@@ -116,7 +116,7 @@ Verification:
 
 Commit/push:
 
-- Pending commit/push.
+- Committed and pushed to `origin/main`: `00e2fe8 fix(admin): remove real admin bootstrap`.
 
 Pending/risks:
 
