@@ -117,13 +117,13 @@ Verification:
 
 Commit/push:
 
-- Not committed or pushed.
+- Committed and pushed to `origin/main`: `297a5ef feat(admin): add env-backed admin sessions`.
 
 Pending/risks:
 
 - Production backend must set `ADMIN_DASH_EMAIL` and `ADMIN_DASH_PASSWORD` or `ADMIN_DASH_PASSWORD_SHA256` before the admin dashboard can log in with the new flow.
 - Keep `ALLOW_ADMIN_KEY_AUTH=False` in production unless an emergency internal bypass is explicitly needed.
-- Existing unrelated backend dirty changes for Gemini/pool/Railway remain uncommitted in this worktree and were not reverted.
+- Existing unrelated backend dirty changes for Gemini/pool/Railway remain in the original local `Backend--main` worktree and were not included in this push.
 
 ### 2026-05-29 - Antigravity - Fix double gallery in marketing emails
 
