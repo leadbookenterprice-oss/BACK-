@@ -77,6 +77,54 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-05-25 - OpenCode - Admin dashboard env-backed session login
+
+Objective:
+
+- Let the admin dashboard authenticate without depending on a real `Agent` user, while avoiding hardcoded frontend secrets or API-consuming ghost users.
+
+Files modified:
+
+- `.env.example`
+- `admin_panel/auth.py`
+- `admin_panel/consumers.py`
+- `admin_panel/tests.py`
+- `admin_panel/views.py`
+- `admin_panel/views_cloudinary.py`
+- `api/admin.py`
+- `api/urls.py`
+- `api/views.py`
+- `api/views_admin.py`
+- `subzero_core/settings.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added `/api/auth/admin-login/` and `/api/auth/admin-profile/` backed by `ADMIN_DASH_EMAIL` and `ADMIN_DASH_PASSWORD`/`ADMIN_DASH_PASSWORD_SHA256` env vars.
+- Added signed, time-limited admin session tokens using Django signing; no `Agent` is created, looked up, or assigned API pool resources for this admin login.
+- Added shared `is_admin_request()` auth helper for admin endpoints, preserving staff JWT and gated `X-Admin-Key` compatibility.
+- Updated admin HTTP endpoints and admin WebSocket auth to accept the new admin session token.
+- Added `X-Admin-Session` to CORS allowed headers.
+- Documented new env vars in `.env.example`: `ADMIN_DASH_EMAIL`, `ADMIN_DASH_PASSWORD`, `ADMIN_SESSION_TTL_HOURS`.
+- Added regression tests proving admin session login does not require/create a real user and can access `/api/admin/stats/`.
+
+Verification:
+
+- `py -3 -m py_compile admin_panel/auth.py admin_panel/consumers.py admin_panel/views.py admin_panel/views_cloudinary.py admin_panel/tests.py api/urls.py api/views.py api/views_admin.py api/admin.py subzero_core/settings.py` OK.
+- `py -3 manage.py test admin_panel.tests.AdminSessionAuthTests` OK, 2 tests.
+- `py -3 manage.py check` OK.
+- `git diff --check` OK.
+
+Commit/push:
+
+- Not committed or pushed.
+
+Pending/risks:
+
+- Production backend must set `ADMIN_DASH_EMAIL` and `ADMIN_DASH_PASSWORD` or `ADMIN_DASH_PASSWORD_SHA256` before the admin dashboard can log in with the new flow.
+- Keep `ALLOW_ADMIN_KEY_AUTH=False` in production unless an emergency internal bypass is explicitly needed.
+- Existing unrelated backend dirty changes for Gemini/pool/Railway remain uncommitted in this worktree and were not reverted.
+
 ### 2026-05-29 - Antigravity - Fix double gallery in marketing emails
 
 Objective:
@@ -236,7 +284,6 @@ Commit/push:
 Pending/risks:
 
 - If ElevenLabs credentials are blocked in provider account, fallback voice can still be used but premium voice quality depends on restoring ElevenLabs access.
-
 ### 2026-05-24 - OpenCode - Regeneration uniqueness hardening
 
 Objective:

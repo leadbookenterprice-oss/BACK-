@@ -24,15 +24,13 @@ from api.services.pool_service import APIPoolService
 from decouple import config
 from django.conf import settings
 from django.utils.crypto import constant_time_compare
+from admin_panel.auth import is_admin_request
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
 
 
 def _check_admin(request):
-    supplied_key = request.headers.get('X-Admin-Key', '')
-    if getattr(settings, 'ALLOW_ADMIN_KEY_AUTH', False) and ADMIN_KEY and supplied_key and constant_time_compare(supplied_key, ADMIN_KEY):
-        return True
-    return request.user and request.user.is_authenticated and request.user.is_staff
+    return is_admin_request(request)
 
 
 def _mask_secret(value, head=4, tail=4):

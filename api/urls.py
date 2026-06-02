@@ -52,6 +52,7 @@ from .views_crm import (
     crm_pipeline_stages,
     meta_leads_webhook,
 )
+from admin_panel.auth import admin_session_login, admin_session_profile
 
 router = DefaultRouter()
 router.register(r'properties', PropertyViewSet)
@@ -60,6 +61,8 @@ router.register(r'assets', GeneratedAssetViewSet)
 urlpatterns = [
     path('auth/register/', RegisterView.as_view(), name='auth_register'),
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('auth/admin-login/', admin_session_login, name='admin_session_login'),
+    path('auth/admin-profile/', admin_session_profile, name='admin_session_profile'),
     path('auth/login/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
     path('auth/token/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh_alt'),
     path('auth/logout/', LogoutView.as_view(), name='auth_logout'),

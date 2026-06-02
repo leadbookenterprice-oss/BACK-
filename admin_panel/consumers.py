@@ -10,6 +10,14 @@ def _staff_user_from_token(token):
     if not token:
         return None
     try:
+        from admin_panel.auth import admin_session_user, validate_admin_session_token
+
+        payload = validate_admin_session_token(token)
+        if payload:
+            return admin_session_user(payload.get('email'))
+    except Exception:
+        pass
+    try:
         from rest_framework_simplejwt.tokens import AccessToken
         from api.models import Agent
         validated = AccessToken(token)

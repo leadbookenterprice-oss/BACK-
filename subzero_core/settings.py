@@ -235,7 +235,7 @@ CORS_ALLOWED_ORIGIN_REGEXES = []
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-encoding', 'authorization', 'content-type', 'dnt',
-    'origin', 'user-agent', 'x-csrftoken', 'x-requested-with',
+    'origin', 'user-agent', 'x-admin-session', 'x-csrftoken', 'x-requested-with',
 ] + (['x-admin-key'] if ALLOW_ADMIN_KEY_AUTH else [])
 CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 print(f"[STARTUP] CORS_ALLOWED_ORIGINS={CORS_ALLOWED_ORIGINS}")
