@@ -29,6 +29,12 @@ SERVICE_DEFAULTS = {
         'default_monthly_limit': 10,
         'extra_increment': 10,
     },
+    'cerebras': {
+        'descripcion': 'Cerebras',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
     'cloudinary': {
         'descripcion': 'Cloudinary',
         'default_daily_limit': 999999,
@@ -37,14 +43,14 @@ SERVICE_DEFAULTS = {
     },
 }
 
-SERVICIOS_CRITICOS = ['gemini', 'elevenlabs', 'uploadpost']
+SERVICIOS_CRITICOS = ['gemini', 'elevenlabs', 'cerebras', 'uploadpost']
 
 PLAN_API_COUNTS = {
-    'free': {'gemini': 1, 'elevenlabs': 1},
-    'starter': {'gemini': 1, 'elevenlabs': 1},
-    'pro': {'gemini': 3, 'elevenlabs': 3},
-    'scale': {'gemini': 5, 'elevenlabs': 5},
-    'business': {'gemini': 5, 'elevenlabs': 5},
+    'free': {'gemini': 1, 'elevenlabs': 1, 'cerebras': 1},
+    'starter': {'gemini': 1, 'elevenlabs': 1, 'cerebras': 1},
+    'pro': {'gemini': 3, 'elevenlabs': 3, 'cerebras': 3},
+    'scale': {'gemini': 5, 'elevenlabs': 5, 'cerebras': 5},
+    'business': {'gemini': 5, 'elevenlabs': 5, 'cerebras': 5},
 }
 
 COMPATIBILITY_API_COUNTS = {'uploadpost': 1}

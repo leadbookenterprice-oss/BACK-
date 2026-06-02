@@ -30,6 +30,36 @@ def _allow_global_api_fallback():
     return _bool_env('ALLOW_GLOBAL_API_FALLBACK', getattr(settings, 'DEBUG', False))
 
 
+CEREBRAS_CHAT_COMPLETIONS_URL = 'https://api.cerebras.ai/v1/chat/completions'
+CEREBRAS_MODELS_CASCADE = [
+    'gpt-oss-120b',
+    'zai-glm-4.7',
+]
+
+
+def _get_cerebras_key():
+    from api.models import APIKey
+
+    pool_key = APIKey.objects.filter(servicio__nombre__iexact='cerebras', status__in=['available', 'assigned']).first()
+    if pool_key:
+        return pool_key.api_key
+    return _settings_or_env('CEREBRAS_API_KEY')
+
+
+def _mark_cerebras_exhausted(key_value):
+    try:
+        from api.models import APIKey
+
+        key_obj = APIKey.objects.filter(api_key=key_value, servicio__nombre__iexact='cerebras').first()
+        if not key_obj:
+            return
+        key_obj.status = 'exhausted'
+        key_obj.requests_today = key_obj.google_daily_limit or max(key_obj.requests_today, 1)
+        key_obj.save(update_fields=['status', 'requests_today', 'updated_at'])
+    except Exception:
+        pass
+
+
 def normalize_elevenlabs_voice_choice(voz='femenina'):
     raw = str(voz or 'femenina').strip().lower()
     raw = ''.join(
@@ -241,10 +271,10 @@ def _template_file_from_id(template_id):
     # Mapeo de plantilla a archivo HTML base físico
     base_files = {
         'costa_serena': 'template_mediterraneo.html',
-        'oliva_natural': 'template_mediterraneo.html',
-        'terracota_suave': 'template_mediterraneo.html',
-        'brisa_calida': 'template_mediterraneo.html',
-        'arena_clara': 'template_mediterraneo.html',
+        'oliva_natural': 'template_beverly_hills.html',
+        'terracota_suave': 'template_dubai_night.html',
+        'brisa_calida': 'template_manhattan.html',
+        'arena_clara': 'template_tech_modern.html',
         'dubai_night': 'template_dubai_night.html',
         'beverly_hills': 'template_beverly_hills.html',
         'manhattan': 'template_manhattan.html',
@@ -587,25 +617,16 @@ GEMINI_MODELS_CASCADE = [
     "gemini-2.5-flash-lite",
 ]
 
-# Cascada Paso 1 — solo texto, rápidos
+# Cascada Cerebras Paso 1 — solo texto, rápidos
 PASO1_CASCADE = [
-    ("groq", "llama-3.3-70b-versatile"),
-    ("nim", "moonshotai/kimi-k2-instruct"),
-    ("nim", "qwen/qwen3-coder-480b-a35b-instruct"),
-    ("nim", "mistralai/mistral-large-3-675b-instruct-2512"),
-    ("gemini", "gemini-2.5-flash-lite"),  # último fallback
+    ('cerebras', 'gpt-oss-120b'),
+    ('cerebras', 'zai-glm-4.7'),
 ]
 
-# Cascada Paso 2 — Prioridad Gemini, luego NIM, luego Groq
+# Cascada Cerebras Paso 2 — solo texto
 PASO2_CASCADE = [
-    ("gemini", "gemini-2.5-pro"),
-    ("gemini", "gemini-2.5-flash"),
-    ("gemini", "gemini-3-flash-preview"),
-    ("gemini", "gemini-3.1-flash-lite-preview"),
-    ("gemini", "gemini-2.5-flash-lite"),
-    ("nim", "meta/llama-4-maverick-17b-128e-instruct"),
-    ("nim", "mistralai/mistral-large-3-675b-instruct-2512"),
-    ("groq", "llama-3.3-70b-versatile"),
+    ('cerebras', 'gpt-oss-120b'),
+    ('cerebras', 'zai-glm-4.7'),
 ]
 
 def _get_nvidia_key():
@@ -772,6 +793,84 @@ def call_groq_api(prompt: str, **kwargs) -> str:
             raise
     raise RuntimeError(f"Groq sin modelos disponibles: {last_err}")
 
+
+@track_api_call(service='cerebras')
+def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
+    """Llama a Cerebras usando su API compatible con OpenAI."""
+    key = _get_cerebras_key()
+    if not key:
+        raise APIKeyUnavailableError(
+            API_KEY_UNAVAILABLE_MESSAGE,
+            provider='cerebras',
+            scope='pool',
+        )
+
+    system_prompt = kwargs.get('system_prompt', '')
+    full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+    requested_model = kwargs.get('model') or CEREBRAS_MODELS_CASCADE[0]
+    models_fallback = [requested_model] + [m for m in CEREBRAS_MODELS_CASCADE if m != requested_model]
+    headers = {
+        'Authorization': f'Bearer {key}',
+        'Content-Type': 'application/json',
+    }
+    payload_base = {
+        'messages': [{'role': 'user', 'content': full_prompt}],
+        'stream': False,
+        'temperature': kwargs.get('temperature', 0.7),
+        'top_p': kwargs.get('top_p', 1),
+        'max_completion_tokens': kwargs.get('max_completion_tokens', 8192),
+    }
+
+    if system_prompt:
+        payload_base['messages'] = [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': prompt},
+        ]
+
+    last_err = None
+    for model_id in models_fallback:
+        payload = dict(payload_base)
+        payload['model'] = model_id
+        try:
+            response = requests.post(CEREBRAS_CHAT_COMPLETIONS_URL, json=payload, headers=headers, timeout=60)
+            if response.status_code == 200:
+                data = response.json() if response.content else {}
+                content = ((data.get('choices') or [{}])[0].get('message') or {}).get('content')
+                if content:
+                    return content
+                last_err = RuntimeError('Cerebras devolvio una respuesta vacia')
+                continue
+
+            response_text = str(getattr(response, 'text', '') or '')
+            normalized = response_text.lower()
+            if response.status_code in (401, 403):
+                raise APIKeyUnavailableError(
+                    API_KEY_UNAVAILABLE_MESSAGE,
+                    provider='cerebras',
+                    scope='pool',
+                )
+
+            if response.status_code == 429:
+                hard_terms = ('quota', 'credits', 'insufficient', 'exceeded', 'monthly', 'payment', 'balance', 'limit')
+                if any(term in normalized for term in hard_terms):
+                    _mark_cerebras_exhausted(key)
+                raise RuntimeError(response_text or 'Cerebras rate limited')
+
+            model_terms = ('model', 'not found', 'invalid model', 'unsupported model', 'deprecated')
+            if any(term in normalized for term in model_terms):
+                last_err = RuntimeError(response_text or f'Modelo Cerebras no soportado: {model_id}')
+                continue
+
+            last_err = RuntimeError(response_text or f'Error Cerebras ({response.status_code})')
+        except APIKeyUnavailableError:
+            raise
+        except Exception as exc:
+            last_err = exc
+
+    if last_err:
+        raise last_err
+    return None
+
 @track_api_call(service='groq')
 def call_groq_html(prompt: str, system_prompt: str = "") -> str:
     """Llama a Groq para generar HTML. Solo texto, sin imágenes."""
@@ -848,17 +947,13 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
     import time
     for attempt in range(retries):
         try:
-            result = call_gemini_api(prompt, agente=agente, **kwargs)
+            result = call_cerebras_api(prompt, agente=agente, **kwargs)
             if result:
                 return result
         except APIKeyUnavailableError:
             raise
-        except GeminiQuotaExhaustedError:
-            raise
-        except GeminiRateLimitedError:
-            raise
         except Exception as e:
-            print(f"Gemini attempt {attempt+1}/{retries} failed: {str(e)}")
+            print(f"Cerebras attempt {attempt+1}/{retries} failed: {str(e)}")
             if attempt < retries - 1:
                 time.sleep(1)
     return None
@@ -1120,7 +1215,7 @@ def generar_html_gemini(context, agente):
     print(f"[HTML] ▶ Obteniendo API key...")
 
     try:
-        # La llave y el cliente se gestionan dinámicamente en execute_with_gemini_retry
+        # La llave y el cliente se gestionan dinámicamente en call_cerebras_api
         pass
 
         # ─── PASO 1: Generar prompt creativo de diseño ───────────────────────────
@@ -1178,17 +1273,8 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
         for provider, model_id in PASO1_CASCADE:
             try:
                 print(f"[HTML] ▶ Paso 1 - Intentando con {provider} ({model_id})...")
-                if provider == "groq":
-                    design_prompt = call_groq_html(prompt_step1)
-                elif provider == "nim":
-                    design_prompt = call_nim_model(prompt_step1, model_id)
-                elif provider == "gemini":
-                    def _call_step1(c):
-                        return c.models.generate_content(
-                            model=model_id,
-                            contents=prompt_step1,
-                        ).text.strip()
-                    design_prompt = execute_with_gemini_retry(agente, _call_step1)
+                if provider == 'cerebras':
+                    design_prompt = call_cerebras_api(prompt_step1, model=model_id)
                 
                 if design_prompt:
                     print(f"[HTML] ✅ Paso 1 exitoso con {provider} ({model_id})")
@@ -1214,7 +1300,7 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
         # Solo usamos URL remota para referencias visuales (sin data/base64).
         try:
             if portada_url and str(portada_url).startswith('https://'):
-                print(f"[HTML] ▶ Paso 2 - Imagen de portada (URL) disponible para modelos NIM/Gemini.")
+                print(f"[HTML] ▶ Paso 2 - Imagen de portada (URL) disponible para Cerebras.")
         except Exception as e:
             print(f"[HTML] ⚠️ Error procesando imagen de portada para el prompt: {e}")
 
@@ -1338,19 +1424,8 @@ REGLAS DE DISEÑO PREMIUM:
         for provider, model_id in PASO2_CASCADE:
             print(f"[HTML] ▶ Paso 2 - Intentando con {provider} ({model_id})...")
             try:
-                if provider == "nim":
-                    html_output = call_nim_model(prompt_step2_nim, model_id, imagen_url=portada_url)
-                elif provider == "groq":
-                    p2_modified = f"Foto de portada (URL): {portada_url}\n\n{prompt_step2_nim}"
-                    html_output = call_groq_html(p2_modified)
-                elif provider == "gemini":
-                    def _call_step2(c):
-                        return c.models.generate_content(
-                            model=model_id,
-                            contents=contents_step2,
-                        ).text.strip()
-                    html_output = execute_with_gemini_retry(agente, _call_step2)
-                
+                if provider == 'cerebras':
+                    html_output = call_cerebras_api(prompt_step2_nim, model=model_id)
                 if html_output:
                     print(f"[HTML] ✅ Paso 2 exitoso con {provider} ({model_id})")
                     break

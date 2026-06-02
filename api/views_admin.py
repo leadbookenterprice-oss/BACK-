@@ -40,6 +40,35 @@ def _normalize_service_name(value):
     return str(value or '').strip().lower()
 
 
+def _service_defaults(nombre):
+    descripcion = {
+        'gemini': 'Google Gemini',
+        'elevenlabs': 'ElevenLabs',
+        'uploadpost': 'UploadPost',
+        'groq': 'Groq',
+        'nvidia': 'NVIDIA',
+        'cerebras': 'Cerebras',
+    }.get(nombre, nombre.title())
+    return {
+        'descripcion': descripcion,
+        'activo': True,
+        'default_daily_limit': 1500 if nombre in {'gemini', 'elevenlabs', 'cerebras'} else (999999 if nombre == 'uploadpost' else 1500),
+        'default_monthly_limit': 10 if nombre == 'uploadpost' else None,
+        'extra_increment': 10 if nombre == 'uploadpost' else 1500,
+    }
+
+
+def _get_or_create_service(nombre):
+    normalized = _normalize_service_name(nombre)
+    if not normalized:
+        return None
+    servicio = Servicio.objects.filter(nombre__iexact=normalized).first()
+    if servicio:
+        return servicio
+    servicio, _ = Servicio.objects.get_or_create(nombre=normalized, defaults=_service_defaults(normalized))
+    return servicio
+
+
 ELEVENLABS_MONTHLY_DEFAULT = 10000
 
 
@@ -448,7 +477,9 @@ def admin_apikeys_pool_crear(request):
     if not svc_name or not key_val:
         return Response({'error': 'Faltan servicio/api_key'}, status=400)
 
-    svc, _ = Servicio.objects.get_or_create(nombre=svc_name)
+    svc = _get_or_create_service(svc_name)
+    if not svc:
+        return Response({'error': 'Servicio invalido'}, status=400)
     with transaction.atomic():
         cleanup = _cleanup_duplicate_api_keys([svc.nombre])
         existing = APIKey.objects.filter(servicio=svc, api_key=key_val).order_by('id').first()
@@ -461,8 +492,18 @@ def admin_apikeys_pool_crear(request):
             }, status=200)
 
         service_name = _normalize_service_name(svc.nombre)
-        daily_limit = request.data.get('daily_limit', 1500)
-        monthly_limit = request.data.get('monthly_limit', ELEVENLABS_MONTHLY_DEFAULT if service_name == 'elevenlabs' else None)
+        try:
+            daily_limit = int(request.data.get('daily_limit') or svc.default_daily_limit or 1500)
+        except (TypeError, ValueError):
+            daily_limit = svc.default_daily_limit or 1500
+        monthly_limit = request.data.get(
+            'monthly_limit',
+            svc.default_monthly_limit if svc.default_monthly_limit is not None else (ELEVENLABS_MONTHLY_DEFAULT if service_name == 'elevenlabs' else None),
+        )
+        try:
+            monthly_limit = int(monthly_limit) if monthly_limit is not None else None
+        except (TypeError, ValueError):
+            monthly_limit = svc.default_monthly_limit if svc.default_monthly_limit is not None else None
 
         k = APIKey.objects.create(
             servicio=svc,
@@ -504,14 +545,22 @@ def admin_apikeys_pool_bulk(request):
                 errors.append({'index': index, 'error': 'Faltan service o api_key'})
                 continue
 
-            servicio = Servicio.objects.filter(nombre=service_name).first()
+            servicio = _get_or_create_service(service_name)
             if not servicio:
                 errors.append({'index': index, 'service': service_name, 'error': f'Servicio "{service_name}" no existe'})
                 continue
             monthly_limit = data.get(
                 'monthly_limit',
-                ELEVENLABS_MONTHLY_DEFAULT if service_name == 'elevenlabs' else None,
+                servicio.default_monthly_limit if servicio.default_monthly_limit is not None else (ELEVENLABS_MONTHLY_DEFAULT if service_name == 'elevenlabs' else None),
             )
+            try:
+                monthly_limit = int(monthly_limit) if monthly_limit is not None else None
+            except (TypeError, ValueError):
+                monthly_limit = servicio.default_monthly_limit if servicio.default_monthly_limit is not None else None
+            try:
+                limit = int(limit or servicio.default_daily_limit or 1500)
+            except (TypeError, ValueError):
+                limit = servicio.default_daily_limit or 1500
 
             affected_services.add(servicio.nombre)
             fingerprint = (servicio.id, api_key_str)

@@ -50,8 +50,6 @@ from .ai_services import (
     ElevenLabsRateLimitedError,
     GeminiQuotaExhaustedError,
     GeminiRateLimitedError,
-    call_gemini_api,
-    call_groq_api,
     normalize_elevenlabs_voice_choice,
     smart_call,
 )
@@ -565,10 +563,10 @@ TEMPLATE_CATALOG = {
 
 TEMPLATE_FILE_BASE = {
     'costa_serena': 'mediterraneo',
-    'oliva_natural': 'mediterraneo',
-    'terracota_suave': 'mediterraneo',
-    'brisa_calida': 'mediterraneo',
-    'arena_clara': 'mediterraneo',
+    'oliva_natural': 'beverly_hills',
+    'terracota_suave': 'dubai_night',
+    'brisa_calida': 'manhattan',
+    'arena_clara': 'tech_modern',
 }
 
 TEMPLATE_POST_MAP = {
@@ -2091,36 +2089,73 @@ def _resolve_content_preferences(user, template_tokens=None, payload=None):
     }
 
 
-def _get_random_caption_style_instructions():
+CAPTION_STYLE_LIBRARY = [
+    {
+        "id": "storytelling",
+        "name": "Storytelling y Emocional",
+        "instructions": (
+            "- Enfoque Narrativo/Emocional: Centrado en la experiencia de vida, el hogar, la calidez, la familia, "
+            "el estilo de vida y las sensaciones/experiencias que evoca habitar este espacio. Evitá sonar frío "
+            "o como una simple lista de datos. Hacé que el lector se imagine viviendo allí y disfrutando el lugar."
+        ),
+    },
+    {
+        "id": "commercial",
+        "name": "Comercial de Alto Impacto",
+        "instructions": (
+            "- Enfoque Comercial Directo: Centrado en las características de valor de la propiedad (especificaciones técnicas, "
+            "distribución, materiales premium, amenities, diseño funcional y precio de oportunidad). Sé directo, "
+            "claro y sumamente persuasivo, destacando por qué es una excelente compra en términos de confort y estatus."
+        ),
+    },
+    {
+        "id": "investment",
+        "name": "Oportunidad de Inversión",
+        "instructions": (
+            "- Enfoque de Inversión e Inversores: Centrado en la rentabilidad (ROI), plusvalía, la ubicación estratégica premium, "
+            "seguridad del capital, exclusividad, escasez en el mercado inmobiliario y el valor de la propiedad como activo "
+            "financiero inteligente. Usá un tono sofisticado, exclusivo y con foco en la solidez del negocio inmobiliario."
+        ),
+    },
+]
+
+
+def _get_caption_generation_count(listado_obj, formato='post'):
+    if not listado_obj or not isinstance(getattr(listado_obj, 'datos_extra', None), dict):
+        return 0
+
+    resultados = listado_obj.datos_extra.get('resultados') if isinstance(listado_obj.datos_extra.get('resultados'), dict) else {}
+    resultado = resultados.get(formato) if isinstance(resultados.get(formato), dict) else {}
+    raw_count = resultado.get('caption_generation_count', 0)
+    try:
+        return int(raw_count or 0)
+    except Exception:
+        return 0
+
+
+def _get_random_caption_style_instructions(listado_obj=None, formato='post'):
     import random
-    styles = [
-        {
-            "name": "Storytelling y Emocional",
-            "instructions": (
-                "- Enfoque Narrativo/Emocional: Centrado en la experiencia de vida, el hogar, la calidez, la familia, "
-                "el estilo de vida y las sensaciones/experiencias que evoca habitar este espacio. Evitá sonar frío "
-                "o como una simple lista de datos. Hacé que el lector se imagine viviendo allí y disfrutando el lugar."
-            )
-        },
-        {
-            "name": "Comercial de Alto Impacto y Características Destacadas",
-            "instructions": (
-                "- Enfoque Comercial Directo: Centrado en las características de valor de la propiedad (especificaciones técnicas, "
-                "distribución, materiales premium, amenities, diseño funcional y precio de oportunidad). Sé directo, "
-                "claro y sumamente persuasivo, destacando por qué es una excelente compra en términos de confort y estatus."
-            )
-        },
-        {
-            "name": "Oportunidad de Inversión y Negocio Premium",
-            "instructions": (
-                "- Enfoque de Inversión e Inversores: Centrado en la rentabilidad (ROI), plusvalía, la ubicación estratégica premium, "
-                "seguridad del capital, exclusividad, escasez en el mercado inmobiliario y el valor de la propiedad como activo "
-                "financiero inteligente. Usá un tono sofisticado, exclusivo y con foco en la solidez del negocio inmobiliario."
-            )
+
+    styles = CAPTION_STYLE_LIBRARY
+    if not styles:
+        return {
+            'id': 'storytelling',
+            'name': 'Storytelling y Emocional',
+            'instructions': '',
         }
-    ]
-    selected = random.choice(styles)
-    return selected["name"], selected["instructions"]
+
+    if listado_obj:
+        last_count = _get_caption_generation_count(listado_obj, formato=formato)
+        resultados = listado_obj.datos_extra.get('resultados') if isinstance(getattr(listado_obj, 'datos_extra', None), dict) else {}
+        current = resultados.get(formato) if isinstance(resultados.get(formato), dict) else {}
+        last_style_id = current.get('caption_style_id')
+        style_ids = [style['id'] for style in styles]
+        if last_style_id in style_ids:
+            selected = styles[(style_ids.index(last_style_id) + 1) % len(styles)]
+            return selected
+        return styles[last_count % len(styles)]
+
+    return random.choice(styles)
 
 
 def _caption_preference_prompt(prefs):
@@ -3476,21 +3511,12 @@ def generar_listado(request):
         
     system_prompt = "Sos un as copywriter de real estate. EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ descripciones profesionales, persuasivas y completas (listados) para propiedades en venta o alquiler en espaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±ol."
 
-    try:
-        result = call_groq_api(prompt_text, system_prompt=system_prompt)
-    except Exception as e_groq:
-        # Fallback: intentar con Gemini si Groq falla
-        try:
-            result = call_gemini_api(prompt_text, system_prompt=system_prompt, agente=request.user)
-        except APIKeyUnavailableError as e_gem:
-            return _quota_error_response(e_gem, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_texto_escena')
-        except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e_gem:
-            return _quota_error_response(e_gem, user=request.user, source='generar_texto_escena')
-        except Exception as e_gem:
-            return Response({
-                "error": "IA no disponible",
-                "detalle": f"Groq: {e_groq} | Gemini: {e_gem}"
-            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    result = smart_call(prompt_text, retries=1, agente=request.user, system_prompt=system_prompt)
+    if not result:
+        return Response({
+            "error": "IA no disponible",
+            "detalle": "Cerebras, Groq y Gemini no devolvieron respuesta."
+        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     if request.user.is_authenticated:
         incrementar_uso(request.user, 'ai')
@@ -5108,7 +5134,10 @@ def generar_carrusel(request):
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
-        style_name, style_instructions = _get_random_caption_style_instructions()
+        caption_style = _get_random_caption_style_instructions(listado_obj, formato='carrusel')
+        style_id = caption_style['id']
+        style_name = caption_style['name']
+        style_instructions = caption_style['instructions']
         print(f"[CARRUSEL] Generando caption con estilo: {style_name}")
 
         prompt_text = f"""Escribi UN SOLO caption final para Instagram Carrusel, listo para publicar.
@@ -5131,12 +5160,16 @@ Requisitos obligatorios:
         caption = _finalize_caption_text(caption, data, formato='carrusel', prefs=content_prefs, max_chars=2200)
 
         if listado_obj:
+            caption_generation_count = _get_caption_generation_count(listado_obj, 'carrusel') + 1
             actualizar_resultados_listado(
                 listado_obj,
                 'carrusel',
                 {
                     "slides": slides_urls,
                     "caption": caption,
+                    "caption_style_id": style_id,
+                    "caption_style_name": style_name,
+                    "caption_generation_count": caption_generation_count,
                     "template_id": template_id,
                     "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
                     "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
@@ -5158,6 +5191,8 @@ Requisitos obligatorios:
         return Response({
             "slides": slides_urls,
             "caption": caption,
+            "caption_style_id": style_id,
+            "caption_style_name": style_name,
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
@@ -6184,7 +6219,10 @@ def generar_imagen_post(request):
         print(f"[POST] Template elegido: {template_post}")
         image_stream = render_html_to_image(html_content, 1080, 1350)
 
-        style_name, style_instructions = _get_random_caption_style_instructions()
+        caption_style = _get_random_caption_style_instructions(listado_obj, formato='post')
+        style_id = caption_style['id']
+        style_name = caption_style['name']
+        style_instructions = caption_style['instructions']
         print(f"[POST] Generando caption con estilo: {style_name}")
 
         prompt_text = f"""Escribi UN SOLO caption final para Instagram Feed, listo para publicar.
@@ -6224,12 +6262,16 @@ Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             }, status=500)
 
         if listado_obj:
+            caption_generation_count = _get_caption_generation_count(listado_obj, 'post') + 1
             actualizar_resultados_listado(
                 listado_obj,
                 'post',
                 {
                     "url": img_url,
                     "caption": caption,
+                    "caption_style_id": style_id,
+                    "caption_style_name": style_name,
+                    "caption_generation_count": caption_generation_count,
                     "template_id": template_id,
                     "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
                     "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
@@ -6251,6 +6293,8 @@ Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             "url": img_url,
             "public_id": public_id,
             "caption": caption,
+            "caption_style_id": style_id,
+            "caption_style_name": style_name,
             "texto": caption,
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
@@ -6434,7 +6478,10 @@ def generar_caption_story(request):
             selection,
         )
 
-        style_name, style_instructions = _get_random_caption_style_instructions()
+        caption_style = _get_random_caption_style_instructions(listado_obj, formato='story')
+        style_id = caption_style['id']
+        style_name = caption_style['name']
+        style_instructions = caption_style['instructions']
         print(f"[STORY] Generando caption con estilo: {style_name}")
 
         prompt_text = f"""Escribi UN SOLO caption opcional para Instagram Story, listo para publicar.
@@ -6456,12 +6503,16 @@ Requisitos obligatorios:
         caption = _finalize_caption_text(raw_caption, data, formato='story', prefs=content_prefs, max_chars=650)
 
         if listado_obj:
+            caption_generation_count = _get_caption_generation_count(listado_obj, 'story') + 1
             datos = listado_obj.datos_extra if isinstance(listado_obj.datos_extra, dict) else {}
             story_result = (((datos.get('resultados') or {}).get('story')) or {})
             if not isinstance(story_result, dict):
                 story_result = {}
             story_result['caption'] = caption
             story_result['texto'] = caption
+            story_result['caption_style_id'] = style_id
+            story_result['caption_style_name'] = style_name
+            story_result['caption_generation_count'] = caption_generation_count
             actualizar_resultados_listado(listado_obj, 'story', story_result)
 
         if request.user.is_authenticated:
@@ -6475,7 +6526,7 @@ Requisitos obligatorios:
                 'El caption para story fue generado correctamente y ya lo podés usar.',
             )
 
-        return Response({"caption": caption, "texto": caption}, status=status.HTTP_200_OK)
+        return Response({"caption": caption, "caption_style_id": style_id, "caption_style_name": style_name, "texto": caption}, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
         return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_caption_story')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
@@ -9026,14 +9077,10 @@ REQUISITOS:
 - Responde SOLO el texto, sin JSON, sin comillas, sin explicaciones"""
 
     try:
-        result = call_gemini_api(prompt, agente=request.user)
+        result = smart_call(prompt, retries=1, agente=request.user)
         if not result:
             return Response({"error": "No se pudo generar texto"}, status=503)
         return Response({"texto": result.strip()})
-    except APIKeyUnavailableError as e:
-        return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_texto_escena')
-    except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
-        return _quota_error_response(e, user=request.user, source='generar_texto_escena')
     except Exception:
         logger.exception("Error generando texto de escena")
         return Response({"error": "Error al generar texto"}, status=500)

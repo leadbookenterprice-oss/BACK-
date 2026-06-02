@@ -986,7 +986,7 @@ class UserAPIQuota(models.Model):
         """
         now = timezone.now()
         servicio_nombre = str(getattr(self.servicio, 'nombre', '') or '').lower()
-        uses_twelve_hour_reset = servicio_nombre in {'gemini', 'elevenlabs'}
+        uses_twelve_hour_reset = servicio_nombre in {'gemini', 'elevenlabs', 'cerebras'}
 
         if uses_twelve_hour_reset:
             should_reset = self.last_reset_daily is None or now - self.last_reset_daily >= timedelta(hours=12)
@@ -1053,11 +1053,11 @@ class UserAPIQuota(models.Model):
 
         # Límite base según plan
         planes_limites = {
-            'free':     {'gemini': 1500, 'elevenlabs': 1500, 'uploadpost': 999999},
-            'starter':  {'gemini': 3000, 'elevenlabs': 3000, 'uploadpost': 999999},
-            'pro':      {'gemini': 7500, 'elevenlabs': 7500, 'uploadpost': 999999},
-            'scale':    {'gemini': 15000,'elevenlabs': 15000,'uploadpost': 999999},
-            'business': {'gemini': 30000,'elevenlabs': 30000,'uploadpost': 999999},
+            'free':     {'gemini': 1500, 'elevenlabs': 1500, 'cerebras': 1500, 'uploadpost': 999999},
+            'starter':  {'gemini': 3000, 'elevenlabs': 3000, 'cerebras': 3000, 'uploadpost': 999999},
+            'pro':      {'gemini': 7500, 'elevenlabs': 7500, 'cerebras': 7500, 'uploadpost': 999999},
+            'scale':    {'gemini': 15000,'elevenlabs': 15000,'cerebras': 15000,'uploadpost': 999999},
+            'business': {'gemini': 30000,'elevenlabs': 30000,'cerebras': 30000,'uploadpost': 999999},
         }
         planes_limites_mensuales = {
             'free':     {'uploadpost': 10},

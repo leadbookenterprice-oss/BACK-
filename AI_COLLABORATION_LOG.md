@@ -77,6 +77,112 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-06-02 - OpenCode - Switch active generation flow to Cerebras only
+
+Objective:
+
+- Use Cerebras alone for current AI content generation tests and remove Gemini/Groq from the active generation path.
+
+Files modified:
+
+- `api/ai_services.py`
+- `api/views.py`
+
+Changes made:
+
+- Simplified `smart_call()` to call Cerebras only.
+- Reduced the active HTML generation cascades to Cerebras-only model attempts.
+- Left the legacy Gemini/Groq helpers in place but removed them from the live generation path.
+
+Verification:
+
+- `python -m py_compile "api\\ai_services.py" "api\\models.py" "api\\services\\pool_service.py" "api\\views.py" "api\\views_admin.py"` OK.
+
+Commit/push:
+
+- No commit/push.
+
+Pending/risks:
+
+- Legacy provider helpers still exist for future reactivation, but they are no longer used by the current generation flow.
+- Agent: OpenCode
+
+### 2026-06-02 - OpenCode - Add Cerebras to AI generation and admin pool
+
+Objective:
+
+- Integrate Cerebras as a first-class AI provider for current content generation and expose it in the admin pool UI.
+
+Files modified:
+
+- `api/ai_services.py`
+- `api/models.py`
+- `api/services/pool_service.py`
+- `api/views.py`
+- `api/views_admin.py`
+
+Changes made:
+
+- Added Cerebras chat completion support using the OpenAI-compatible `https://api.cerebras.ai/v1/chat/completions` endpoint with model fallback between `gpt-oss-120b` and `zai-glm-4.7`.
+- Updated the generic smart text cascade and the HTML generation cascades so Cerebras is tried before the existing providers.
+- Routed `generar_listado`, `generar_escena`, and the shared smart text path through the new cascade instead of calling only Gemini/Groq directly.
+- Added Cerebras to the service catalog, per-plan API assignments, and user quota limits so the pool can assign it like the existing AI services.
+- Updated the admin API-key creation endpoints so new services can be created with sensible defaults and Cerebras can be loaded from the admin pool.
+
+Verification:
+
+- `python -m py_compile "api\\ai_services.py" "api\\models.py" "api\\services\\pool_service.py" "api\\views.py" "api\\views_admin.py"` OK.
+
+Commit/push:
+
+- No commit/push.
+
+Pending/risks:
+
+- Cerebras quota behavior is inferred from response codes; if the provider changes its error payloads, the exhaustion detection may need tuning.
+- The admin global-keys tab remains a stub in the current backend and was not needed for the Cerebras pool flow.
+- Agent: OpenCode
+
+### 2026-06-02 - OpenCode - PDF/template/caption/landing stabilization
+
+Objective:
+
+- Fix PDF upload failures, make template choices render different layouts, rotate caption styles, and reduce landing clipping/cut cards.
+
+Files modified:
+
+- `api/services/almacenamiento.py`
+- `api/ai_services.py`
+- `api/views.py`
+- `front-Saas/src/pages/LandingPage.jsx`
+- `front-Saas/src/components/landing/HeroSection.jsx`
+- `front-Saas/src/components/landing/HowItWorksSection.jsx`
+- `front-Saas/src/components/landing/FeaturesSection.jsx`
+- `front-Saas/src/components/ui/pricing-section-4.jsx`
+- `front-Saas/src/components/ui/CardSwap.css`
+
+Changes made:
+
+- **PDF upload**: Cloudinary upload now wraps raw PDF bytes in `BytesIO` before sending them to the SDK, which removes the fragile raw-bytes path.
+- **Template selection**: The custom template aliases now resolve to different physical HTML templates instead of collapsing to the same mediterraneo layout.
+- **Captions**: Added three caption style archetypes (`storytelling`, `commercial`, `investment`) with rotation/persistence per listing and per format, so successive generations do not reuse the same tone.
+- **Landing layout**: Expanded hero width slightly, reduced oversized title sizing, increased `GooeyText` height, reduced some card paddings/heights, and made the landing card content scrollable with extra bottom room.
+
+Verification:
+
+- `python -m py_compile "back-\\Back-\\api\\views.py" "back-\\Back-\\api\\ai_services.py" "back-\\Back-\\api\\services\\almacenamiento.py"` OK.
+- `npm run build` in `front-Saas` OK.
+
+Commit/push:
+
+- No commit/push.
+
+Pending/risks:
+
+- PDF generation still depends on valid Cloudinary credentials/network in the production environment.
+- Very short viewports may still need one more spacing pass if the remaining landing sections are visually dense.
+- Agent: OpenCode
+
 ### 2026-06-02 - OpenCode - Remove real admin bootstrap and API assignments
 
 Objective:
