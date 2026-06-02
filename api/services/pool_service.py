@@ -56,6 +56,10 @@ def _desired_api_counts_for_plan(plan):
     return counts
 
 
+def _is_staff_account(user):
+    return bool(getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False))
+
+
 def ensure_core_services():
     """Crea el catálogo mínimo de servicios para que el pool pueda asignar keys."""
     for nombre, defaults in SERVICE_DEFAULTS.items():
@@ -103,6 +107,9 @@ class APIPoolService:
         Crea también el UserAPIQuota correspondiente.
         Devuelve la lista de servicios que tienen al menos una key activa o fueron asignados.
         """
+        if _is_staff_account(user):
+            return []
+
         asignados = []
         ensure_core_services()
         desired_counts = _desired_api_counts_for_plan(getattr(user, 'plan_nombre', 'starter'))
@@ -236,6 +243,9 @@ class APIPoolService:
         Se usa al completar un pago de 'extra_gemini', 'extra_elevenlabs', etc.
         Devuelve la asignación creada o None si no hay stock.
         """
+        if _is_staff_account(user):
+            return None
+
         with transaction.atomic():
             servicio = Servicio.objects.filter(nombre=nombre_servicio, activo=True).first()
             if not servicio:

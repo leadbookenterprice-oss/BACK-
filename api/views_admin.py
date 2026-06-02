@@ -347,8 +347,8 @@ def admin_usuarios_list(request):
     if not _is_staff_check(request):
         return Response({'error': 'Forbidden'}, status=403)
     
-    # Solo usuarios no eliminados (el manager Agent.objects ya los filtra)
-    usuarios = Agent.objects.all().order_by('-fecha_registro')
+    # Solo clientes reales; el dashboard admin usa sesión firmada, no un Agent staff.
+    usuarios = Agent.objects.filter(is_staff=False, is_superuser=False).order_by('-fecha_registro')
     data = [{
         'id': u.id,
         'email': u.email,
@@ -608,9 +608,9 @@ def admin_apikeys_auto_repair(request):
     user_ids = request.data.get('user_ids', [])
     
     if user_ids:
-        users = Agent.objects.filter(id__in=user_ids, is_active=True)
+        users = Agent.objects.filter(id__in=user_ids, is_active=True, is_staff=False, is_superuser=False)
     else:
-        users = Agent.objects.filter(is_active=True)
+        users = Agent.objects.filter(is_active=True, is_staff=False, is_superuser=False)
         
     fixed = 0
     for u in users:

@@ -1582,6 +1582,9 @@ def setup_nuevo_usuario(sender, instance, created, **kwargs):
     TODO dentro de transaction.atomic() — si falla cualquier paso, se revierte todo.
     Si falla, el admin ve una AdminAlert crítica y puede reparar manualmente.
     """
+    if getattr(instance, 'is_staff', False) or getattr(instance, 'is_superuser', False):
+        return
+
     if created and instance.is_active and not instance.eliminado_en:
         from api.services.pool_service import assign_apis_to_agent
         try:
@@ -1622,6 +1625,13 @@ def recalcular_quotas_al_cambiar_plan(sender, instance, created, **kwargs):
     if not created:
         for quota in instance.api_quotas.all():
             quota.recalcular_limite(plan=instance.plan_nombre)
+        if getattr(instance, 'is_staff', False) or getattr(instance, 'is_superuser', False):
+            try:
+                from api.services.pool_service import APIPoolService
+                APIPoolService.release_keys_from_user(instance)
+            except Exception:
+                pass
+            return
         if not instance.is_active or instance.eliminado_en:
             return
         try:

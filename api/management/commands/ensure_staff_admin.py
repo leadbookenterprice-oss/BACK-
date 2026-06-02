@@ -5,27 +5,33 @@ from django.core.management.base import BaseCommand, CommandError
 from api.models import Agent
 
 
-DEFAULT_ADMIN_EMAIL = "admin@leadbook.com.ar"
-DEFAULT_ADMIN_PASSWORD = "LeadBookAdmin2026!"
+DEFAULT_ADMIN_NAME = "LeadBook Admin"
+
+
+def _env_truthy(value):
+    return str(value or '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 class Command(BaseCommand):
-    help = "Creates or promotes a staff admin account for the admin dashboard."
+    help = "Opt-in helper to create/promote a staff account. Not used by the admin dashboard session login."
 
     def add_arguments(self, parser):
-        parser.add_argument("--email", default=os.getenv("ADMIN_BOOTSTRAP_EMAIL", DEFAULT_ADMIN_EMAIL))
-        parser.add_argument("--password", default=os.getenv("ADMIN_BOOTSTRAP_PASSWORD", DEFAULT_ADMIN_PASSWORD))
-        parser.add_argument("--name", default=os.getenv("ADMIN_BOOTSTRAP_NAME", "LeadBook Admin"))
+        parser.add_argument("--email", default=os.getenv("ADMIN_BOOTSTRAP_EMAIL", ""))
+        parser.add_argument("--password", default=os.getenv("ADMIN_BOOTSTRAP_PASSWORD", ""))
+        parser.add_argument("--name", default=os.getenv("ADMIN_BOOTSTRAP_NAME", DEFAULT_ADMIN_NAME))
 
     def handle(self, *args, **options):
+        if not _env_truthy(os.getenv('ALLOW_STAFF_ADMIN_BOOTSTRAP')):
+            raise CommandError("Staff admin bootstrap is disabled. Set ALLOW_STAFF_ADMIN_BOOTSTRAP=True to run it explicitly.")
+
         email = str(options["email"] or "").strip().lower()
         password = str(options["password"] or "")
-        name = str(options["name"] or "").strip() or "LeadBook Admin"
+        name = str(options["name"] or "").strip() or DEFAULT_ADMIN_NAME
 
         if not email:
-            raise CommandError("Admin email is required.")
+            raise CommandError("ADMIN_BOOTSTRAP_EMAIL or --email is required.")
         if not password:
-            raise CommandError("Admin password is required.")
+            raise CommandError("ADMIN_BOOTSTRAP_PASSWORD or --password is required.")
 
         user = Agent.objects.all_including_deleted().filter(email__iexact=email).first()
         created = False

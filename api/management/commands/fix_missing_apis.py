@@ -8,7 +8,7 @@ class Command(BaseCommand):
     help = 'Repara usuarios Starter con APIs faltantes usando el schema actual de asignaciones'
 
     def handle(self, *args, **kwargs):
-        users = Agent.objects.filter(plan_nombre='starter')
+        users = Agent.objects.filter(plan_nombre='starter', is_staff=False, is_superuser=False)
         fixed = 0
         self.stdout.write(self.style.SUCCESS(f'Iniciando revisión de {users.count()} usuarios Starter...'))
 

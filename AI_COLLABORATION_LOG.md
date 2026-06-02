@@ -77,6 +77,52 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-06-02 - OpenCode - Remove real admin bootstrap and API assignments
+
+Objective:
+
+- Ensure the admin dashboard uses only env-backed credentials/session tokens and never creates or depends on a real `Agent` user that occupies API keys.
+
+Files modified:
+
+- `railway.json`
+- `api/management/commands/ensure_staff_admin.py`
+- `api/management/commands/cleanup_bootstrap_admin.py`
+- `api/management/commands/fix_missing_apis.py`
+- `api/models.py`
+- `api/services/pool_service.py`
+- `api/views_admin.py`
+- `admin_panel/tests.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Removed `ensure_staff_admin` from the Railway web startup path.
+- Added `cleanup_bootstrap_admin` to Railway startup so the legacy real admin `Agent` is soft-deleted and any active API assignments are released back to the pool.
+- Made `ensure_staff_admin` opt-in only via `ALLOW_STAFF_ADMIN_BOOTSTRAP=True` and removed its hardcoded default password/email behavior.
+- Blocked staff/superuser accounts from receiving base or extra API assignments in `APIPoolService`.
+- Updated `Agent` post-save signals to skip staff/superuser API assignment and release any existing staff assignments on save.
+- Excluded staff/superusers from admin user listing, admin auto-repair, and `fix_missing_apis`.
+- Added regression tests for staff not receiving APIs, normal users still receiving APIs, and cleanup releasing/deleting the legacy admin user.
+
+Verification:
+
+- `py -3 -m py_compile admin_panel/tests.py api/management/commands/ensure_staff_admin.py api/management/commands/cleanup_bootstrap_admin.py api/management/commands/fix_missing_apis.py api/models.py api/services/pool_service.py api/views_admin.py` OK.
+- `py -3 manage.py test admin_panel.tests.AdminSessionAuthTests admin_panel.tests.AdminBootstrapCleanupTests` OK, 5 tests.
+- `py -3 manage.py check` OK.
+- `py -3 -c "import json; json.load(open('railway.json', encoding='utf-8')); print('railway.json OK')"` OK.
+- `git diff --check` OK.
+- Grep confirmed no `LeadBookAdmin2026` hardcoded password remains and Railway startup calls `cleanup_bootstrap_admin`, not `ensure_staff_admin`.
+
+Commit/push:
+
+- Pending commit/push.
+
+Pending/risks:
+
+- Deploy backend so Railway runs `cleanup_bootstrap_admin` once at startup; after that `LeadBook Admin #10` should disappear from normal users and its assigned keys should return to available unless another active assignment uses them.
+- Production still needs `ADMIN_DASH_EMAIL` and `ADMIN_DASH_PASSWORD` or `ADMIN_DASH_PASSWORD_SHA256` for dashboard login.
+
 ### 2026-05-25 - OpenCode - Admin dashboard env-backed session login
 
 Objective:
