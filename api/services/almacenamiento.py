@@ -186,7 +186,10 @@ class AlmacenamientoCloudinary:
         # Construir public_id determinístico pero con un hash único para evitar caches de permisos (401)
         import uuid
         unique_hash = uuid.uuid4().hex[:6]
-        
+
+        if isinstance(contenido, (bytes, bytearray, memoryview)):
+            contenido = io.BytesIO(bytes(contenido))
+
         # Lógica especial para listados/fotos de propiedades
         if tipo == TIPO_FOTO_PROPIEDAD:
             base_id = f'leadbook/listados/usuario_{user_id}'
