@@ -149,7 +149,8 @@ Verification:
 
 Commit/push:
 
-- Push requested by user; provider catalog changes are included in this session's push to `origin/main`.
+- Local commit created: `f4a56f5 feat(api): seed ai provider services`.
+- Remote push to `origin/main` was attempted but failed because GitHub rejected the HTTPS credentials (`Invalid username or token`); `gh` is not installed in this environment.
 
 Pending/risks:
 
