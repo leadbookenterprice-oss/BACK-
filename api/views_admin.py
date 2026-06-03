@@ -10,6 +10,7 @@ from django.utils.crypto import constant_time_compare
 from django.utils.timezone import now
 from datetime import timedelta
 from django.db.models import Count, Sum, Q
+import cloudinary.uploader
 from .models import (
     Agent, Listado, Plan, APIKey, AdminAlert, Servicio, 
     UserAPIAssignment, UserAPIQuota, VideoMusic, VideoSFX, ConfiguracionSistema,
@@ -742,8 +743,29 @@ def admin_branding_watermark(request):
     config_obj, _ = ConfiguracionSistema.objects.get_or_create(clave='watermark')
     if request.method == 'GET':
         return Response({'url': config_obj.datos.get('url')})
-    # Update logic (skipped for brevity, but model is compatible)
-    return Response({'ok': True})
+
+    image_value = request.data.get('image') or request.data.get('url')
+    if not image_value:
+        return Response({'error': 'Falta image o url'}, status=400)
+
+    resolved_url = str(image_value).strip()
+    if resolved_url.startswith('data:') or resolved_url.startswith('http'):
+        try:
+            uploaded = cloudinary.uploader.upload(
+                resolved_url,
+                folder='leadbook/branding',
+                public_id='watermark',
+                overwrite=True,
+                resource_type='image',
+            )
+            resolved_url = uploaded.get('secure_url') or uploaded.get('url') or resolved_url
+        except Exception as exc:
+            return Response({'error': f'No se pudo subir la marca de agua: {exc}'}, status=400)
+
+    config_obj.datos = {'url': resolved_url}
+    config_obj.valor = resolved_url
+    config_obj.save(update_fields=['datos', 'valor', 'actualizado_en'])
+    return Response({'ok': True, 'url': resolved_url})
 
 # --- Más endpoints ---
 @api_view(['POST'])
