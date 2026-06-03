@@ -3,6 +3,8 @@ from django.utils import timezone
 TRIAL_EXPIRED_CODE = 'trial_expired'
 TRIAL_EXPIRED_MESSAGE = 'Tu prueba Starter expiro. Para seguir usando LeadBook, contactanos o compra un plan.'
 PRO_FEATURE_PLANS = {'pro', 'scale', 'business'}
+STARTER_DAILY_LISTING_LIMIT = 30
+STARTER_DAILY_LISTING_PLANS = {'free', 'starter'}
 
 LIMITES = {
     # Alias legacy: las cuentas nuevas con codigo usan starter.
@@ -19,6 +21,49 @@ def get_limites(agente):
 
 def get_plan_name(agente):
     return str(getattr(agente, 'plan_nombre', '') or 'starter').strip().lower()
+
+def get_daily_listing_limit(agente):
+    plan = get_plan_name(agente)
+    if plan in STARTER_DAILY_LISTING_PLANS:
+        return STARTER_DAILY_LISTING_LIMIT
+    return None
+
+def get_daily_listing_usage(agente):
+    from api.models import UsageLog
+    now = timezone.now()
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return UsageLog.objects.filter(agent=agente, tipo='property', fecha__gte=start_of_day).count()
+
+def get_daily_listing_quota(agente):
+    limit = get_daily_listing_limit(agente)
+    used = get_daily_listing_usage(agente) if limit is not None else 0
+    remaining = None if limit is None else max(0, limit - used)
+    return {
+        'applies': limit is not None,
+        'plan': get_plan_name(agente),
+        'used': used,
+        'limit': limit,
+        'remaining': remaining,
+        'exhausted': bool(limit is not None and used >= limit),
+        'window': 'day',
+        'excludes_video': True,
+    }
+
+def build_daily_listing_limit_payload(agente):
+    quota = get_daily_listing_quota(agente)
+    return {
+        'error': 'daily_listing_limit_reached',
+        'code': 'daily_listing_limit_reached',
+        'mensaje': 'Alcanzaste el limite diario de 30 listados del plan Starter. El video se maneja con limites separados.',
+        'quota': quota,
+        'usados': quota['used'],
+        'limite': quota['limit'],
+        'excludes_video': True,
+    }
+
+def puede_crear_listado_hoy(agente):
+    quota = get_daily_listing_quota(agente)
+    return not quota['exhausted'], quota
 
 def has_pro_feature_access(agente):
     if getattr(agente, 'is_staff', False):

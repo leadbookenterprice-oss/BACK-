@@ -7,6 +7,7 @@ Gestión del pool de APIs usando el nuevo schema:
 """
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Count, Q
 from api.models import APIKey, UserAPIAssignment, Servicio, AdminAlert, UserAPIQuota
 
 
@@ -31,7 +32,7 @@ SERVICE_DEFAULTS = {
     },
     'cerebras': {
         'descripcion': 'Cerebras',
-        'default_daily_limit': 1500,
+        'default_daily_limit': 1710,
         'default_monthly_limit': None,
         'extra_increment': 1500,
     },
@@ -44,6 +45,8 @@ SERVICE_DEFAULTS = {
 }
 
 SERVICIOS_CRITICOS = ['gemini', 'elevenlabs', 'cerebras', 'uploadpost']
+CEREBRAS_STARTER_SHARED_USERS_PER_KEY = 57
+CEREBRAS_SHARED_PLANS = {'free', 'starter'}
 
 PLAN_API_COUNTS = {
     'free': {'gemini': 1, 'elevenlabs': 1, 'cerebras': 1},
@@ -64,6 +67,17 @@ def _desired_api_counts_for_plan(plan):
 
 def _is_staff_account(user):
     return bool(getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False))
+
+
+def _uses_shared_cerebras(nombre_servicio, plan):
+    return (
+        str(nombre_servicio or '').strip().lower() == 'cerebras'
+        and str(plan or 'starter').strip().lower() in CEREBRAS_SHARED_PLANS
+    )
+
+
+def _active_key_assignments_count_filter():
+    return Q(assignments__activo=True)
 
 
 def ensure_core_services():
@@ -119,6 +133,7 @@ class APIPoolService:
         asignados = []
         ensure_core_services()
         desired_counts = _desired_api_counts_for_plan(getattr(user, 'plan_nombre', 'starter'))
+        plan_name = str(getattr(user, 'plan_nombre', 'starter') or 'starter').strip().lower()
 
         for nombre_servicio, desired_count in desired_counts.items():
             servicio = Servicio.objects.filter(nombre=nombre_servicio, activo=True).first()
@@ -152,10 +167,21 @@ class APIPoolService:
             missing_count = desired_count - active_count
             assigned_any = active_count > 0
             for _ in range(missing_count):
-                key = APIKey.objects.filter(
-                    servicio=servicio,
-                    status='available'
-                ).exclude(id__in=keys_en_uso).order_by('requests_today', 'id').first()
+                if _uses_shared_cerebras(nombre_servicio, plan_name):
+                    key = (
+                        APIKey.objects
+                        .filter(servicio=servicio, status__in=['available', 'assigned'])
+                        .exclude(id__in=keys_en_uso)
+                        .annotate(active_assignments_count=Count('assignments', filter=_active_key_assignments_count_filter()))
+                        .filter(active_assignments_count__lt=CEREBRAS_STARTER_SHARED_USERS_PER_KEY)
+                        .order_by('active_assignments_count', 'requests_today', 'id')
+                        .first()
+                    )
+                else:
+                    key = APIKey.objects.filter(
+                        servicio=servicio,
+                        status='available'
+                    ).exclude(id__in=keys_en_uso).order_by('requests_today', 'id').first()
 
                 if not key:
                     _create_assign_failed_alert(user, nombre_servicio, desired_count - active_count)

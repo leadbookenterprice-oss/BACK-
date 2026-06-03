@@ -53,7 +53,7 @@ def _service_defaults(nombre):
     return {
         'descripcion': descripcion,
         'activo': True,
-        'default_daily_limit': 1500 if nombre in {'gemini', 'elevenlabs', 'cerebras'} else (999999 if nombre == 'uploadpost' else 1500),
+        'default_daily_limit': 1710 if nombre == 'cerebras' else (1500 if nombre in {'gemini', 'elevenlabs'} else (999999 if nombre == 'uploadpost' else 1500)),
         'default_monthly_limit': 10 if nombre == 'uploadpost' else None,
         'extra_increment': 10 if nombre == 'uploadpost' else 1500,
     }
@@ -101,6 +101,28 @@ def _api_key_has_history(key):
         return True
     counters = [key.requests_today, key.requests_this_month, key.total_requests, key.error_count]
     return bool(key.last_used_at or any(int(value or 0) > 0 for value in counters))
+
+
+def _key_assignment_stats(key):
+    assignments = UserAPIAssignment.objects.filter(apikey=key, activo=True).select_related('user')
+    users = [a.user for a in assignments if a.user_id]
+    service_name = _normalize_service_name(getattr(getattr(key, 'servicio', None), 'nombre', ''))
+    shared_capacity = 57 if service_name == 'cerebras' else 1
+    assigned_count = len(users)
+    return {
+        'assigned_count': assigned_count,
+        'shared_capacity': shared_capacity,
+        'shared_available_slots': max(0, shared_capacity - assigned_count),
+        'sharing_mode': 'starter_shared_57' if service_name == 'cerebras' else 'exclusive',
+        'assigned_users': [
+            {
+                'id': user.id,
+                'email': user.email,
+                'plan': getattr(user, 'plan_nombre', ''),
+            }
+            for user in users[:12]
+        ],
+    }
 
 
 def _cleanup_duplicate_api_keys(service_names=None):
@@ -445,8 +467,9 @@ def admin_apikeys_pool(request):
         consumo = usage['usage']
         porcentaje = min(100, int((consumo / limite) * 100)) if limite else 0
         
-        # Encontrar quién la tiene asignada (como primaria)
-        asig_primaria = UserAPIAssignment.objects.filter(apikey=k, activo=True, is_primary=True).first()
+        # Encontrar quién la tiene asignada. Cerebras Starter puede ser compartida.
+        assignment_stats = _key_assignment_stats(k)
+        asig_primaria = UserAPIAssignment.objects.filter(apikey=k, activo=True, is_primary=True).select_related('user').first()
         asig_extras = UserAPIAssignment.objects.filter(apikey=k, activo=True, is_primary=False).count()
 
         data.append({
@@ -465,7 +488,14 @@ def admin_apikeys_pool(request):
             'porcentaje': porcentaje,
             'error_count': k.error_count,
             'asignada_a': asig_primaria.user.email if asig_primaria else None,
-            'extras_count': asig_extras
+            'assigned_to_email': asig_primaria.user.email if asig_primaria else None,
+            'assigned_to_id': asig_primaria.user.id if asig_primaria else None,
+            'extras_count': asig_extras,
+            'assigned_users_count': assignment_stats['assigned_count'],
+            'shared_capacity': assignment_stats['shared_capacity'],
+            'shared_available_slots': assignment_stats['shared_available_slots'],
+            'sharing_mode': assignment_stats['sharing_mode'],
+            'assigned_users': assignment_stats['assigned_users'],
         })
     
     return Response({'keys': data})

@@ -77,6 +77,45 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-06-03 - OpenCode - Starter daily listing quota and shared Cerebras pool
+
+Objective:
+
+- Implement the new Starter API model: one Cerebras key can serve up to 57 Starter users, with 30 listing creations per user per day, excluding video.
+
+Files modified:
+
+- `api/plan_utils.py`
+- `api/services/pool_service.py`
+- `api/ai_services.py`
+- `api/views.py`
+- `api/views_usage.py`
+- `api/views_admin.py`
+
+Changes made:
+
+- Added Starter/free daily listing quota helpers: 30 `property` creations per day, explicitly excluding video.
+- Enforced the daily listing quota only on `POST /listados/`; video remains separate and does not consume this quota.
+- Added quota payloads to listing creation responses, dashboard payloads, `/cuota-ia/`, and `/auth/mi-uso/`.
+- Changed Cerebras assignment for Starter/free to shared mode: existing assigned Cerebras keys may receive additional users up to 57 active assignments.
+- Kept Pro/Scale/Business behavior unchanged because their new calculations are not defined yet.
+- Updated Cerebras default key daily request capacity to `1710` (57 users x 30 listings) for newly created/ensured services.
+- Fixed Cerebras calls to prefer the user's assigned key instead of taking the first global pool key.
+- Added admin API metadata for Cerebras shared capacity: assigned user count, capacity, available slots, sharing mode, and sample assigned users.
+
+Verification:
+
+- `python -m py_compile api/ai_services.py api/services/pool_service.py api/views.py api/views_usage.py api/views_admin.py api/plan_utils.py` OK.
+
+Commit/push:
+
+- Pending commit in this session.
+
+Pending/risks:
+
+- Existing Cerebras `Servicio` rows will be updated to default limit 1710 when `ensure_core_services()` runs; existing `APIKey.google_daily_limit` values are not migrated automatically.
+- Pro/Scale/Business new limits remain intentionally unchanged pending product calculation.
+
 ### 2026-06-02 - OpenCode - Switch active generation flow to Cerebras only
 
 Objective:

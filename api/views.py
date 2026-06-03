@@ -3544,6 +3544,8 @@ class DashboardView(APIView):
 
         susc = get_suscripcion(user)
         plan = susc.plan
+        from .plan_utils import get_daily_listing_quota
+        daily_listing_quota = get_daily_listing_quota(user)
 
         return Response({
             "nombre_inmobiliaria": getattr(user, 'nombre_inmobiliaria', None),
@@ -3566,7 +3568,8 @@ class DashboardView(APIView):
                 "ai_used": susc.ai_used,
                 "images_used": susc.images_used,
                 "videos_used": susc.videos_used
-            }
+            },
+            "daily_listing_quota": daily_listing_quota,
         })
 
 class PerfilView(APIView):
@@ -5383,7 +5386,11 @@ class ListadosView(APIView):
         if block:
             return block
         from .models import Agent
+        from .plan_utils import build_daily_listing_limit_payload, puede_crear_listado_hoy
         user = Agent.objects.get(id=request.user.id)
+        can_create_today, daily_listing_quota = puede_crear_listado_hoy(user)
+        if not can_create_today:
+            return Response(build_daily_listing_limit_payload(user), status=status.HTTP_429_TOO_MANY_REQUESTS)
         
         # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # puede, usados, maximo = verificar_limite_plan(user)
@@ -5438,7 +5445,12 @@ class ListadosView(APIView):
         return Response({
             "mensaje": "Listado guardado", 
             "id": listado.id,
-            "titulo": listado.titulo
+            "titulo": listado.titulo,
+            "daily_listing_quota": {
+                **daily_listing_quota,
+                "used": daily_listing_quota["used"] + 1 if daily_listing_quota.get("limit") is not None else daily_listing_quota.get("used", 0),
+                "remaining": max(0, daily_listing_quota["remaining"] - 1) if daily_listing_quota.get("remaining") is not None else None,
+            }
         }, status=status.HTTP_201_CREATED)
 
 
@@ -9312,6 +9324,7 @@ def marcar_todas_leidas(request):
 @permission_classes([IsAuthenticated])
 def estado_cuota_ia(request):
     from .models import UserAPIQuota, Suscripcion
+    from .plan_utils import get_daily_listing_quota
     try:
         quota = UserAPIQuota.objects.get(user=request.user, servicio__nombre='gemini')
         quota.maybe_reset_daily()
@@ -9338,7 +9351,8 @@ def estado_cuota_ia(request):
         'agotada': agotada,
         'usado': ai_used,
         'limite': limite,
-        'porcentaje': min(100, int((ai_used / limite) * 100)) if limite > 0 else 0
+        'porcentaje': min(100, int((ai_used / limite) * 100)) if limite > 0 else 0,
+        'daily_listing_quota': get_daily_listing_quota(request.user),
     })
 
 @api_view(['GET', 'POST'])

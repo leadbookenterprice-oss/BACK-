@@ -28,6 +28,11 @@ SERVICIO_MAP = {
         'nombre': "Gestor de Redes",
         'unidad': "publicaciones",
         'icono': "share"
+    },
+    'cerebras': {
+        'nombre': "Motor IA Cerebras",
+        'unidad': "peticiones IA",
+        'icono': "brain"
     }
 }
 
@@ -55,7 +60,27 @@ def mi_uso_apis(request):
     get_uploadpost_quota(user)
     quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
 
+    from api.plan_utils import get_daily_listing_quota
     stats = []
+    listing_quota = get_daily_listing_quota(user)
+    if listing_quota['applies']:
+        listing_limit = listing_quota['limit'] or 0
+        listing_used = listing_quota['used'] or 0
+        stats.append({
+            "servicio": "listados_dia",
+            "nombre": "Listados diarios Starter",
+            "icono": "home",
+            "consumido": listing_used,
+            "limite": listing_limit,
+            "ilimitado": False,
+            "limite_label": listing_limit,
+            "extras_activos": 0,
+            "unidad": "listados/dia",
+            "porcentaje": min(100, int((listing_used / listing_limit) * 100)) if listing_limit else 0,
+            "status": "exhausted" if listing_quota['exhausted'] else "ok",
+            "window": "day",
+            "excludes_video": True,
+        })
     for q in quotas:
         q.maybe_reset_daily()
         q.recalcular_limite(plan=user.plan_nombre)

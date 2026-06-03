@@ -37,8 +37,17 @@ CEREBRAS_MODELS_CASCADE = [
 ]
 
 
-def _get_cerebras_key():
+def _get_cerebras_key(agente=None):
     from api.models import APIKey
+
+    if agente is not None:
+        try:
+            from api.pool_manager import get_next_available_api
+            assigned_key = get_next_available_api(agente, 'cerebras')
+            if assigned_key:
+                return assigned_key
+        except Exception:
+            logger.exception('No se pudo resolver key Cerebras asignada para user_id=%s', getattr(agente, 'id', None))
 
     pool_key = APIKey.objects.filter(servicio__nombre__iexact='cerebras', status__in=['available', 'assigned']).first()
     if pool_key:
@@ -797,7 +806,7 @@ def call_groq_api(prompt: str, **kwargs) -> str:
 @track_api_call(service='cerebras')
 def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
     """Llama a Cerebras usando su API compatible con OpenAI."""
-    key = _get_cerebras_key()
+    key = _get_cerebras_key(agente=agente)
     if not key:
         raise APIKeyUnavailableError(
             API_KEY_UNAVAILABLE_MESSAGE,
@@ -1274,7 +1283,7 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
             try:
                 print(f"[HTML] ▶ Paso 1 - Intentando con {provider} ({model_id})...")
                 if provider == 'cerebras':
-                    design_prompt = call_cerebras_api(prompt_step1, model=model_id)
+                    design_prompt = call_cerebras_api(prompt_step1, agente=agente, model=model_id)
                 
                 if design_prompt:
                     print(f"[HTML] ✅ Paso 1 exitoso con {provider} ({model_id})")
@@ -1425,7 +1434,7 @@ REGLAS DE DISEÑO PREMIUM:
             print(f"[HTML] ▶ Paso 2 - Intentando con {provider} ({model_id})...")
             try:
                 if provider == 'cerebras':
-                    html_output = call_cerebras_api(prompt_step2_nim, model=model_id)
+                    html_output = call_cerebras_api(prompt_step2_nim, agente=agente, model=model_id)
                 if html_output:
                     print(f"[HTML] ✅ Paso 2 exitoso con {provider} ({model_id})")
                     break
