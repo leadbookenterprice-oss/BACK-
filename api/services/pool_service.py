@@ -108,20 +108,21 @@ AI_POOL_SERVICES = tuple(
     name for name in SERVICE_DEFAULTS
     if name not in {'uploadpost', 'cloudinary'}
 )
+CONTENT_BUNDLE_SERVICES = ('cerebras',)
 
-SERVICIOS_CRITICOS = ['gemini', 'elevenlabs', 'cerebras', 'uploadpost']
+SERVICIOS_CRITICOS = list(CONTENT_BUNDLE_SERVICES)
 CEREBRAS_STARTER_SHARED_USERS_PER_KEY = 57
 CEREBRAS_SHARED_PLANS = {'free', 'starter'}
 
 PLAN_API_COUNTS = {
-    'free': {'gemini': 1, 'elevenlabs': 1, 'cerebras': 1},
-    'starter': {'gemini': 1, 'elevenlabs': 1, 'cerebras': 1},
-    'pro': {'gemini': 3, 'elevenlabs': 3, 'cerebras': 3},
-    'scale': {'gemini': 5, 'elevenlabs': 5, 'cerebras': 5},
-    'business': {'gemini': 5, 'elevenlabs': 5, 'cerebras': 5},
+    'free': {'cerebras': 1},
+    'starter': {'cerebras': 1},
+    'pro': {'cerebras': 3},
+    'scale': {'cerebras': 5},
+    'business': {'cerebras': 5},
 }
 
-COMPATIBILITY_API_COUNTS = {'uploadpost': 1}
+COMPATIBILITY_API_COUNTS = {}
 
 
 def _desired_api_counts_for_plan(plan):

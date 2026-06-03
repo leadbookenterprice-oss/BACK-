@@ -116,6 +116,43 @@ Pending/risks:
 - Existing Cerebras `Servicio` rows will be updated to default limit 1710 when `ensure_core_services()` runs; existing `APIKey.google_daily_limit` values are not migrated automatically.
 - Pro/Scale/Business new limits remain intentionally unchanged pending product calculation.
 
+### 2026-06-03 - OpenCode - Make content bundle Cerebras-only
+
+Objective:
+
+- Change the user content-generation bundle to Cerebras only and keep video/voice/social/provider APIs separate from content creation.
+
+Files modified:
+
+- `api/services/pool_service.py`
+- `api/tasks.py`
+- `api/tracking.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added `CONTENT_BUNDLE_SERVICES = ('cerebras',)`.
+- Changed `SERVICIOS_CRITICOS`, plan auto-assignment counts, bundle stats, and compatibility counts so automatic bundle assignment/repair only targets Cerebras.
+- Changed free/content pool reset and soft-unavailable handling to use only `CONTENT_BUNDLE_SERVICES`.
+- Left Gemini, ElevenLabs, UploadPost, Groq, and the other providers as loadable/assignable services outside the content bundle.
+
+Verification:
+
+- `py -3 -m py_compile "api\services\pool_service.py" "api\tracking.py" "api\tasks.py"` OK.
+- `py -3 manage.py check` OK.
+- `py -3 manage.py makemigrations --check --dry-run` OK.
+- `git diff --check` OK.
+
+Commit/push:
+
+- Local commit will be created after this log update; remote push still depends on GitHub credentials being available.
+
+Pending/risks:
+
+- Existing users may still have older Gemini/ElevenLabs/UploadPost assignments; this change stops automatic bundle repair/assignment for them but does not delete existing assignments.
+- Video/voice/social flows still need their own assignment/entitlement rules if they should be automated separately.
+- Agent: OpenCode
+
 ### 2026-06-03 - OpenCode - Add AI provider service catalog
 
 Objective:

@@ -12,10 +12,10 @@ from api.models import (
     APIKey, APIRequestLog, AdminAlert, Servicio, SocialPublicationLog,
     UserAPIAssignment, UserAPIQuota
 )
-from api.services.pool_service import APIPoolService, AI_POOL_SERVICES
+from api.services.pool_service import APIPoolService, CONTENT_BUNDLE_SERVICES
 
 
-FREE_POOL_SERVICES = set(AI_POOL_SERVICES)
+FREE_POOL_SERVICES = set(CONTENT_BUNDLE_SERVICES)
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
 UPLOADPOST_LIMIT_REACHED_MESSAGE = "Límite de publicaciones automáticas alcanzado. Podés actualizar tu plan para publicar más."
 
