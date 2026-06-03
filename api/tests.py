@@ -6,7 +6,8 @@ from rest_framework.test import APIClient
 from unittest.mock import patch
 
 from api.ai_services import APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError
-from api.models import AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion
+from api.models import APIKey, AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion, Servicio, UserAPIAssignment
+from api.pool_manager import get_next_available_api
 from api.services.listing_extractor import ExtractorError, extract_listing_from_url
 
 
@@ -46,6 +47,71 @@ class _FakeStreamResponse:
 
     def iter_content(self, chunk_size=8192):
         yield self.content
+
+
+class GeminiPoolSelectionTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email='gemini-pool-test@leadbook.local',
+            password='test-pass',
+            nombre='Gemini Pool Tester',
+            plan_nombre='starter',
+        )
+        self.service, _ = Servicio.objects.update_or_create(
+            nombre='gemini',
+            defaults={
+                'descripcion': 'Google Gemini',
+                'default_daily_limit': 1500,
+            },
+        )
+
+    def _create_key(self, api_key, status='assigned', requests_today=0):
+        return APIKey.objects.create(
+            servicio=self.service,
+            api_key=api_key,
+            status=status,
+            requests_today=requests_today,
+            google_daily_limit=1500,
+        )
+
+    def test_get_next_available_api_never_reuses_exhausted_key(self):
+        exhausted_key = self._create_key('AIza-exhausted', status='exhausted')
+        UserAPIAssignment.objects.update_or_create(
+            user=self.user,
+            servicio=self.service,
+            is_primary=True,
+            activo=True,
+            defaults={'apikey': exhausted_key},
+        )
+
+        selected = get_next_available_api(self.user, 'gemini')
+
+        self.assertIsNone(selected)
+
+    def test_get_next_available_api_repairs_exhausted_assignment_with_available_key(self):
+        exhausted_key = self._create_key('AIza-exhausted', status='exhausted')
+        replacement_key = self._create_key('AIza-replacement', status='available')
+        UserAPIAssignment.objects.update_or_create(
+            user=self.user,
+            servicio=self.service,
+            is_primary=True,
+            activo=True,
+            defaults={'apikey': exhausted_key},
+        )
+
+        selected = get_next_available_api(self.user, 'gemini')
+
+        self.assertEqual(selected, 'AIza-replacement')
+        replacement_key.refresh_from_db()
+        self.assertEqual(replacement_key.status, 'assigned')
+        self.assertTrue(
+            UserAPIAssignment.objects.filter(
+                user=self.user,
+                servicio=self.service,
+                apikey=replacement_key,
+                activo=True,
+            ).exists()
+        )
 
 
 class ListingExtractorTests(TestCase):

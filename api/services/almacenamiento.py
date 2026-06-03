@@ -15,6 +15,7 @@ import cloudinary.uploader
 import cloudinary.api
 from django.core.cache import cache
 from django.conf import settings
+from django.utils import timezone
 
 from api.models import APIKey
 
@@ -73,7 +74,7 @@ class AlmacenamientoCloudinary:
         return APIKey.objects.filter(
             servicio__nombre__iexact='cloudinary', 
             status__in=['available', 'active', 'assigned', 'in_bundle']
-        )
+        ).order_by('id')
 
     @classmethod
     def _get_stats(cls, key_obj) -> dict:
@@ -109,6 +110,57 @@ class AlmacenamientoCloudinary:
     def _invalidate_stats_cache(cls, key_id):
         """Invalida el caché de stats después de subir un archivo."""
         cache.delete(f'cld_stats_{key_id}')
+        cache.delete(f'cloudinary_stats_{key_id}')
+
+    @staticmethod
+    def _classify_cloudinary_error(exc) -> str:
+        """Clasifica errores de Cloudinary para mantener la cascada sana."""
+        text = str(exc or '').lower()
+        if any(token in text for token in ('rate limit', 'too many requests', '429', '420')):
+            return 'temporary'
+        if any(token in text for token in ('quota', 'storage limit', 'insufficient storage', 'over plan', 'usage limit', 'exceeded')):
+            return 'full'
+        if any(token in text for token in ('invalid api key', 'invalid signature', 'unauthorized', 'authentication', '401')):
+            return 'invalid'
+        if any(token in text for token in ('timeout', 'timed out', 'connection', 'temporarily', '503', '502')):
+            return 'temporary'
+        return 'temporary'
+
+    @classmethod
+    def _mark_upload_failure(cls, key_id, exc):
+        if not key_id:
+            return
+        classification = cls._classify_cloudinary_error(exc)
+        status_by_failure = {
+            'full': ('exhausted', 'LLENA', False),
+            'invalid': ('dead', 'INVALIDA', False),
+            'temporary': (None, 'ERROR_TEMPORAL', False),
+        }
+        new_status, cloudinary_status, health_ok = status_by_failure.get(classification, (None, 'ERROR_TEMPORAL', False))
+        try:
+            key = APIKey.objects.get(pk=key_id)
+            if new_status:
+                key.status = new_status
+            key.cloudinary_status = cloudinary_status
+            key.cloudinary_error = str(exc)[:4000]
+            key.cloudinary_upload_probe_ok = False
+            key.cloudinary_last_tested_at = timezone.now()
+            key.last_health_check = key.cloudinary_last_tested_at
+            key.last_health_status = health_ok
+            key.error_count = (key.error_count or 0) + 1
+            key.save(update_fields=[
+                'status',
+                'cloudinary_status',
+                'cloudinary_error',
+                'cloudinary_upload_probe_ok',
+                'cloudinary_last_tested_at',
+                'last_health_check',
+                'last_health_status',
+                'error_count',
+            ])
+        except Exception as mark_exc:
+            logger.warning(f'[Almacenamiento] No se pudo marcar fallo de Cloudinary key={key_id}: {mark_exc}')
+        cls._invalidate_stats_cache(key_id)
 
     @classmethod
     def get_mejor_cuenta(cls) -> tuple[dict | None, int | None]:
@@ -120,38 +172,38 @@ class AlmacenamientoCloudinary:
         keys = cls._get_pool_keys()
         if not keys.exists():
             return None, None
-
-        mejor_creds = None
-        mejor_key_id = None
-        max_libre = -1
-
         for k in keys:
+            creds = cls._parse_cloudinary_url(k.api_key)
+            if not creds:
+                continue
             stats = cls._get_stats(k)
-            libre = stats.get('free_bytes', 0)
-            if libre > max_libre:
-                max_libre = libre
-                mejor_creds = cls._parse_cloudinary_url(k.api_key)
-                mejor_key_id = k.id
-
-        if not mejor_creds:
+            if stats.get('error'):
+                continue
+            if stats.get('free_bytes', 0) >= UMBRAL_BYTES_MINIMO:
+                return creds, k.id
+        logger.warning('[Almacenamiento] Todas las cuentas del pool estan llenas o sin stats validas. Usando config global.')
+        if False:
             # Todas están casi llenas o el pool está vacío → fallback global
             logger.warning('[Almacenamiento] Todas las cuentas del pool están llenas o vacías. Usando config global.')
             return None, None
 
-        return mejor_creds, mejor_key_id
+        return None, None
 
     @classmethod
     def get_cuentas_ordenadas(cls) -> list[tuple[dict | None, int | None]]:
-        """Devuelve cuentas del pool ordenadas por espacio libre y fallback global al final."""
-        cuentas = []
+        """Devuelve cuentas del pool en cascada estable y fallback global al final."""
+        ordered = []
         for k in cls._get_pool_keys():
             creds = cls._parse_cloudinary_url(k.api_key)
             if not creds:
                 continue
             stats = cls._get_stats(k)
-            cuentas.append((stats.get('free_bytes', 0), creds, k.id))
-        cuentas.sort(key=lambda row: row[0], reverse=True)
-        ordered = [(creds, key_id) for _, creds, key_id in cuentas]
+            if stats.get('error'):
+                continue
+            if stats.get('free_bytes', 0) < UMBRAL_BYTES_MINIMO:
+                cls._mark_upload_failure(k.id, f"storage limit: menos de {UMBRAL_BYTES_MINIMO} bytes libres")
+                continue
+            ordered.append((creds, k.id))
 
         global_creds = {
             'cloud_name': getattr(settings, 'CLOUDINARY_CLOUD_NAME', '') or getattr(settings, 'CLOUDINARY_CLOUD', ''),
@@ -266,6 +318,7 @@ class AlmacenamientoCloudinary:
                 return metadata if return_metadata else url
             except cloudinary.exceptions.Error as e:
                 last_error = e
+                cls._mark_upload_failure(key_id, e)
                 if 'already exists' in str(e).lower() or '409' in str(e):
                     existing = cls._get_existing_url(public_id, 'auto', extra_creds)
                     if existing:
@@ -287,6 +340,7 @@ class AlmacenamientoCloudinary:
                 logger.warning(f'[Almacenamiento] Cuenta Cloudinary falló para {tipo}, probando siguiente: {e}')
             except Exception as e:
                 last_error = e
+                cls._mark_upload_failure(key_id, e)
                 logger.warning(f'[Almacenamiento] Error subiendo {tipo}, probando siguiente cuenta: {e}')
         logger.error(f'[Almacenamiento] Error final subiendo {tipo}: {last_error}')
         return None

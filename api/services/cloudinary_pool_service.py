@@ -1,8 +1,14 @@
-from api.models import APIKey
-import cloudinary.api
 from urllib.parse import urlparse
+
+import cloudinary.api
 from django.core.cache import cache
-import random
+
+from api.models import APIKey
+
+
+MIN_FREE_BYTES = 50 * 1024 * 1024
+DEFAULT_TOTAL_BYTES = 25 * 1024 * 1024 * 1024
+
 
 class CloudinaryPoolService:
     @staticmethod
@@ -13,7 +19,7 @@ class CloudinaryPoolService:
         return {
             'api_key': parsed.username,
             'api_secret': parsed.password,
-            'cloud_name': parsed.hostname
+            'cloud_name': parsed.hostname,
         }
 
     @staticmethod
@@ -21,15 +27,15 @@ class CloudinaryPoolService:
         creds = CloudinaryPoolService.parse_cloudinary_url(key_obj.api_key)
         if not creds:
             return {'total_bytes': 0, 'used_bytes': 0, 'free_bytes': 0, 'error': 'Invalid URL'}
-            
+
         try:
             res = cloudinary.api.usage(
                 cloud_name=creds['cloud_name'],
                 api_key=creds['api_key'],
-                api_secret=creds['api_secret']
+                api_secret=creds['api_secret'],
             )
-            used = res.get('storage', {}).get('usage', 0)
-            limit = res.get('storage', {}).get('limit', 0)
+            used = int(res.get('storage', {}).get('usage', 0) or 0)
+            limit = int(res.get('storage', {}).get('limit', 0) or 0) or DEFAULT_TOTAL_BYTES
             return {'total_bytes': limit, 'used_bytes': used, 'free_bytes': limit - used}
         except Exception as e:
             return {'total_bytes': 0, 'used_bytes': 0, 'free_bytes': 0, 'error': str(e)}
@@ -37,40 +43,28 @@ class CloudinaryPoolService:
     @staticmethod
     def get_all_keys():
         return APIKey.objects.filter(
-            servicio__nombre__iexact='cloudinary', 
-            status__in=['available', 'active', 'assigned', 'in_bundle']
-        )
+            servicio__nombre__iexact='cloudinary',
+            status__in=['available', 'active', 'assigned', 'in_bundle'],
+        ).order_by('id')
 
     @classmethod
     def get_best_credentials(cls):
         """
-        Devuelve las credenciales de la cuenta Cloudinary con más espacio libre.
-        Usa caché de 1 hora para evitar colapsar la API de Cloudinary.
-        Si no hay keys en el pool, devuelve None (para que el sistema use la config global).
+        Devuelve la primera cuenta utilizable en orden de carga.
+        Si no hay pool disponible, devuelve None para usar el fallback global.
         """
         keys = cls.get_all_keys()
         if not keys.exists():
             return None
-            
-        best_creds = None
-        max_free = -1
-        
-        for k in keys:
-            cache_key = f"cloudinary_stats_{k.id}"
+
+        for key in keys:
+            cache_key = f"cloudinary_stats_{key.id}"
             stats = cache.get(cache_key)
-            
             if stats is None:
-                stats = cls.get_stats_for_key(k)
-                # Cachear por 1 hora
+                stats = cls.get_stats_for_key(key)
                 cache.set(cache_key, stats, 3600)
-                
-            if stats['free_bytes'] > max_free:
-                max_free = stats['free_bytes']
-                best_creds = cls.parse_cloudinary_url(k.api_key)
-                
-        # Si falló la consulta o todas están llenas, devolvemos una al azar para evitar errores duros
-        if not best_creds:
-            random_key = random.choice(keys)
-            return cls.parse_cloudinary_url(random_key.api_key)
-            
-        return best_creds
+
+            if not stats.get('error') and stats.get('free_bytes', 0) >= MIN_FREE_BYTES:
+                return cls.parse_cloudinary_url(key.api_key)
+
+        return None

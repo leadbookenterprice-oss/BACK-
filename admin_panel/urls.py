@@ -35,6 +35,8 @@ urlpatterns = [
     path('cloudinary/stats/', views_cloudinary.admin_cloudinary_stats),
     path('cloudinary/keys/', views_cloudinary.admin_cloudinary_keys),
     path('cloudinary/keys/add/', views_cloudinary.admin_cloudinary_keys_add),
+    path('cloudinary/keys/test-all/', views_cloudinary.admin_cloudinary_keys_test_all),
+    path('cloudinary/keys/<int:pk>/test/', views_cloudinary.admin_cloudinary_keys_test),
     path('cloudinary/keys/<int:pk>/eliminar/', views_cloudinary.admin_cloudinary_keys_delete),
 
     # Bundles (deprecated)

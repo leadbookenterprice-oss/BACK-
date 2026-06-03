@@ -3394,7 +3394,7 @@ FORMATO:
             'total_words': total_words,
         }
 
-    def _repair_with_gemini(raw_text, reason):
+    def _repair_with_cerebras(raw_text, reason):
         repair_prompt = f"""Reformatea y mejora este guion inmobiliario.
 Motivo de correccion: {reason}
 
@@ -3409,23 +3409,23 @@ Contenido original:
 {str(raw_text)[:7000]}
 """
         with concurrent.futures.ThreadPoolExecutor() as ex:
-            future = ex.submit(call_gemini_api, repair_prompt, agente=request.user)
+            future = ex.submit(smart_call, repair_prompt, retries=1, agente=request.user)
             return future.result(timeout=25)
 
     try:
         with concurrent.futures.ThreadPoolExecutor() as ex:
-            future = ex.submit(call_gemini_api, prompt, agente=request.user)
+            future = ex.submit(smart_call, prompt, retries=1, agente=request.user)
             raw_response = future.result(timeout=25)
     except APIKeyUnavailableError as e:
         return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_guion')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
         return _quota_error_response(e, user=request.user, source='generar_guion')
     except Exception as e:
-        logger.exception("Error llamando Gemini en generar_guion")
-        return _fallback_response(f'gemini_no_disponible: {str(e)[:180]}')
+        logger.exception("Error llamando Cerebras en generar_guion")
+        return _fallback_response(f'cerebras_no_disponible: {str(e)[:180]}')
 
     if not raw_response:
-        return _fallback_response('gemini_sin_respuesta')
+        return _fallback_response('cerebras_sin_respuesta')
 
     attempts = [str(raw_response).strip()]
     final_validation = None
@@ -3436,10 +3436,10 @@ Contenido original:
         parsed = _parse_json_flexible(candidate_text)
 
         if parsed is None:
-            final_reason = 'Gemini no devolvio JSON parseable'
+            final_reason = 'Cerebras no devolvio JSON parseable'
             if attempt_idx == 0:
                 try:
-                    repaired = _repair_with_gemini(candidate_text, final_reason)
+                    repaired = _repair_with_cerebras(candidate_text, final_reason)
                     if repaired:
                         attempts.append(str(repaired).strip())
                         continue
@@ -3460,7 +3460,7 @@ Contenido original:
 
         if attempt_idx == 0:
             try:
-                repaired = _repair_with_gemini(_json.dumps({'escenas': escenas}, ensure_ascii=False), reason)
+                repaired = _repair_with_cerebras(_json.dumps({'escenas': escenas}, ensure_ascii=False), reason)
                 if repaired:
                     attempts.append(str(repaired).strip())
                     continue
@@ -3483,7 +3483,7 @@ Contenido original:
         {
             'escenas': escenas_finales,
             'tipo_video': tipo_video,
-            'source': 'gemini',
+            'source': 'cerebras',
             'meta': {
                 'required_scenes': rules['required_scenes'],
                 'actual_scenes': len(escenas_finales),
@@ -3515,7 +3515,7 @@ def generar_listado(request):
     if not result:
         return Response({
             "error": "IA no disponible",
-            "detalle": "Cerebras, Groq y Gemini no devolvieron respuesta."
+            "detalle": "Cerebras no devolvio respuesta."
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     if request.user.is_authenticated:
@@ -6031,15 +6031,15 @@ def generar_pdf(request):
             logger.warning("[PDF] IA no disponible en template (%s). Usando render estatico.", e)
             html_string = render_to_string('pdf/property_brochure_html.html', context)
         except Exception as e:
-            print(f"[PDF] Error en sistema de templates: {e}. Usando fallback Gemini.")
+            print(f"[PDF] Error en sistema de templates: {e}. Usando fallback IA Cerebras.")
             try:
                 html_string = generar_html_gemini(context, request.user)
-            except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as gemini_exc:
-                logger.warning("[PDF] Fallback Gemini no disponible (%s). Usando render estatico.", gemini_exc)
+            except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as cerebras_exc:
+                logger.warning("[PDF] Fallback IA Cerebras no disponible (%s). Usando render estatico.", cerebras_exc)
                 html_string = render_to_string('pdf/property_brochure_html.html', context)
             
         if not html_string:
-            print("[PDF] Fallback: Gemini fallÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³, usando render_to_string estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡tico")
+            print("[PDF] Fallback IA fallido, usando render_to_string estatico")
             html_string = render_to_string('pdf/property_brochure_html.html', context)
 
         html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))

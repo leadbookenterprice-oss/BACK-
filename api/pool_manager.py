@@ -23,7 +23,7 @@ def _key_usage_ratio(key, servicio_nombre):
     return usage / limit
 
 
-def get_next_available_api(agente, servicio):
+def get_next_available_api(agente, servicio, exclude_keys=None):
     """
     Devuelve la próxima API key usable del usuario para un servicio.
     Rota por menor requests_today y excluye exhausted/dead/disabled.
@@ -31,15 +31,14 @@ def get_next_available_api(agente, servicio):
     servicio_nombre = str(servicio or '').strip().lower()
     if not servicio_nombre:
         return None
-    soft_retry_services = {'gemini', 'elevenlabs'}
+    excluded_values = {str(value) for value in (exclude_keys or []) if value}
 
     def _buscar_asignada():
-        statuses = ['assigned', 'available', 'exhausted'] if servicio_nombre in soft_retry_services else ['assigned', 'available']
         assignments = UserAPIAssignment.objects.filter(
             user=agente,
             servicio__nombre__iexact=servicio_nombre,
             activo=True,
-            apikey__status__in=statuses
+            apikey__status__in=['assigned', 'available']
         ).select_related('apikey').order_by('assigned_at')
 
         candidates = []
@@ -47,13 +46,14 @@ def get_next_available_api(agente, servicio):
             key = asig.apikey
             if not key:
                 continue
+            if str(key.api_key) in excluded_values:
+                continue
 
             usage, limit = _resolve_usage_window(key, servicio_nombre)
             if limit and usage >= limit:
-                if servicio_nombre not in soft_retry_services:
-                    key.status = 'exhausted'
-                    key.save(update_fields=['status', 'updated_at'])
-                    continue
+                key.status = 'exhausted'
+                key.save(update_fields=['status', 'updated_at'])
+                continue
 
             if key.status == 'available':
                 key.status = 'assigned'

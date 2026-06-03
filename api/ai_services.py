@@ -744,18 +744,14 @@ class APIKeyUnavailableError(Exception):
         self.quota_state = quota_state
         self.retry_after_seconds = retry_after_seconds
 
-@track_api_call(service='gemini')
 def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
-    system_prompt = kwargs.get('system_prompt', '')
-    full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-
-    def _call(client):
-        return client.models.generate_content(
-            model='gemini-2.5-flash-lite',
-            contents=full_prompt,
-        ).text
-
-    return execute_with_gemini_retry(agente, _call)
+    """Compatibilidad: Gemini queda almacenado, pero deshabilitado para generacion activa."""
+    raise APIKeyUnavailableError(
+        "Gemini esta deshabilitado para generacion activa. LeadBook esta usando solo Cerebras.",
+        provider='gemini',
+        scope='disabled',
+        quota_state='hard_exhausted',
+    )
 
 def call_groq_api(prompt: str, **kwargs) -> str:
     """
@@ -863,7 +859,19 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                 hard_terms = ('quota', 'credits', 'insufficient', 'exceeded', 'monthly', 'payment', 'balance', 'limit')
                 if any(term in normalized for term in hard_terms):
                     _mark_cerebras_exhausted(key)
-                raise RuntimeError(response_text or 'Cerebras rate limited')
+                    raise GeminiQuotaExhaustedError(
+                        LIMIT_REACHED_MESSAGE,
+                        provider='cerebras',
+                        scope='provider',
+                        quota_state='hard_exhausted',
+                    )
+                raise GeminiRateLimitedError(
+                    "Cerebras esta temporalmente saturado. Reintenta en 10 minutos.",
+                    provider='cerebras',
+                    scope='provider',
+                    quota_state='soft_rate_limited',
+                    retry_after_seconds=600,
+                )
 
             model_terms = ('model', 'not found', 'invalid model', 'unsupported model', 'deprecated')
             if any(term in normalized for term in model_terms):
@@ -1100,8 +1108,13 @@ def _mark_gemini_exhausted(agente, key_str, is_monthly=False):
             k = APIKey.objects.filter(api_key=key_str).first()
             if k:
                 k.status = 'exhausted'
-                k.requests_this_month = k.google_monthly_limit or k.google_daily_limit or 1500
-                k.save(update_fields=['status', 'requests_this_month', 'updated_at'])
+                if is_monthly:
+                    k.requests_this_month = k.google_monthly_limit or k.google_daily_limit or 1500
+                    update_fields = ['status', 'requests_this_month', 'updated_at']
+                else:
+                    k.requests_today = k.google_daily_limit or 1500
+                    update_fields = ['status', 'requests_today', 'updated_at']
+                k.save(update_fields=update_fields)
                 print(f"[Pool] Key marcada como AGOTADA: {key_str[:10]}...")
     except Exception as ex:
         logger.error(f"Error marcando Gemini como agotada: {ex}")
@@ -1116,11 +1129,12 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
     from api.pool_manager import get_next_available_api
 
     last_key = None
+    soft_limited_keys = set()
     
     for attempt in range(max_retries + 5): # Damos margen para rotar llaves
         # 1. Obtener llave actual
         if agente:
-            current_key = get_next_available_api(agente, 'gemini')
+            current_key = get_next_available_api(agente, 'gemini', exclude_keys=soft_limited_keys)
         else:
             current_key = settings.GEMINI_API_KEY
 
@@ -1158,16 +1172,17 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                     'rate limit',
                     'resource exhausted',
                 ]
-                is_monthly = any(term in error_msg for term in hard_quota_terms)
+                is_hard_quota = any(term in error_msg for term in hard_quota_terms)
+                is_monthly_quota = 'monthly' in error_msg or 'per month' in error_msg
                 is_minute = (
                     '429' in error_msg
                     or any(term in error_msg for term in soft_rate_terms)
-                ) and not is_monthly
+                ) and not is_hard_quota
                 
-                if is_monthly:
+                if is_hard_quota:
                     # Agotamiento REAL de cuota
                     if agente:
-                        _mark_gemini_exhausted(agente, current_key, is_monthly=True)
+                        _mark_gemini_exhausted(agente, current_key, is_monthly=is_monthly_quota)
                         # Intentar rotar: buscar si get_api_key ahora nos da otra llave
                         new_key = get_next_available_api(agente, 'gemini')
                         if new_key and new_key != current_key:
@@ -1183,6 +1198,15 @@ def execute_with_gemini_retry(agente, operation_func, max_retries=3):
                     )
                 
                 if is_minute:
+                    if agente:
+                        soft_limited_keys.add(current_key)
+                        alternate_key = get_next_available_api(agente, 'gemini', exclude_keys=soft_limited_keys)
+                        if alternate_key:
+                            logger.warning(
+                                "Rate limit transitorio de Gemini en key actual. Rotando a otra key del pool (Intento %s)",
+                                attempt + 1,
+                            )
+                            continue
                     # Rate limit por minuto (esperar y reintentar con la misma llave)
                     if attempt < max_retries:
                         logger.warning(f"Rate limit de Gemini (minuto) alcanzado. Esperando 60s... (Intento {attempt+1})")
