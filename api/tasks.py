@@ -5,14 +5,14 @@ from django.core.cache import cache
 from datetime import timedelta
 import time
 from .models import APIKey, Agent, Notificacion, UserAPIAssignment, UserAPIQuota
-from .services.pool_service import APIPoolService
+from .services.pool_service import APIPoolService, AI_POOL_SERVICES
 import requests
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-FREE_POOL_SERVICES = ['gemini', 'elevenlabs']
+FREE_POOL_SERVICES = list(AI_POOL_SERVICES)
 
 
 def _default_video_provider():

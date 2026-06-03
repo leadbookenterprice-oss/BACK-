@@ -13,17 +13,27 @@ from api.models import (
     Agent, APIKey, APIRequestLog, AdminAlert, UserBanRecord,
     Listado, Servicio, UserAPIAssignment, UserAPIQuota
 )
-from api.services.pool_service import APIPoolService
+from api.services.pool_service import APIPoolService, SERVICE_DEFAULTS
 from admin_panel.auth import is_admin_request
 
 
 def _service_defaults(nombre):
+    service_defaults = SERVICE_DEFAULTS.get(nombre)
+    if service_defaults:
+        return {
+            'descripcion': service_defaults['descripcion'],
+            'activo': True,
+            'default_daily_limit': service_defaults['default_daily_limit'],
+            'default_monthly_limit': service_defaults['default_monthly_limit'],
+            'extra_increment': service_defaults['extra_increment'],
+        }
+
     descripcion = {
-        'gemini': 'Google Gemini',
+        'gemini': 'Google Gemini AI Studio',
         'elevenlabs': 'ElevenLabs',
         'uploadpost': 'UploadPost',
         'groq': 'Groq',
-        'nvidia': 'NVIDIA',
+        'nvidia': 'NVIDIA NIM',
     }.get(nombre, nombre.title())
     return {
         'descripcion': descripcion,

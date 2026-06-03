@@ -16,6 +16,7 @@ from .models import (
     UserAPIAssignment, UserAPIQuota, VideoMusic, VideoSFX, ConfiguracionSistema,
     AccessCode
 )
+from api.services.pool_service import SERVICE_DEFAULTS
 from admin_panel.auth import is_admin_request
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
@@ -42,12 +43,22 @@ def _normalize_service_name(value):
 
 
 def _service_defaults(nombre):
+    service_defaults = SERVICE_DEFAULTS.get(nombre)
+    if service_defaults:
+        return {
+            'descripcion': service_defaults['descripcion'],
+            'activo': True,
+            'default_daily_limit': service_defaults['default_daily_limit'],
+            'default_monthly_limit': service_defaults['default_monthly_limit'],
+            'extra_increment': service_defaults['extra_increment'],
+        }
+
     descripcion = {
-        'gemini': 'Google Gemini',
+        'gemini': 'Google Gemini AI Studio',
         'elevenlabs': 'ElevenLabs',
         'uploadpost': 'UploadPost',
         'groq': 'Groq',
-        'nvidia': 'NVIDIA',
+        'nvidia': 'NVIDIA NIM',
         'cerebras': 'Cerebras',
     }.get(nombre, nombre.title())
     return {

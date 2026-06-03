@@ -116,6 +116,49 @@ Pending/risks:
 - Existing Cerebras `Servicio` rows will be updated to default limit 1710 when `ensure_core_services()` runs; existing `APIKey.google_daily_limit` values are not migrated automatically.
 - Pro/Scale/Business new limits remain intentionally unchanged pending product calculation.
 
+### 2026-06-03 - OpenCode - Add AI provider service catalog
+
+Objective:
+
+- Add the requested external AI providers to the backend service catalog and SQL seed path so admins can load user-pool keys for them.
+
+Files modified:
+
+- `admin_panel/views.py`
+- `api/migrations/0018_ai_provider_services.py`
+- `api/services/pool_service.py`
+- `api/tasks.py`
+- `api/tracking.py`
+- `api/views_admin.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added catalog defaults for Gemini AI Studio, Groq, Cerebras, OpenRouter, NVIDIA NIM, Hugging Face, Mistral AI, Cohere, SambaNova, DeepSeek, Cloudflare Workers AI, GitHub Models, plus existing UploadPost/ElevenLabs/Cloudinary.
+- Added migration `0018_ai_provider_services` to upsert the service rows in SQL.
+- Reused shared `SERVICE_DEFAULTS` in admin key-creation defaults so new services get consistent limits/descriptions.
+- Expanded AI pool reset/unavailable handling to use the shared AI service list.
+- Left automatic plan assignment unchanged for the existing bundle/core AI services to avoid flooding users/admins with missing-key alerts before stock is loaded.
+
+Verification:
+
+- `py -3 -m py_compile "api\services\pool_service.py" "api\tracking.py" "api\tasks.py" "api\views_admin.py" "admin_panel\views.py" "api\migrations\0018_ai_provider_services.py"` OK.
+- `py -3 manage.py check` OK.
+- `py -3 manage.py makemigrations --check --dry-run` OK before making `0018` independent; after changing `0018` to depend on tracked `0016`, the dirty local workspace reports a leaf conflict only because unrelated untracked `0017_apikey_cloudinary_health.py` is still present.
+- `git diff --check` OK.
+
+Commit/push:
+
+- Push requested by user; provider catalog changes are included in this session's push to `origin/main`.
+
+Pending/risks:
+
+- `api/migrations/0018_ai_provider_services.py` depends on latest tracked migration `0016` so the provider catalog can be pushed without unrelated local Cloudinary schema work.
+- Local untracked Cloudinary migration `api/migrations/0017_apikey_cloudinary_health.py` still exists and was not staged.
+- Actual generation routing for OpenRouter/NVIDIA/Hugging Face/Mistral/Cohere/SambaNova/DeepSeek/Cloudflare/GitHub Models was not added in this pass; keys can be loaded and assigned via the pool.
+- Pre-existing unrelated Cloudinary/backend dirty changes were left untouched.
+- Agent: OpenCode
+
 ### 2026-06-02 - OpenCode - Switch active generation flow to Cerebras only
 
 Objective:
@@ -475,6 +518,49 @@ Commit/push:
 Pending/risks:
 
 - If ElevenLabs credentials are blocked in provider account, fallback voice can still be used but premium voice quality depends on restoring ElevenLabs access.
+
+### 2026-05-24 - OpenCode - Gemini pool exhaustion and Railway worker detection
+
+Objective:
+
+- Prevent Gemini/ElevenLabs pool selection from reusing exhausted API keys and make Railway start Celery when the deployed service is clearly a worker.
+
+Files modified:
+
+- `api/ai_services.py`
+- `api/pool_manager.py`
+- `api/services/pool_service.py`
+- `api/tracking.py`
+- `api/tests.py`
+- `railway.json`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added `exclude_keys` support to `get_next_available_api` and excluded keys with `exhausted`, `dead`, or `disabled` status from active selection.
+- Updated Gemini retry/rotation to track soft-limited keys and try another available pool key before waiting on the same key.
+- Made pool repair skip exhausted keys and made usage tracking reject exhausted/dead/disabled assignments.
+- Marked assignments that reach daily/monthly limits as exhausted instead of leaving them selectable.
+- Added regression tests for not reusing exhausted keys and repairing exhausted assignments with an available key.
+- Updated `railway.json` so worker mode is selected either by `APP_ROLE=worker` or by Railway service identifiers/names containing `worker`, `celery`, `queue`, or `video`.
+
+Verification:
+
+- `py -3 -m py_compile api/tests.py api/ai_services.py api/pool_manager.py api/services/pool_service.py api/tracking.py` OK.
+- `py -3 manage.py test api.tests.GeminiPoolSelectionTests api.tests.ListingResultPersistenceTests api.tests.AdsStudioEndpointTests` OK, 13 tests.
+- `py -3 manage.py check` OK.
+- `py -3 -c "import json; json.load(open('railway.json', encoding='utf-8')); print('railway.json OK')"` OK.
+- `git diff --check` OK.
+
+Commit/push:
+
+- Not committed or pushed.
+
+Pending/risks:
+
+- Production still needs a real Railway worker service with `APP_ROLE=worker` or a worker/celery/queue/video service name, plus `REDIS_URL`, `CELERY_TASK_ALWAYS_EAGER=False`, and `VIDEO_GENERATION_MODE=celery`.
+- Production env should avoid conflicting `GOOGLE_API_KEY`/`GEMINI_API_KEY` values if the SDK prioritizes `GOOGLE_API_KEY`.
+
 ### 2026-05-24 - OpenCode - Regeneration uniqueness hardening
 
 Objective:
@@ -537,6 +623,41 @@ Commit/push:
 Pending/risks:
 
 - To guarantee Jost in production, set `LIGHT_VIDEO_CAPTION_FONT_FILE` to a real `.ttf` path available inside the runtime container.
+
+### 2026-05-24 - OpenCode - PDF proxy/download consistency
+
+Objective:
+
+- Fix result pages showing a PDF preview/download state when the backend has no persisted PDF file URL, causing `pdf-proxy`/download 404s like "No hay PDF generado todavia".
+
+Files modified:
+
+- `api/views.py`
+- `api/tests.py`
+- `AI_COLLABORATION_LOG.md`
+
+Changes made:
+
+- Added `pdf-proxy` fallback to render a legacy saved HTML PDF into an inline PDF when no Cloudinary URL exists.
+- Kept the existing direction that new `/generar-pdf/` responses should only succeed after a real PDF is rendered/uploaded and URL persisted.
+- Added test coverage for `pdf_proxy` rendering from saved HTML when URL is absent.
+- Preserved existing local quota-notification changes in `api/views.py`/`api/tests.py`; did not revert or rewrite them.
+
+Verification:
+
+- `py -3 -m py_compile api/views.py api/tests.py` OK.
+- `py -3 manage.py test api.tests.ListingResultPersistenceTests api.tests.AdsStudioEndpointTests` OK, 11 tests.
+- `py -3 manage.py check` OK.
+- `git diff --check` OK.
+
+Commit/push:
+
+- Not committed or pushed.
+
+Pending/risks:
+
+- Production should be deployed with the paired frontend fix so HTML-only previews no longer show a false "Descargar PDF" action.
+- Listings with only HTML and no Cloudinary PDF URL remain legacy fallback only; preferred state is a persisted Cloudinary PDF URL.
 
 ### 2026-05-24 - OpenCode - Persist generated listing assets
 

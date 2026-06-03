@@ -13,7 +13,7 @@ from api.models import APIKey, UserAPIAssignment, Servicio, AdminAlert, UserAPIQ
 
 SERVICE_DEFAULTS = {
     'gemini': {
-        'descripcion': 'Google Gemini',
+        'descripcion': 'Google Gemini AI Studio',
         'default_daily_limit': 1500,
         'default_monthly_limit': None,
         'extra_increment': 1500,
@@ -36,6 +36,66 @@ SERVICE_DEFAULTS = {
         'default_monthly_limit': None,
         'extra_increment': 1500,
     },
+    'groq': {
+        'descripcion': 'Groq',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'openrouter': {
+        'descripcion': 'OpenRouter',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'nvidia': {
+        'descripcion': 'NVIDIA NIM',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'huggingface': {
+        'descripcion': 'Hugging Face',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'mistral': {
+        'descripcion': 'Mistral AI',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'cohere': {
+        'descripcion': 'Cohere',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'sambanova': {
+        'descripcion': 'SambaNova',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'deepseek': {
+        'descripcion': 'DeepSeek',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'cloudflare_workers_ai': {
+        'descripcion': 'Cloudflare Workers AI',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
+    'github_models': {
+        'descripcion': 'GitHub Models',
+        'default_daily_limit': 1500,
+        'default_monthly_limit': None,
+        'extra_increment': 1500,
+    },
     'cloudinary': {
         'descripcion': 'Cloudinary',
         'default_daily_limit': 999999,
@@ -43,6 +103,11 @@ SERVICE_DEFAULTS = {
         'extra_increment': 1,
     },
 }
+
+AI_POOL_SERVICES = tuple(
+    name for name in SERVICE_DEFAULTS
+    if name not in {'uploadpost', 'cloudinary'}
+)
 
 SERVICIOS_CRITICOS = ['gemini', 'elevenlabs', 'cerebras', 'uploadpost']
 CEREBRAS_STARTER_SHARED_USERS_PER_KEY = 57
@@ -144,7 +209,8 @@ class APIPoolService:
                 user=user,
                 servicio=servicio,
                 activo=True,
-            ).exclude(apikey__status__in=['dead', 'disabled'])
+                apikey__status__in=['assigned', 'available'],
+            )
             active_count = active_assignments.count()
             if active_count >= desired_count:
                 asignados.append(nombre_servicio)

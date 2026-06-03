@@ -12,10 +12,10 @@ from api.models import (
     APIKey, APIRequestLog, AdminAlert, Servicio, SocialPublicationLog,
     UserAPIAssignment, UserAPIQuota
 )
-from api.services.pool_service import APIPoolService
+from api.services.pool_service import APIPoolService, AI_POOL_SERVICES
 
 
-FREE_POOL_SERVICES = {'gemini', 'elevenlabs'}
+FREE_POOL_SERVICES = set(AI_POOL_SERVICES)
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
 UPLOADPOST_LIMIT_REACHED_MESSAGE = "Límite de publicaciones automáticas alcanzado. Podés actualizar tu plan para publicar más."
 
@@ -338,7 +338,7 @@ def _raise_service_exhausted(service, message):
 def _raise_api_key_unavailable(service, agente=None):
     message = f"No hay API key asignada para {service}. El admin debe cargar stock o reparar el pool."
     service_name = str(service or '').lower()
-    if service_name in {'gemini', 'elevenlabs'}:
+    if service_name in FREE_POOL_SERVICES:
         from api.ai_services import APIKeyUnavailableError
         if agente:
             retry_after_seconds = max(
@@ -431,12 +431,11 @@ def track_api_call(service, action=''):
                 _mark_service_exhausted(agente, servicio, quota, reason='Límite diario alcanzado')
                 _raise_service_exhausted(service, f"Servicio {service} agotado: límite diario alcanzado")
 
-            usable_statuses = ['assigned', 'available', 'exhausted'] if soft_exhaustion else ['assigned', 'available']
             usable_assignment = UserAPIAssignment.objects.filter(
                 user=agente,
                 servicio=servicio,
                 activo=True,
-                apikey__status__in=usable_statuses,
+                apikey__status__in=['assigned', 'available'],
             ).select_related('apikey').order_by('-is_primary', 'assigned_at').first()
 
             if not usable_assignment and not soft_exhaustion:
