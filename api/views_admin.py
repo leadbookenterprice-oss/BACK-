@@ -17,6 +17,7 @@ from .models import (
     AccessCode, ContentGenerationRun, CerebrasUsageLog
 )
 from api.services.pool_service import SERVICE_DEFAULTS
+from api.services.api_usage_monitor import build_api_usage_logs, build_api_usage_summary
 from admin_panel.auth import is_admin_request
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
@@ -625,6 +626,36 @@ def admin_cerebras_usage_logs(request):
         })
 
     return Response({'logs': logs, 'count': len(logs)})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_api_usage_summary(request):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    create_alerts = str(request.query_params.get('alerts', '1')).strip().lower() not in {'0', 'false', 'no'}
+    payload = build_api_usage_summary(
+        service=request.query_params.get('service') or request.query_params.get('servicio'),
+        create_alerts=create_alerts,
+    )
+    return Response(payload)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_api_usage_logs(request):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    payload = build_api_usage_logs(
+        service=request.query_params.get('service') or request.query_params.get('servicio'),
+        api_key_id=request.query_params.get('api_key_id') or request.query_params.get('key_id'),
+        user_id=request.query_params.get('user_id'),
+        success=request.query_params.get('success'),
+        limit=request.query_params.get('limit', 100),
+    )
+    return Response(payload)
 
 
 @api_view(['POST'])

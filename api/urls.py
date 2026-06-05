@@ -34,7 +34,7 @@ from .views_admin import (
     admin_usuario_detalle, admin_usuarios_eliminados, admin_usuario_restaurar,
     admin_usuario_suspender, admin_apikeys_resumen, admin_apikeys_pool,
     admin_apikeys_pool_crear, admin_apikeys_pool_bulk, admin_apikeys_pool_detail, admin_apikeys_global,
-    admin_cerebras_usage_logs,
+    admin_cerebras_usage_logs, admin_api_usage_summary, admin_api_usage_logs,
     admin_pool_estado, admin_alerts_read, admin_health_check, admin_enviar_email,
     admin_bundles_list, admin_bundles_crear, admin_bundles_detail, admin_add_extra_api,
     admin_bundles_asignar, admin_bundles_liberar, admin_bundles_stats,
@@ -183,6 +183,8 @@ urlpatterns = [
     path('admin/apikeys/pool/<int:key_id>/detalle/', admin_apikeys_pool_detail),
     path('admin/apikeys/global/', admin_apikeys_global),
     path('admin/cerebras/logs/', admin_cerebras_usage_logs),
+    path('admin/api-usage/summary/', admin_api_usage_summary),
+    path('admin/api-usage/logs/', admin_api_usage_logs),
     path('admin/apikeys/pool/auto-repair/', admin_apikeys_auto_repair),
     path('admin/pool/estado/', admin_pool_estado),
     path('admin/pool/listar/', admin_apikeys_pool), # Alias

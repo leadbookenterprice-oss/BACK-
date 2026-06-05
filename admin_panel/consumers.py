@@ -53,6 +53,15 @@ class AdminDashboardConsumer(AsyncWebsocketConsumer):
     async def admin_alert(self, event):
         await self._send_payload('alert', event)
 
+    async def api_usage_updated(self, event):
+        await self._send_payload('api_usage_updated', event)
+
+    async def api_alert_created(self, event):
+        await self._send_payload('api_alert_created', event)
+
+    async def api_service_exhausted(self, event):
+        await self._send_payload('api_service_exhausted', event)
+
     async def stats_update(self, event):
         await self._send_payload('stats_update', event)
 
