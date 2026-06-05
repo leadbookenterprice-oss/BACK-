@@ -1818,6 +1818,8 @@ def _serialize_listing_summary(listado):
         'cover_frame_url': cover_url,
         'fotoportada': cover_url,
         'formatos_generados': _listing_generated_formats(listado, datos),
+        'video_only': bool(datos.get('video_only')),
+        'source': datos.get('source') or '',
         'datos': datos,
     }
 
@@ -5859,12 +5861,126 @@ def video_status(request, listado_id):
     except Exception as e:
         return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
 
+
+def _truthy_request_value(value):
+    return str(value or '').strip().lower() in {'1', 'true', 'yes', 'on', 'si', 'sí'}
+
+
+def _is_video_only_listing(listado):
+    datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    return bool(datos.get('video_only') or datos.get('source') == 'video_studio_quick')
+
+
+def _clean_video_quick_text(value, default=''):
+    return _repair_mojibake_text(str(value or default).strip())
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_active_plan
+def video_studio_quick_base(request):
+    payload = request.data if isinstance(request.data, dict) else {}
+    blocked_media_response = _reject_blocked_media_data_uri(payload, 'payload')
+    if blocked_media_response:
+        return blocked_media_response
+
+    tipo_propiedad = _clean_video_quick_text(
+        payload.get('tipoPropiedad') or payload.get('tipo_propiedad')
+    )
+    operacion_raw = _clean_video_quick_text(payload.get('operacion'), 'venta').lower()
+    ciudad = _clean_video_quick_text(payload.get('ciudad'))
+    precio = _clean_video_quick_text(payload.get('precio'))
+    moneda = _clean_video_quick_text(payload.get('moneda'), 'USD').upper()[:10] or 'USD'
+
+    operacion_map = {
+        'venta': 'venta',
+        'vender': 'venta',
+        'alquiler': 'alquiler',
+        'renta': 'alquiler',
+        'alquilar': 'alquiler',
+        'alquiler temporal': 'alquiler_temporal',
+        'temporal': 'alquiler_temporal',
+    }
+    operacion = operacion_map.get(operacion_raw, operacion_raw)
+    if operacion not in {'venta', 'alquiler', 'alquiler_temporal'}:
+        operacion = 'venta'
+
+    if not tipo_propiedad:
+        return Response({'error': 'tipo_propiedad_requerido', 'mensaje': 'Indica el tipo de propiedad.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not ciudad:
+        return Response({'error': 'ciudad_requerida', 'mensaje': 'Indica la ciudad.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not precio:
+        return Response({'error': 'precio_requerido', 'mensaje': 'Indica el precio.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    tipo_video_raw = _clean_video_quick_text(payload.get('tipoVideo') or payload.get('tipo_video'), 'reel').lower()
+    tipo_video = {
+        'tour_narrado': 'tour',
+        'tour-narrado': 'tour',
+        'reel_rapido': 'reel',
+        'reel-rapido': 'reel',
+    }.get(tipo_video_raw, tipo_video_raw if tipo_video_raw in {'tour', 'reel'} else 'reel')
+
+    voz_raw = _clean_video_quick_text(payload.get('voz'), 'femenina')
+    voz = normalize_elevenlabs_voice_choice(voz_raw)
+    tono_raw = _clean_video_quick_text(payload.get('tono'), 'profesional').lower()
+    tono = tono_raw if tono_raw in {'profesional', 'lujo', 'energetico'} else 'profesional'
+    contexto_adicional = _clean_video_quick_text(
+        payload.get('contextoAdicional') or payload.get('contexto_adicional')
+    )
+
+    titulo = _clean_video_quick_text(
+        payload.get('titulo'),
+        f"Video: {tipo_propiedad} en {ciudad}"
+    )[:255]
+    voiceover_raw = payload.get('voiceover', True)
+    voiceover_enabled = str(voiceover_raw).strip().lower() not in {'0', 'false', 'no', 'off'}
+
+    datos = _sanitize_listing_payload_for_storage({
+        'video_only': True,
+        'source': 'video_studio_quick',
+        'script_status': 'pending',
+        'tipoPropiedad': tipo_propiedad,
+        'tipo_propiedad': tipo_propiedad,
+        'operacion': operacion,
+        'ciudad': ciudad,
+        'moneda': moneda,
+        'precio': precio,
+        'tipoVideo': tipo_video,
+        'voz': voz,
+        'tono': tono,
+        'contextoAdicional': contexto_adicional,
+        'voiceover': voiceover_enabled,
+        'escenas': [],
+        'fotosRecorrido': [],
+        'portadaUrl': None,
+    })
+
+    listado = Listado.objects.create(
+        agente=request.user,
+        titulo=titulo,
+        tipo_propiedad=tipo_propiedad,
+        operacion=operacion,
+        ciudad=ciudad,
+        precio=precio,
+        moneda=moneda,
+        video_status='script_pending',
+        datos_extra=datos,
+    )
+
+    return Response({
+        'mensaje': 'Base rapida de video creada',
+        'listado': _serialize_listing_summary(listado),
+    }, status=status.HTTP_201_CREATED)
+
+
 class ListadosView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         """Devuelve todos los listados del usuario logueado"""
         listados = Listado.objects.filter(agente=request.user)
+        if not _truthy_request_value(request.query_params.get('include_video_only')):
+            listados = [listado for listado in listados if not _is_video_only_listing(listado)]
         data = [_serialize_listing_summary(listado) for listado in listados]
         return Response(data)
 

@@ -28,7 +28,7 @@ from .views import (
     brand_template_draft_preview, brand_template_draft_chat, CookieTokenRefreshView,
     cambiar_password, password_change_code, logout_all,
     start_content_generation_pack, content_generation_run_detail, retry_content_generation_run,
-    advance_content_generation_run,
+    advance_content_generation_run, video_studio_quick_base,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -125,6 +125,7 @@ urlpatterns = [
     path('listados/<int:pk>/generar-video/', generar_video, name='generar_video'),
     path('listados/<int:pk>/video/', generar_video, name='generar_video_legacy'),
     path('listados/<int:listado_id>/video-status/', video_status, name='video_status_legacy'),
+    path('video-studio/quick-base/', video_studio_quick_base, name='video_studio_quick_base'),
     path('listados/<int:listado_id>/pdf-proxy/', proxy_pdf_view, name='pdf_proxy'),
     path('listados/<int:listado_id>/pdf-thumbnail/', proxy_pdf_thumbnail_view, name='pdf_thumbnail'),
     path('descargar-pdf/<int:listado_id>/', views.descargar_pdf, name='descargar_pdf'),
