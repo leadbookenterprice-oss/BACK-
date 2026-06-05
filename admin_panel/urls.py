@@ -34,6 +34,7 @@ urlpatterns = [
     # Cloudinary
     path('cloudinary/stats/', views_cloudinary.admin_cloudinary_stats),
     path('cloudinary/keys/', views_cloudinary.admin_cloudinary_keys),
+    path('cloudinary/logs/', views_cloudinary.admin_cloudinary_logs),
     path('cloudinary/keys/add/', views_cloudinary.admin_cloudinary_keys_add),
     path('cloudinary/keys/test-all/', views_cloudinary.admin_cloudinary_keys_test_all),
     path('cloudinary/keys/<int:pk>/test/', views_cloudinary.admin_cloudinary_keys_test),

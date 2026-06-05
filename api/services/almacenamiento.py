@@ -8,6 +8,7 @@ Nunca pierde referencias a archivos ya subidos.
 
 import logging
 import io
+import time
 from urllib.parse import urlparse
 
 import cloudinary
@@ -17,7 +18,7 @@ from django.core.cache import cache
 from django.conf import settings
 from django.utils import timezone
 
-from api.models import APIKey
+from api.models import APIKey, CloudinaryStorageLog
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class AlmacenamientoCloudinary:
     Reglas:
     - Los archivos se agrupan bajo el ID del usuario y el tipo.
     - Si hay una cuenta en el pool que tiene espacio, la usa.
-    - Si todas están llenas, usa la cuenta global del .env como fallback.
+    - Si todas están llenas, falla claro y deja log SQL; no usa fallback global silencioso.
     - El public_id es determinístico: tipo + user_id + listado_id (si aplica).
       Esto permite idempotencia: no se re-sube si ya existe.
     """
@@ -74,6 +75,8 @@ class AlmacenamientoCloudinary:
         return APIKey.objects.filter(
             servicio__nombre__iexact='cloudinary', 
             status__in=['available', 'active', 'assigned', 'in_bundle']
+        ).exclude(
+            cloudinary_status__in=['LLENA', 'INVALIDA']
         ).order_by('id')
 
     @classmethod
@@ -162,6 +165,56 @@ class AlmacenamientoCloudinary:
             logger.warning(f'[Almacenamiento] No se pudo marcar fallo de Cloudinary key={key_id}: {mark_exc}')
         cls._invalidate_stats_cache(key_id)
 
+    @staticmethod
+    def _error_code_for_classification(classification: str) -> str:
+        return {
+            'full': 'cloudinary_account_full',
+            'invalid': 'cloudinary_credentials_invalid',
+            'temporary': 'cloudinary_temporary_error',
+        }.get(classification, 'cloudinary_temporary_error')
+
+    @classmethod
+    def _create_storage_log(
+        cls,
+        *,
+        api_key_id=None,
+        user_id=None,
+        listado_id=None,
+        cloud_name='',
+        asset_type='',
+        operation='upload',
+        status='failed',
+        public_id='',
+        resource_type='',
+        bytes_count=0,
+        error_code='',
+        error_message='',
+        duration_ms=0,
+        is_probe=False,
+        metadata=None,
+    ):
+        """Guarda auditoria SQL sin romper la subida si el log falla."""
+        try:
+            CloudinaryStorageLog.objects.create(
+                api_key_id=api_key_id,
+                user_id=user_id or None,
+                listado_id=listado_id or None,
+                cloud_name=cloud_name or '',
+                asset_type=asset_type or '',
+                operation=operation,
+                status=status,
+                public_id=public_id or '',
+                resource_type=resource_type or '',
+                bytes=int(bytes_count or 0),
+                error_code=error_code or '',
+                error_message=str(error_message or '')[:4000],
+                duration_ms=max(int(duration_ms or 0), 0),
+                is_probe=bool(is_probe),
+                metadata=metadata or {},
+            )
+        except Exception as log_exc:
+            logger.warning(f'[Almacenamiento] No se pudo guardar CloudinaryStorageLog: {log_exc}')
+
     @classmethod
     def get_mejor_cuenta(cls) -> tuple[dict | None, int | None]:
         """
@@ -178,42 +231,89 @@ class AlmacenamientoCloudinary:
                 continue
             stats = cls._get_stats(k)
             if stats.get('error'):
+                cls._mark_upload_failure(k.id, stats.get('error'))
                 continue
             if stats.get('free_bytes', 0) >= UMBRAL_BYTES_MINIMO:
                 return creds, k.id
-        logger.warning('[Almacenamiento] Todas las cuentas del pool estan llenas o sin stats validas. Usando config global.')
-        if False:
-            # Todas están casi llenas o el pool está vacío → fallback global
-            logger.warning('[Almacenamiento] Todas las cuentas del pool están llenas o vacías. Usando config global.')
-            return None, None
-
+        logger.warning('[Almacenamiento] Todas las cuentas del pool estan llenas o sin stats validas.')
         return None, None
 
     @classmethod
-    def get_cuentas_ordenadas(cls) -> list[tuple[dict | None, int | None]]:
-        """Devuelve cuentas del pool en cascada estable y fallback global al final."""
+    def get_cuentas_ordenadas(
+        cls,
+        *,
+        user_id=None,
+        listado_id=None,
+        asset_type='',
+        public_id='',
+    ) -> list[tuple[dict | None, int | None]]:
+        """Devuelve cuentas del pool en cascada estable, sin fallback silencioso."""
         ordered = []
         for k in cls._get_pool_keys():
             creds = cls._parse_cloudinary_url(k.api_key)
             if not creds:
+                cls._create_storage_log(
+                    api_key_id=k.id,
+                    user_id=user_id,
+                    listado_id=listado_id,
+                    cloud_name=k.label or '',
+                    asset_type=asset_type,
+                    operation='upload',
+                    status='skipped',
+                    public_id=public_id,
+                    error_code='cloudinary_credentials_invalid',
+                    error_message='URL Cloudinary invalida o incompleta',
+                )
                 continue
             stats = cls._get_stats(k)
             if stats.get('error'):
+                cls._mark_upload_failure(k.id, stats.get('error'))
+                classification = cls._classify_cloudinary_error(stats.get('error'))
+                cls._create_storage_log(
+                    api_key_id=k.id,
+                    user_id=user_id,
+                    listado_id=listado_id,
+                    cloud_name=creds.get('cloud_name') or k.label or '',
+                    asset_type=asset_type,
+                    operation='upload',
+                    status='skipped',
+                    public_id=public_id,
+                    error_code=cls._error_code_for_classification(classification),
+                    error_message=stats.get('error'),
+                )
                 continue
             if stats.get('free_bytes', 0) < UMBRAL_BYTES_MINIMO:
-                cls._mark_upload_failure(k.id, f"storage limit: menos de {UMBRAL_BYTES_MINIMO} bytes libres")
+                message = f"storage limit: menos de {UMBRAL_BYTES_MINIMO} bytes libres"
+                cls._mark_upload_failure(k.id, message)
+                cls._create_storage_log(
+                    api_key_id=k.id,
+                    user_id=user_id,
+                    listado_id=listado_id,
+                    cloud_name=creds.get('cloud_name') or k.label or '',
+                    asset_type=asset_type,
+                    operation='upload',
+                    status='skipped',
+                    public_id=public_id,
+                    error_code='cloudinary_account_full',
+                    error_message=message,
+                    metadata={
+                        'free_bytes': stats.get('free_bytes', 0),
+                        'used_bytes': stats.get('used_bytes', 0),
+                        'total_bytes': stats.get('total_bytes', 0),
+                    },
+                )
                 continue
             ordered.append((creds, k.id))
 
-        global_creds = {
-            'cloud_name': getattr(settings, 'CLOUDINARY_CLOUD_NAME', '') or getattr(settings, 'CLOUDINARY_CLOUD', ''),
-            'api_key': getattr(settings, 'CLOUDINARY_API_KEY', ''),
-            'api_secret': getattr(settings, 'CLOUDINARY_API_SECRET', ''),
-        }
-        if all(global_creds.values()):
-            ordered.append((global_creds, None))
-        if not ordered:
-            ordered.append((None, None))
+        allow_global_fallback = str(getattr(settings, 'CLOUDINARY_ALLOW_GLOBAL_FALLBACK', False)).lower() in {'1', 'true', 'yes'}
+        if allow_global_fallback:
+            global_creds = {
+                'cloud_name': getattr(settings, 'CLOUDINARY_CLOUD_NAME', '') or getattr(settings, 'CLOUDINARY_CLOUD', ''),
+                'api_key': getattr(settings, 'CLOUDINARY_API_KEY', ''),
+                'api_secret': getattr(settings, 'CLOUDINARY_API_SECRET', ''),
+            }
+            if all(global_creds.values()):
+                ordered.append((global_creds, None))
         return ordered
 
     # ── Subida de archivos ────────────────────────────────────────────────────
@@ -260,8 +360,30 @@ class AlmacenamientoCloudinary:
                 public_id += '.pdf'
 
         last_error = None
-        for creds, key_id in cls.get_cuentas_ordenadas():
+        cuentas = cls.get_cuentas_ordenadas(
+            user_id=user_id,
+            listado_id=listado_id,
+            asset_type=tipo,
+            public_id=public_id,
+        )
+        if not cuentas:
+            cls._create_storage_log(
+                user_id=user_id,
+                listado_id=listado_id,
+                asset_type=tipo,
+                operation='upload',
+                status='failed',
+                public_id=public_id,
+                error_code='cloudinary_pool_unavailable',
+                error_message='No hay cuentas Cloudinary disponibles para guardar este contenido',
+            )
+            logger.error(f'[Almacenamiento] No hay cuentas Cloudinary disponibles para {tipo}')
+            return None
+
+        for creds, key_id in cuentas:
             extra_creds = creds if creds else {}
+            cloud_name_attempt = (creds or {}).get('cloud_name') or ''
+            started_at = time.monotonic()
             try:
                 if hasattr(contenido, 'read'):
                     contenido.seek(0)
@@ -314,10 +436,51 @@ class AlmacenamientoCloudinary:
                     'version': str(resultado.get('version') or ''),
                     'storage_key_id': key_id,
                 }
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+                if key_id:
+                    APIKey.objects.filter(pk=key_id).update(
+                        last_used_at=timezone.now(),
+                        last_health_status=True,
+                    )
+                cls._create_storage_log(
+                    api_key_id=key_id,
+                    user_id=user_id,
+                    listado_id=listado_id,
+                    cloud_name=cloud_name_result,
+                    asset_type=tipo,
+                    operation='upload',
+                    status='success',
+                    public_id=metadata.get('public_id') or public_id,
+                    resource_type=metadata.get('resource_type') or resource_type_result,
+                    bytes_count=metadata.get('bytes') or 0,
+                    duration_ms=duration_ms,
+                    metadata={
+                        'secure_url': metadata.get('secure_url'),
+                        'format': metadata.get('format'),
+                        'width': metadata.get('width'),
+                        'height': metadata.get('height'),
+                        'storage_key_id': key_id,
+                    },
+                )
                 logger.info(f'[Almacenamiento] ✓ {tipo} subido para user {user_id}: {url}')
                 return metadata if return_metadata else url
             except cloudinary.exceptions.Error as e:
                 last_error = e
+                classification = cls._classify_cloudinary_error(e)
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+                cls._create_storage_log(
+                    api_key_id=key_id,
+                    user_id=user_id,
+                    listado_id=listado_id,
+                    cloud_name=cloud_name_attempt,
+                    asset_type=tipo,
+                    operation='upload',
+                    status='failed',
+                    public_id=public_id,
+                    error_code=cls._error_code_for_classification(classification),
+                    error_message=e,
+                    duration_ms=duration_ms,
+                )
                 cls._mark_upload_failure(key_id, e)
                 if 'already exists' in str(e).lower() or '409' in str(e):
                     existing = cls._get_existing_url(public_id, 'auto', extra_creds)
@@ -340,8 +503,33 @@ class AlmacenamientoCloudinary:
                 logger.warning(f'[Almacenamiento] Cuenta Cloudinary falló para {tipo}, probando siguiente: {e}')
             except Exception as e:
                 last_error = e
+                classification = cls._classify_cloudinary_error(e)
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+                cls._create_storage_log(
+                    api_key_id=key_id,
+                    user_id=user_id,
+                    listado_id=listado_id,
+                    cloud_name=cloud_name_attempt,
+                    asset_type=tipo,
+                    operation='upload',
+                    status='failed',
+                    public_id=public_id,
+                    error_code=cls._error_code_for_classification(classification),
+                    error_message=e,
+                    duration_ms=duration_ms,
+                )
                 cls._mark_upload_failure(key_id, e)
                 logger.warning(f'[Almacenamiento] Error subiendo {tipo}, probando siguiente cuenta: {e}')
+        cls._create_storage_log(
+            user_id=user_id,
+            listado_id=listado_id,
+            asset_type=tipo,
+            operation='upload',
+            status='failed',
+            public_id=public_id,
+            error_code='cloudinary_pool_unavailable',
+            error_message=last_error or 'Todas las cuentas Cloudinary fallaron',
+        )
         logger.error(f'[Almacenamiento] Error final subiendo {tipo}: {last_error}')
         return None
 

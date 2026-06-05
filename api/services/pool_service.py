@@ -32,9 +32,9 @@ SERVICE_DEFAULTS = {
     },
     'cerebras': {
         'descripcion': 'Cerebras',
-        'default_daily_limit': 1710,
+        'default_daily_limit': 1000000,
         'default_monthly_limit': None,
-        'extra_increment': 1500,
+        'extra_increment': 1000000,
     },
     'groq': {
         'descripcion': 'Groq',
@@ -115,11 +115,11 @@ CEREBRAS_STARTER_SHARED_USERS_PER_KEY = 57
 CEREBRAS_SHARED_PLANS = {'free', 'starter'}
 
 PLAN_API_COUNTS = {
-    'free': {'cerebras': 1},
-    'starter': {'cerebras': 1},
-    'pro': {'cerebras': 3},
-    'scale': {'cerebras': 5},
-    'business': {'cerebras': 5},
+    'free': {},
+    'starter': {},
+    'pro': {},
+    'scale': {},
+    'business': {},
 }
 
 COMPATIBILITY_API_COUNTS = {}

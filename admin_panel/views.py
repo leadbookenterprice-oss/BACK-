@@ -356,22 +356,37 @@ def admin_api_keys_detail(request, pk):
                 quota.blocked_reason = None
                 quota.save(update_fields=['requests_today', 'is_blocked', 'blocked_reason', 'updated_at'])
 
+    def clear_slot_lock():
+        key.slot_locked_by = None
+        key.slot_locked_listado = None
+        key.slot_locked_at = None
+        key.slot_locked_until = None
+        key.slot_last_error = None
+
     if request.method == 'POST':
         path = request.path
         if path.endswith('/liberar/'):
             UserAPIAssignment.objects.filter(apikey=key, activo=True).update(activo=False)
-            key.status = 'available'; key.save(update_fields=['status', 'updated_at'])
+            key.status = 'available'
+            clear_slot_lock()
+            key.save(update_fields=['status', 'slot_locked_by', 'slot_locked_listado', 'slot_locked_at', 'slot_locked_until', 'slot_last_error', 'updated_at'])
             return Response({'status': 'released'})
         elif path.endswith('/reactivar/'):
             key.requests_today = 0; key.requests_this_month = 0; key.error_count = 0
-            key.status = 'assigned' if UserAPIAssignment.objects.filter(apikey=key, activo=True).exists() else 'available'
-            key.save(update_fields=['status', 'requests_today', 'requests_this_month', 'error_count', 'updated_at'])
+            key.slot_tokens_today = 0
+            key.slot_tokens_reset_at = timezone.now()
+            key.status = 'available' if str(key.servicio.nombre).lower() == 'cerebras' else ('assigned' if UserAPIAssignment.objects.filter(apikey=key, activo=True).exists() else 'available')
+            clear_slot_lock()
+            key.save(update_fields=['status', 'requests_today', 'requests_this_month', 'error_count', 'slot_tokens_today', 'slot_tokens_reset_at', 'slot_locked_by', 'slot_locked_listado', 'slot_locked_at', 'slot_locked_until', 'slot_last_error', 'updated_at'])
             reset_related_quotas()
             return Response({'status': 'reactivated'})
         elif path.endswith('/reset/'):
             key.requests_today = 0; key.requests_this_month = 0; key.error_count = 0
+            key.slot_tokens_today = 0
+            key.slot_tokens_reset_at = timezone.now()
+            clear_slot_lock()
             if key.status == 'exhausted':
-                key.status = 'assigned' if UserAPIAssignment.objects.filter(apikey=key, activo=True).exists() else 'available'
+                key.status = 'available' if str(key.servicio.nombre).lower() == 'cerebras' else ('assigned' if UserAPIAssignment.objects.filter(apikey=key, activo=True).exists() else 'available')
             key.save()
             reset_related_quotas()
             return Response({'status': 'reset'})

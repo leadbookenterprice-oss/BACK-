@@ -9365,25 +9365,34 @@ def upload_fotos_listado(request):
     Sube fotos de propiedad (portada y galerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­a) a Cloudinary a travÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s del pool del backend.
     """
     data = request.data
+    mode = str(data.get('mode') or '').strip().lower()
+    replace_mode = mode == 'replace'
+    delete_removed = str(data.get('delete_removed') or '').strip().lower() in ('1', 'true', 'yes', 'on')
     portada_input = _parse_media_ref_input(data.get('portadaUrl'))
     if hasattr(data, 'getlist'):
         fotos_input = data.getlist('fotosRecorrido') or data.get('fotosRecorrido', [])
+        removed_input = data.getlist('removedMediaRefs') or data.get('removedMediaRefs', [])
     else:
         fotos_input = data.get('fotosRecorrido', [])
+        removed_input = data.get('removedMediaRefs', [])
     listado_id = data.get('listado_id') or data.get('listadoId')
     portada_file = request.FILES.get('portada_file')
     fotos_files = request.FILES.getlist('fotos_files')
     allow_legacy_base64 = _allow_legacy_base64_media()
-    if not isinstance(fotos_input, list):
-        fotos_input = [fotos_input] if fotos_input else []
-    parsed_fotos_input = []
-    for item in fotos_input:
-        parsed_item = _parse_media_ref_input(item)
-        if isinstance(parsed_item, list):
-            parsed_fotos_input.extend([sub_item for sub_item in parsed_item if sub_item])
-        elif parsed_item:
-            parsed_fotos_input.append(parsed_item)
-    fotos_input = parsed_fotos_input
+    def parse_media_list(value):
+        if not isinstance(value, list):
+            value = [value] if value else []
+        parsed_items = []
+        for item in value:
+            parsed_item = _parse_media_ref_input(item)
+            if isinstance(parsed_item, list):
+                parsed_items.extend([sub_item for sub_item in parsed_item if sub_item])
+            elif parsed_item:
+                parsed_items.append(parsed_item)
+        return parsed_items
+
+    fotos_input = parse_media_list(fotos_input)
+    removed_input = parse_media_list(removed_input)
 
     user_id = request.user.id
     response_data = {
@@ -9402,6 +9411,44 @@ def upload_fotos_listado(request):
             if isinstance(item, str) and item.startswith('http'):
                 return item
             return None
+
+        def safe_destroy_removed_refs(removed_items, accepted_items):
+            if not delete_removed or not removed_items:
+                return
+
+            accepted_identities = {media_identity(item) for item in accepted_items if media_identity(item)}
+            allowed_prefixes = [f'leadbook/listados/usuario_{user_id}/temp/foto_']
+            if listado_id:
+                allowed_prefixes.append(f'leadbook/listados/usuario_{user_id}/listado_{listado_id}/foto_')
+
+            for removed in removed_items:
+                parsed_removed = _parse_media_ref_input(removed)
+                if not isinstance(parsed_removed, dict):
+                    continue
+                public_id = str(parsed_removed.get('public_id') or '').strip()
+                if not public_id or public_id in accepted_identities:
+                    continue
+                if not any(public_id.startswith(prefix) for prefix in allowed_prefixes):
+                    logger.warning("[UPLOAD] Ignorando eliminacion no segura de asset: %s", public_id)
+                    continue
+
+                resource_type = parsed_removed.get('resource_type') or 'image'
+                cloud_name = parsed_removed.get('cloud_name') or parsed_removed.get('cloudinary_account')
+                api_key_val = parsed_removed.get('api_key')
+                api_secret_val = parsed_removed.get('api_secret')
+                try:
+                    if cloud_name and api_key_val and api_secret_val:
+                        cld_cfg = cloudinary.Config(
+                            cloud_name=cloud_name,
+                            api_key=api_key_val,
+                            api_secret=api_secret_val,
+                        )
+                        cloudinary.uploader.destroy(public_id, resource_type=resource_type, config=cld_cfg)
+                    else:
+                        cloudinary.uploader.destroy(public_id, resource_type=resource_type)
+                    logger.info("[UPLOAD] Asset removido eliminado de Cloudinary: %s", public_id)
+                except Exception as cld_err:
+                    logger.warning("[UPLOAD] No se pudo eliminar asset removido %s: %s", public_id, cld_err)
 
         def complete_media_ref(value, role, order):
             media = value.copy() if isinstance(value, dict) else {}
@@ -9530,7 +9577,9 @@ def upload_fotos_listado(request):
             response_data['portadaUrl'] = normalized[0]
             response_data['fotosRecorrido'] = normalized[1:]
 
-        if listado_id and normalized:
+        safe_destroy_removed_refs(removed_input, normalized)
+
+        if listado_id and (normalized or replace_mode):
             listado = Listado.objects.filter(id=listado_id, agente=request.user).first()
             if listado:
                 datos_extra = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}

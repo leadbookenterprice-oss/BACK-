@@ -1,5 +1,6 @@
 import base64
 import io
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -7,6 +8,7 @@ import cloudinary.api
 import cloudinary.exceptions
 import cloudinary.uploader
 from django.core.cache import cache
+from django.core.paginator import Paginator
 from django.db import close_old_connections
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -14,7 +16,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from admin_panel.auth import is_admin_request
-from api.models import APIKey, Servicio
+from api.models import APIKey, CloudinaryStorageLog, Servicio
 from api.services.almacenamiento import AlmacenamientoCloudinary, UMBRAL_BYTES_MINIMO
 
 
@@ -140,6 +142,45 @@ def _update_key_health(key, result):
     cache.delete(f"cloudinary_stats_{key.id}")
 
 
+def _cloudinary_error_code(status_value):
+    return {
+        "LLENA": "cloudinary_account_full",
+        "INVALIDA": "cloudinary_credentials_invalid",
+        "ERROR_TEMPORAL": "cloudinary_temporary_error",
+    }.get(status_value or "", "")
+
+
+def _log_test_result(key, result, duration_ms=0):
+    status_value = result.get("status") or "ERROR_TEMPORAL"
+    log_status = "success" if status_value in ("OK", "CASI_LLENA") else "failed"
+    try:
+        CloudinaryStorageLog.objects.create(
+            api_key=key,
+            cloud_name=result.get("cloud_name") or key.label or "",
+            asset_type="healthcheck",
+            operation="health_probe",
+            status=log_status,
+            public_id="leadbook/_healthchecks/1x1-probe",
+            resource_type="image",
+            bytes=0,
+            error_code=_cloudinary_error_code(status_value),
+            error_message=result.get("error") or "",
+            duration_ms=max(int(duration_ms or 0), 0),
+            is_probe=True,
+            metadata={
+                "cloudinary_status": status_value,
+                "used_bytes": result.get("used_bytes") or 0,
+                "total_bytes": result.get("total_bytes") or 0,
+                "free_bytes": result.get("free_bytes") or 0,
+                "usage_percent": result.get("usage_percent") or 0,
+                "upload_probe_ok": result.get("upload_probe_ok"),
+                "recommendation": result.get("recommendation"),
+            },
+        )
+    except Exception:
+        pass
+
+
 def _recommendation_for_status(status_value):
     return {
         "OK": "usable",
@@ -152,6 +193,15 @@ def _recommendation_for_status(status_value):
 
 def _serialize_key(key):
     status_value = key.cloudinary_status or "SIN_TEST"
+    last_success = CloudinaryStorageLog.objects.filter(
+        api_key=key,
+        status="success",
+        is_probe=False,
+    ).order_by("-creado_en").first()
+    last_failure = CloudinaryStorageLog.objects.filter(
+        api_key=key,
+        status="failed",
+    ).order_by("-creado_en").first()
     return {
         "id": key.id,
         "cloud_name": key.label or (AlmacenamientoCloudinary._parse_cloudinary_url(key.api_key) or {}).get("cloud_name") or "Sin nombre",
@@ -168,6 +218,18 @@ def _serialize_key(key):
         "last_tested_at": key.cloudinary_last_tested_at.isoformat() if key.cloudinary_last_tested_at else None,
         "error": key.cloudinary_error,
         "recommendation": _recommendation_for_status(status_value),
+        "last_success_upload": {
+            "at": last_success.creado_en.isoformat(),
+            "asset_type": last_success.asset_type,
+            "public_id": last_success.public_id,
+            "bytes": last_success.bytes,
+        } if last_success else None,
+        "last_failed_upload": {
+            "at": last_failure.creado_en.isoformat(),
+            "asset_type": last_failure.asset_type,
+            "error_code": last_failure.error_code,
+            "error": last_failure.error_message,
+        } if last_failure else None,
     }
 
 
@@ -200,6 +262,7 @@ def _summary_from_keys(keys):
 
 def _test_key_by_id(key_id, include_probe=True):
     close_old_connections()
+    started_at = time.monotonic()
     try:
         key = APIKey.objects.select_related("servicio").get(pk=key_id, servicio__nombre__iexact="cloudinary")
         creds = AlmacenamientoCloudinary._parse_cloudinary_url(key.api_key)
@@ -218,6 +281,7 @@ def _test_key_by_id(key_id, include_probe=True):
                 "recommendation": "fix_credentials",
             }
             _update_key_health(key, result)
+            _log_test_result(key, result, int((time.monotonic() - started_at) * 1000))
             return result
 
         try:
@@ -267,9 +331,36 @@ def _test_key_by_id(key_id, include_probe=True):
             }
 
         _update_key_health(key, result)
+        _log_test_result(key, result, int((time.monotonic() - started_at) * 1000))
         return result
     finally:
         close_old_connections()
+
+
+def _serialize_log(log):
+    return {
+        "id": log.id,
+        "created_at": log.creado_en.isoformat() if log.creado_en else None,
+        "api_key_id": log.api_key_id,
+        "api_key_masked": _mask_api_key(log.api_key.api_key) if log.api_key_id and log.api_key else None,
+        "cloud_name": log.cloud_name,
+        "asset_type": log.asset_type,
+        "operation": log.operation,
+        "status": log.status,
+        "public_id": log.public_id,
+        "resource_type": log.resource_type,
+        "bytes": log.bytes,
+        "error_code": log.error_code,
+        "error_message": log.error_message,
+        "duration_ms": log.duration_ms,
+        "is_probe": log.is_probe,
+        "user": {
+            "id": log.user_id,
+            "email": getattr(log.user, "email", None),
+        } if log.user_id else None,
+        "listado_id": log.listado_id,
+        "metadata": log.metadata or {},
+    }
 
 
 @api_view(["GET"])
@@ -290,6 +381,49 @@ def admin_cloudinary_stats(request):
         "used_bytes": used,
         "free_bytes": free,
         "summary": _summary_from_keys(keys),
+    })
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def admin_cloudinary_logs(request):
+    if not _check_admin(request):
+        return Response({"error": "Forbidden"}, status=403)
+
+    qs = CloudinaryStorageLog.objects.select_related("api_key", "user", "listado").order_by("-creado_en")
+    api_key_id = request.query_params.get("api_key_id")
+    cloud_name = request.query_params.get("cloud_name")
+    asset_type = request.query_params.get("asset_type")
+    status_value = request.query_params.get("status")
+    user_id = request.query_params.get("user_id")
+    listado_id = request.query_params.get("listado_id")
+    operation = request.query_params.get("operation")
+
+    if api_key_id:
+        qs = qs.filter(api_key_id=api_key_id)
+    if cloud_name:
+        qs = qs.filter(cloud_name__iexact=cloud_name)
+    if asset_type:
+        qs = qs.filter(asset_type__iexact=asset_type)
+    if status_value:
+        qs = qs.filter(status=status_value)
+    if user_id:
+        qs = qs.filter(user_id=user_id)
+    if listado_id:
+        qs = qs.filter(listado_id=listado_id)
+    if operation:
+        qs = qs.filter(operation=operation)
+
+    page = max(int(request.query_params.get("page") or 1), 1)
+    page_size = min(max(int(request.query_params.get("page_size") or 50), 1), 100)
+    paginator = Paginator(qs, page_size)
+    page_obj = paginator.get_page(page)
+    return Response({
+        "count": paginator.count,
+        "page": page_obj.number,
+        "page_size": page_size,
+        "total_pages": paginator.num_pages,
+        "results": [_serialize_log(log) for log in page_obj.object_list],
     })
 
 

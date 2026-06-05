@@ -1,3 +1,5 @@
+import json
+
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
@@ -261,6 +263,106 @@ class ListingResultPersistenceTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
+    def test_upload_fotos_replace_returns_only_current_batch(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa con fotos',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={},
+        )
+
+        def fake_upload(file_obj, user_id, listado_id=None, tipo_foto='portada', indice=0):
+            stem = file_obj.name.rsplit('.', 1)[0]
+            public_id = f'leadbook/listados/usuario_{user_id}/listado_{listado_id}/foto_{stem}_{tipo_foto}_{indice}'
+            return {
+                'public_id': public_id,
+                'secure_url': f'https://res.cloudinary.com/demo/image/upload/{public_id}.webp',
+                'url': f'https://res.cloudinary.com/demo/image/upload/{public_id}.webp',
+                'resource_type': 'image',
+                'cloudinary_account': 'demo',
+                'format': 'webp',
+                'width': 1200,
+                'height': 900,
+                'bytes': 128,
+            }
+
+        def photo(name):
+            return SimpleUploadedFile(name, b'image-bytes', content_type='image/webp')
+
+        with patch('api.services.almacenamiento.AlmacenamientoCloudinary.guardar_foto_propiedad_file', side_effect=fake_upload), \
+             patch('api.views.cloudinary.uploader.destroy') as destroy_mock:
+            first_response = self.client.post(
+                reverse('upload_fotos_listado'),
+                {
+                    'mode': 'replace',
+                    'delete_removed': 'true',
+                    'listado_id': str(listado.id),
+                    'portada_file': photo('batch1-cover.webp'),
+                    'fotos_files': [photo(f'batch1-gallery-{idx}.webp') for idx in range(7)],
+                },
+                format='multipart',
+            )
+            self.assertEqual(first_response.status_code, 200, first_response.content)
+            first_payload = first_response.json()
+            self.assertEqual(len(first_payload['fotosRecorrido']), 7)
+
+            removed_refs = [first_payload['portadaUrl'], *first_payload['fotosRecorrido']]
+            second_response = self.client.post(
+                reverse('upload_fotos_listado'),
+                {
+                    'mode': 'replace',
+                    'delete_removed': 'true',
+                    'listado_id': str(listado.id),
+                    'removedMediaRefs': [json.dumps(item) for item in removed_refs],
+                    'portada_file': photo('batch2-cover.webp'),
+                    'fotos_files': [photo(f'batch2-gallery-{idx}.webp') for idx in range(7)],
+                },
+                format='multipart',
+            )
+
+        self.assertEqual(second_response.status_code, 200, second_response.content)
+        second_payload = second_response.json()
+        self.assertEqual(len(second_payload['fotosRecorrido']), 7)
+        all_refs = [second_payload['portadaUrl'], *second_payload['fotosRecorrido']]
+        self.assertTrue(all('batch2' in ref['public_id'] for ref in all_refs))
+        self.assertFalse(any('batch1' in ref['public_id'] for ref in all_refs))
+        self.assertEqual(destroy_mock.call_count, 8)
+
+        listado.refresh_from_db()
+        self.assertEqual(len(listado.datos_extra['fotosRecorrido']), 7)
+        self.assertTrue(all('batch2' in ref['public_id'] for ref in listado.datos_extra['fotosRecorrido']))
+
+    def test_upload_fotos_delete_removed_only_safe_user_photo_assets(self):
+        safe_public_id = f'leadbook/listados/usuario_{self.user.id}/temp/foto_old_galeria_0'
+        unsafe_other_user = 'leadbook/listados/usuario_999/temp/foto_other_user'
+        unsafe_generated = f'leadbook/listados/usuario_{self.user.id}/temp/generated_asset_1'
+        unsafe_other_folder = f'leadbook/posts/usuario_{self.user.id}/foto_post_1'
+
+        removed_refs = [
+            {'public_id': safe_public_id, 'resource_type': 'image'},
+            {'public_id': unsafe_other_user, 'resource_type': 'image'},
+            {'public_id': unsafe_generated, 'resource_type': 'image'},
+            {'public_id': unsafe_other_folder, 'resource_type': 'image'},
+        ]
+
+        with patch('api.views.cloudinary.uploader.destroy') as destroy_mock:
+            response = self.client.post(
+                reverse('upload_fotos_listado'),
+                {
+                    'mode': 'replace',
+                    'delete_removed': True,
+                    'removedMediaRefs': removed_refs,
+                },
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        destroy_mock.assert_called_once_with(safe_public_id, resource_type='image')
+
     def test_update_preserves_existing_generated_results(self):
         listado = Listado.objects.create(
             agente=self.user,
@@ -407,6 +509,83 @@ class ListingResultPersistenceTests(TestCase):
 
         self.assertEqual(response.status_code, 400, response.content)
         self.assertEqual(response.json().get('error'), 'URL de PDF no permitida')
+
+
+class CaptionEncodingTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email='caption-encoding-test@leadbook.local',
+            password='test-pass',
+            nombre='Caption Encoding Tester',
+        )
+
+    def _sample_data(self):
+        return {
+            'tipoPropiedad': 'Cochera',
+            'ciudad': 'Dubai',
+            'pais': 'Emiratos Arabes Unidos',
+            'operacion': 'venta',
+            'moneda': 'USD',
+            'precio': '1000000',
+        }
+
+    def assertCleanSpanishCaption(self, caption):
+        for marker in ('\u00c3', '\u00c2', '\u00e2\u20ac'):
+            self.assertNotIn(marker, caption)
+        for expected in (
+            'ubicaci\u00f3n',
+            'proyecci\u00f3n',
+            'Adem\u00e1s',
+            't\u00e9cnica',
+        ):
+            self.assertIn(expected, caption)
+
+    def test_finalize_caption_repairs_fallback_extension_blocks(self):
+        from api.views import _finalize_caption_text
+
+        caption = _finalize_caption_text(
+            'Oportunidad premium.',
+            self._sample_data(),
+            formato='post',
+            prefs=None,
+            max_chars=2200,
+        )
+
+        self.assertCleanSpanishCaption(caption)
+
+    def test_actualizar_resultados_listado_persists_clean_caption(self):
+        from api.views import _finalize_caption_text, actualizar_resultados_listado
+
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Cochera Dubai',
+            tipo_propiedad='cochera',
+            operacion='venta',
+            ciudad='Dubai',
+            precio='1000000',
+            moneda='USD',
+            datos_extra={'resultados': {}},
+        )
+        caption = _finalize_caption_text(
+            'Oportunidad premium.',
+            self._sample_data(),
+            formato='post',
+            prefs=None,
+            max_chars=2200,
+        )
+
+        actualizar_resultados_listado(
+            listado,
+            'post',
+            {
+                'url': 'https://res.cloudinary.com/demo/image/upload/post.jpg',
+                'caption': caption,
+            },
+        )
+
+        listado.refresh_from_db()
+        stored_caption = listado.datos_extra['resultados']['post']['caption']
+        self.assertCleanSpanishCaption(stored_caption)
 
 
 class CommercialAgentPhotoFlowTests(TestCase):

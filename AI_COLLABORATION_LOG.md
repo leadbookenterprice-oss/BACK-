@@ -77,6 +77,103 @@ Recent backend changes known:
 
 ## Agent Log
 
+### 2026-06-05 - Codex - Reporte solicitado
+
+Objetivo actual:
+
+- Coordinar estado entre Codex/agentes activos para LeadBook, sin modificar codigo de producto.
+- Contexto inmediato: el usuario pidio primero implementar generacion secuencial con Cerebras y luego acoto el pedido a un cuadro de limites de Cerebras.
+
+Estado actual:
+
+- No se implementaron cambios de producto en esta sesion.
+- Se consulto documentacion oficial de Cerebras y se respondio al usuario con tabla de limites: Free Trial `gpt-oss-120b`/`zai-glm-4.7` = 5 RPM, 30K TPM, 1M TPH, 1M TPD; Developer Pay-as-you-go `gpt-oss-120b` = 1K RPM/1M TPM, `zai-glm-4.7` = 500 RPM/500K TPM.
+- Recomendacion vigente para LeadBook: usar `gpt-oss-120b`, generacion secuencial, 1 listado completo por vez por key, presupuesto conservador aproximado de 25K tokens por listado completo.
+
+Archivos tocados/sucios:
+
+- Tuyo en esta sesion: solo este `AI_COLLABORATION_LOG.md` para registrar el reporte.
+- Preexistentes en `Backend--main`: `.env.example`, `AI_COLLABORATION_LOG.md`, `admin_panel/urls.py`, `admin_panel/views.py`, `admin_panel/views_cloudinary.py`, `api/ai_services.py`, `api/models.py`, `api/services/almacenamiento.py`, `api/services/pool_service.py`, `api/tests.py`, `api/views.py`, `api/views_admin.py`, `api/migrations/0020_cerebras_api_slots.py`, `api/migrations/0021_cloudinarystoragelog_and_more.py`, `api/services/cerebras_slots.py`.
+- Preexistentes en `frontend-new`: `.opencode/skills/leadbook-frontend-designer/SKILL.md`, `AGENTS.md`, `AI_AGENT_README.md`, `AI_COLLABORATION_LOG.md`, `src/pages/ResultadosPage.jsx`, `src/services/api.js`.
+- Preexistentes en `dash_admin_leadbook-master`: `AI_COLLABORATION_LOG.md`, `src/components/admin/CloudinaryView.jsx`, `src/pages/admin/ApiPoolPage.jsx`.
+
+Verificaciones realizadas:
+
+- Leidos `..\AI_COLLABORATION_LOG.md`, `Backend--main\AI_COLLABORATION_LOG.md` y `frontend-new\AI_COLLABORATION_LOG.md`.
+- Ejecutados `git status --short --branch`, `git diff --stat` y `git log --oneline -8` en `Backend--main`, `frontend-new` y `dash_admin_leadbook-master`.
+- Verificada documentacion oficial de Cerebras: Rate Limits, Usage & Monitoring y Pricing.
+
+Bloqueos o decisiones necesarias:
+
+- Confirmar si se quiere pasar de informe/plan a implementacion real de generacion secuencial backend-driven.
+- Definir si la orquestacion final debe ir por Celery obligatorio o si se acepta fallback sincrono/thread en entornos sin worker.
+- Confirmar limite operativo por key: sugerido 30-40 listados/dia/key con margen, no el teorico.
+
+Riesgos de pisar trabajo ajeno:
+
+- Alto en `Backend--main`, `frontend-new` y admin porque hay cambios sucios preexistentes de otros agentes.
+- No revertir ni reformatear archivos tocados por OpenCode/Codex previos.
+- Si se implementa la generacion secuencial, coordinar antes de editar `api/views.py`, `api/ai_services.py`, `api/models.py`, `src/pages/ResultadosPage.jsx` y `src/services/api.js`.
+
+Proximos 3 pasos concretos:
+
+1. Si el usuario confirma implementacion, crear modelo/estado de corrida de generacion en backend y migracion sin tocar media pesada en Postgres.
+2. Instrumentar `call_cerebras_api()` para persistir headers `x-ratelimit-*`, tokens reales/estimados, modelo y error por request.
+3. Cambiar `frontend-new` para iniciar `generar-pack`, hacer polling de progreso y mostrar pasos `PDF -> post -> story -> carrusel -> email`.
+
+Comandos o tareas en progreso:
+
+- No hay comandos ni tareas en progreso desde esta sesion.
+- Antes de cerrar implementacion futura faltaria correr checks backend/frontend y actualizar logs sin pisar cambios ajenos.
+
+### 2026-06-03 - OpenCode - Cerebras backend slots for generation
+
+Objective:
+
+- Replace permanent Cerebras user-key assignment with temporary backend slots for content generation, without exposing keys to users or using silent fallbacks.
+
+Files modified:
+
+- `.env.example`
+- `admin_panel/views.py`
+- `api/ai_services.py`
+- `api/migrations/0020_cerebras_api_slots.py`
+- `api/models.py`
+- `api/services/cerebras_slots.py`
+- `api/services/pool_service.py`
+- `api/views.py`
+- `api/views_admin.py`
+
+Changes made:
+
+- Added Cerebras slot lock fields to `APIKey` and migration `0020_cerebras_api_slots.py`.
+- Added `api/services/cerebras_slots.py` to reserve/reuse slots, enforce daily token budget, release expired locks, and record slot usage/errors.
+- Changed `call_cerebras_api()` to reserve backend slots for authenticated generation, cap completion tokens by task, track token usage manually, and propagate slot/quota/rate-limit errors.
+- Fixed `smart_call()` so Cerebras quota/rate-limit errors are not swallowed as generic failures.
+- Stopped automatic plan assignment of permanent Cerebras keys by clearing Cerebras entries from `PLAN_API_COUNTS`.
+- Updated admin API endpoints/actions to expose slot metadata and clear slot locks on release/reactivate/reset.
+- Removed static PDF fallback when Cerebras/IA is unavailable; PDF now returns a controlled quota/provider error or 502 instead of silently rendering static content.
+- Added `CEREBRAS_DAILY_TOKEN_LIMIT` and `CEREBRAS_SLOT_TTL_SECONDS` to `.env.example`.
+
+Verification:
+
+- `py -3 -m py_compile "api\services\cerebras_slots.py" "api\ai_services.py" "api\views.py" "api\views_admin.py" "api\services\pool_service.py" "api\models.py" "admin_panel\views.py" "api\migrations\0020_cerebras_api_slots.py"` OK.
+- `py -3 manage.py check` OK.
+- `py -3 manage.py makemigrations --check --dry-run` OK.
+- `git diff --check` OK.
+
+Commit/push:
+
+- No commit or push in this session.
+
+Pending/risks:
+
+- Production must run migrations before deploy; local untracked Cloudinary migration `api/migrations/0021_cloudinarystoragelog_and_more.py` depends on `0020` and was not edited as part of this task.
+- Existing dirty Cloudinary/backend changes were left untouched.
+- Load one or more `cerebras` APIKey rows in the pool and keep `ALLOW_GLOBAL_API_FALLBACK=False` in production.
+- Recommended smoke tests after deploy: no key returns controlled 503, free slot generates, occupied slots return retry payload, exhausted token budget returns hard quota.
+- Agent: OpenCode
+
 ### 2026-06-03 - OpenCode - Starter daily listing quota and shared Cerebras pool
 
 Objective:
