@@ -5944,7 +5944,6 @@ class ListadosView(APIView):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
-@require_pro_feature('organic_content')
 def extract_listado_from_url(request):
     from django.conf import settings
 

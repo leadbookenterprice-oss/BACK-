@@ -289,6 +289,39 @@ class AdsStudioEndpointTests(TestCase):
         self.assertEqual(response.json()['media_candidates'], ['https://example.com/a.jpg'])
         self.assertEqual(response.json()['required_action'], 'none')
 
+    def test_extract_endpoint_allows_starter_plan(self):
+        starter_user = get_user_model().objects.create_user(
+            email='starter-import-test@leadbook.local',
+            password='test-pass',
+            nombre='Starter Import',
+            plan_nombre='starter',
+            plan_activo=True,
+        )
+        self.client.force_authenticate(user=starter_user)
+        payload = {
+            'ok': True,
+            'extraction_id': 'starter-ext-123',
+            'status': 'ready',
+            'source': 'example.com',
+            'mode': 'static',
+            'confidence': 0.78,
+            'data': {'titulo': 'Depto importado'},
+            'media_candidates': [],
+            'warnings': [],
+            'required_action': 'none',
+            'final_url': 'https://example.com/depto',
+        }
+        with patch('api.views.extract_listing_from_url', return_value=payload):
+            response = self.client.post(
+                reverse('extract_listado_from_url'),
+                {'url': 'https://example.com/depto'},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()['ok'])
+        self.assertEqual(response.json()['extraction_id'], 'starter-ext-123')
+
     def test_generate_meta_variants_persists_on_listing(self):
         listado = Listado.objects.create(
             agente=self.user,
