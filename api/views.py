@@ -5963,6 +5963,10 @@ def extract_listado_from_url(request):
     payload = request.data if hasattr(request.data, 'get') else {}
     url = payload.get('url')
     source_hint = payload.get('source_hint') or payload.get('sourceHint')
+
+    def _truthy(value):
+        return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
     try:
         result = extract_listing_from_url(
             url,
@@ -5971,6 +5975,8 @@ def extract_listado_from_url(request):
             source_hint=source_hint,
             pasted_html=payload.get('pasted_html') or payload.get('pastedHtml'),
             pasted_text=payload.get('pasted_text') or payload.get('pastedText'),
+            use_playwright=True if _truthy(payload.get('force_playwright') or payload.get('forcePlaywright')) else None,
+            use_unlocker=True if _truthy(payload.get('force_unlocker') or payload.get('forceUnlocker')) else None,
         )
         result = _maybe_enrich_imported_listing_data(result, request.user, url)
         data = result.get('data') or {}

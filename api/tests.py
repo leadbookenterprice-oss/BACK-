@@ -236,8 +236,98 @@ class ListingExtractorTests(TestCase):
             result = extract_listing_from_url('https://example.com/blocked')
 
         self.assertFalse(result['ok'])
-        self.assertEqual(result['required_action'], 'blocked')
+        self.assertEqual(result['required_action'], 'manual_review')
         self.assertEqual(result['status'], 'needs_input')
+
+    @override_settings(
+        IMPORT_URL_PLAYWRIGHT_ENABLED=True,
+        IMPORT_URL_UNLOCKER_ENABLED=True,
+        BRIGHTDATA_UNLOCKER_TOKEN='token',
+        BRIGHTDATA_UNLOCKER_ZONE='web_unlocker1',
+    )
+    def test_blocked_static_tries_playwright_then_unlocker(self):
+        blocked = ExtractorError(
+            'La pagina bloqueo la extraccion automatica.',
+            status_code=200,
+            required_action='blocked',
+            extraction_status='needs_input',
+        )
+        unlocked_html = '''
+        <html><head><meta property="og:image" content="https://cdn.example.com/unlocked.webp"></head>
+        <body><h1>Residencia desbloqueada</h1>
+        <p>Casa en venta con 4 habitaciones, 5 banos, terraza y 433 m2. USD 1323383.</p></body></html>
+        '''
+
+        class UnlockedResponse:
+            url = 'https://example.com/blocked'
+            content = unlocked_html.encode('utf-8')
+
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor._fetch_html', side_effect=blocked), \
+             patch('api.services.listing_extractor._render_html_with_playwright', side_effect=ExtractorError('Playwright bloqueado', required_action='blocked')) as playwright_mock, \
+             patch('api.services.listing_extractor._fetch_html_with_unlocker', return_value=UnlockedResponse()) as unlocker_mock:
+            result = extract_listing_from_url('https://example.com/blocked')
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['mode'], 'unlocker')
+        self.assertEqual(result['data']['titulo'], 'Residencia desbloqueada')
+        self.assertEqual(result['media_candidates'][0], 'https://cdn.example.com/unlocked.webp')
+        self.assertEqual(playwright_mock.call_count, 1)
+        self.assertEqual(unlocker_mock.call_count, 1)
+
+    @override_settings(
+        IMPORT_URL_PLAYWRIGHT_ENABLED=True,
+        IMPORT_URL_UNLOCKER_ENABLED=True,
+        BRIGHTDATA_UNLOCKER_TOKEN='token',
+        BRIGHTDATA_UNLOCKER_ZONE='web_unlocker1',
+    )
+    def test_all_providers_fail_returns_manual_review(self):
+        blocked = ExtractorError(
+            'La pagina bloqueo la extraccion automatica.',
+            status_code=200,
+            required_action='blocked',
+            extraction_status='needs_input',
+        )
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor._fetch_html', side_effect=blocked), \
+             patch('api.services.listing_extractor._render_html_with_playwright', side_effect=ExtractorError('Playwright bloqueado', required_action='blocked')), \
+             patch('api.services.listing_extractor._fetch_html_with_unlocker', side_effect=ExtractorError('Unlocker bloqueado', required_action='blocked')):
+            result = extract_listing_from_url('https://example.com/blocked')
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['required_action'], 'manual_review')
+        self.assertEqual(result['status'], 'needs_input')
+
+    def test_unlocked_jamesedition_like_html_extracts_details_and_script_images(self):
+        html = '''
+        <html><head>
+        <title>Panoramic Four Bedroom Sky Residence</title>
+        <meta property="og:image" content="https://img.example.com/hero.webp">
+        <script id="__NEXT_DATA__" type="application/json">
+        {"props":{"gallery":["https:\\/\\/img.example.com\\/gallery-1.jpg","https:\\/\\/img.example.com\\/gallery-2.jpg"]}}
+        </script>
+        </head><body>
+        <h1>Panoramic Four Bedroom Sky Residence</h1>
+        <p>$1,323,383</p>
+        <p>4 Beds 5 Baths 4,661 Sqft</p>
+        <p>Al Omraneya, Giza Governorate, Egypt</p>
+        <p>An expansive rhythm of space, light, and outdoor flow defines this 433 sqm four-bedroom residence with terrace and privacy.</p>
+        </body></html>
+        '''
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
+            result = extract_listing_from_url('https://www.jamesedition.com/real_estate/demo')
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['data']['titulo'], 'Panoramic Four Bedroom Sky Residence')
+        self.assertEqual(result['data']['precio'], '1,323,383')
+        self.assertGreaterEqual(len(result['media_candidates']), 3)
+        self.assertIn('https://img.example.com/gallery-1.jpg', result['media_candidates'])
+
+    def test_private_local_url_is_still_blocked(self):
+        with self.assertRaises(ExtractorError) as ctx:
+            extract_listing_from_url('http://127.0.0.1/admin')
+        self.assertEqual(ctx.exception.status_code, 400)
 
     def test_pasted_text_fallback_extracts_manual_content(self):
         text = 'Casa en venta en Recoleta. USD 450000. 3 habitaciones, 2 banos, 160 m2, balcon y cochera.'

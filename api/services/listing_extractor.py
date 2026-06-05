@@ -21,6 +21,7 @@ MAX_IMAGE_URLS = 30
 DEFAULT_TIMEOUT = (5, 12)
 USER_AGENT = 'LeadBookExtractor/1.0 (+https://leadbook.com.ar)'
 LOW_CONFIDENCE_THRESHOLD = 0.42
+RETRYABLE_ACTIONS = {'blocked', 'manual_review'}
 
 
 class ExtractorError(Exception):
@@ -32,7 +33,14 @@ class ExtractorError(Exception):
         self.extraction_status = extraction_status
 
 
-def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, pasted_html=None, pasted_text=None, use_playwright=None):
+class _FetchedHtml:
+    def __init__(self, content, url, headers=None):
+        self.content = content
+        self.url = url
+        self.headers = headers or {}
+
+
+def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, pasted_html=None, pasted_text=None, use_playwright=None, use_unlocker=None):
     safe_url = _validate_url(url)
     source = source_hint or urlparse(safe_url).netloc.lower()
     extraction_id = uuid.uuid4().hex
@@ -54,49 +62,49 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
         logger.info('[EXTRACTOR] manual url=%s confidence=%.2f photos=%s', safe_url, result['confidence'], len(result['media_candidates']))
         return result
 
+    result = None
+    static_error = None
     try:
         response = _fetch_html(safe_url)
     except ExtractorError as exc:
-        if exc.required_action:
-            return _empty_result(
+        static_error = exc
+        if not _can_retry_after_error(exc):
+            logger.warning('[EXTRACTOR] fail url=%s reason=%s', safe_url, str(exc))
+            raise
+        result = _empty_result(
                 extraction_id=extraction_id,
                 source=source,
                 final_url=safe_url,
                 warnings=list(exc.warnings or []) + [str(exc)],
-                required_action=exc.required_action,
+                required_action=exc.required_action or 'manual_review',
                 status_value=exc.extraction_status or 'needs_input',
-            )
-        logger.warning('[EXTRACTOR] fail url=%s reason=%s', safe_url, str(exc))
-        raise
+                mode='static',
+        )
     except Exception as exc:
         logger.warning('[EXTRACTOR] fail url=%s reason=%s', safe_url, exc)
         raise ExtractorError('No se pudo descargar la URL.', status_code=502) from exc
-
-    final_url = response.url or safe_url
-    try:
-        document = html.fromstring(response.content)
-    except Exception as exc:
-        logger.warning('[EXTRACTOR] fail url=%s reason=parse_error:%s', safe_url, exc)
-        raise ExtractorError('No se pudo interpretar el HTML de la propiedad.', status_code=422) from exc
-
-    result = _extract_from_document(
-        document,
-        final_url,
-        pais=pais,
-        idioma=idioma,
-        source=source,
-        mode='static',
-        warnings=warnings,
-        extraction_id=extraction_id,
-    )
+    else:
+        result = _extract_from_html_response(
+            response,
+            safe_url,
+            pais=pais,
+            idioma=idioma,
+            source=source,
+            mode='static',
+            warnings=warnings,
+            extraction_id=extraction_id,
+        )
 
     if _should_try_playwright(result) and _playwright_enabled(use_playwright):
         try:
             rendered_html, rendered_final_url = _render_html_with_playwright(safe_url)
-            rendered_document = html.fromstring(rendered_html)
-            rendered_result = _extract_from_document(
-                rendered_document,
-                rendered_final_url or final_url,
+            rendered_response = _FetchedHtml(
+                rendered_html.encode('utf-8', errors='ignore') if isinstance(rendered_html, str) else rendered_html,
+                rendered_final_url or safe_url,
+            )
+            rendered_result = _extract_from_html_response(
+                rendered_response,
+                safe_url,
                 pais=pais,
                 idioma=idioma,
                 source=source,
@@ -112,6 +120,34 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
         except Exception as exc:
             logger.warning('[EXTRACTOR] playwright fail url=%s reason=%s', safe_url, exc)
             result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['No se pudo renderizar la pagina dinamica; podes pegar HTML/texto si falta informacion.'])
+
+    if _should_try_unlocker(result) and _unlocker_enabled(use_unlocker):
+        try:
+            unlocked_response = _fetch_html_with_unlocker(safe_url)
+            unlocked_result = _extract_from_html_response(
+                unlocked_response,
+                safe_url,
+                pais=pais,
+                idioma=idioma,
+                source=source,
+                mode='unlocker',
+                warnings=[],
+                extraction_id=extraction_id,
+            )
+            if _result_quality(unlocked_result) > _result_quality(result):
+                unlocked_result['warnings'] = _dedupe_text((result.get('warnings') or []) + (unlocked_result.get('warnings') or []))
+                result = unlocked_result
+            else:
+                result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['El proveedor anti-bot respondio, pero no mejoro la extraccion.'])
+        except Exception as exc:
+            logger.warning('[EXTRACTOR] unlocker fail url=%s reason=%s', safe_url, exc)
+            result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['No se pudo desbloquear automaticamente la pagina; podes pegar texto/HTML o cargar manualmente.'])
+
+    if not result.get('ok') and result.get('required_action') in RETRYABLE_ACTIONS:
+        result['required_action'] = 'manual_review'
+        result['status'] = 'needs_input'
+    if static_error and not result.get('ok'):
+        result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['La extraccion automatica no pudo completar esta pagina.'])
 
     logger.info(
         '[EXTRACTOR] success url=%s source=%s mode=%s confidence=%.2f photos=%s required_action=%s',
@@ -174,13 +210,13 @@ def _extract_from_document(document, final_url, *, pais=None, idioma=None, sourc
     }
 
 
-def _empty_result(*, extraction_id, source, final_url, warnings, required_action, status_value='needs_input'):
+def _empty_result(*, extraction_id, source, final_url, warnings, required_action, status_value='needs_input', mode='static'):
     return {
         'ok': False,
         'extraction_id': extraction_id,
         'status': status_value,
         'source': source,
-        'mode': 'static',
+        'mode': mode,
         'confidence': 0,
         'data': {},
         'media_candidates': [],
@@ -188,6 +224,30 @@ def _empty_result(*, extraction_id, source, final_url, warnings, required_action
         'required_action': required_action,
         'final_url': final_url,
     }
+
+
+def _extract_from_html_response(response, fallback_url, *, pais=None, idioma=None, source='', mode='static', warnings=None, extraction_id=''):
+    final_url = getattr(response, 'url', None) or fallback_url
+    try:
+        document = html.fromstring(response.content)
+    except Exception as exc:
+        logger.warning('[EXTRACTOR] fail url=%s mode=%s reason=parse_error:%s', fallback_url, mode, exc)
+        raise ExtractorError('No se pudo interpretar el HTML de la propiedad.', status_code=422) from exc
+
+    return _extract_from_document(
+        document,
+        final_url,
+        pais=pais,
+        idioma=idioma,
+        source=source,
+        mode=mode,
+        warnings=warnings,
+        extraction_id=extraction_id,
+    )
+
+
+def _can_retry_after_error(exc):
+    return getattr(exc, 'required_action', None) in RETRYABLE_ACTIONS
 
 
 def _validate_url(value):
@@ -265,6 +325,60 @@ def _fetch_html(url):
     raise ExtractorError('Demasiados redirects al descargar la URL.', status_code=400)
 
 
+def _fetch_html_with_unlocker(url):
+    provider = str(getattr(settings, 'IMPORT_URL_UNLOCKER_PROVIDER', 'brightdata') or '').strip().lower()
+    if provider != 'brightdata':
+        raise ExtractorError('Proveedor anti-bot no soportado.', status_code=500, required_action='manual_review')
+
+    token = str(getattr(settings, 'BRIGHTDATA_UNLOCKER_TOKEN', '') or '').strip()
+    zone = str(getattr(settings, 'BRIGHTDATA_UNLOCKER_ZONE', '') or '').strip()
+    if not token or not zone:
+        raise ExtractorError('Proveedor anti-bot no configurado.', status_code=500, required_action='manual_review')
+
+    timeout_ms = int(getattr(settings, 'IMPORT_URL_UNLOCKER_TIMEOUT_MS', 45000) or 45000)
+    response = requests.post(
+        'https://api.brightdata.com/request',
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json',
+        },
+        json={
+            'zone': zone,
+            'url': url,
+            'format': 'raw',
+            'method': 'GET',
+        },
+        timeout=max(1, timeout_ms / 1000),
+    )
+    if response.status_code in {401, 403}:
+        raise ExtractorError('Credenciales anti-bot invalidas o sin acceso.', status_code=502, required_action='manual_review')
+    response.raise_for_status()
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ExtractorError('El proveedor anti-bot devolvio una respuesta invalida.', status_code=502, required_action='manual_review') from exc
+
+    target_status = int(payload.get('status_code') or 0)
+    if target_status == 401:
+        raise ExtractorError('La pagina requiere iniciar sesion para ver la publicacion.', status_code=200, required_action='login_required')
+    if target_status in {403, 429}:
+        raise ExtractorError('La pagina siguio bloqueando la extraccion automatica.', status_code=200, required_action='blocked')
+    if target_status >= 400:
+        raise ExtractorError('El proveedor anti-bot no pudo leer la URL.', status_code=502, required_action='manual_review')
+
+    body = payload.get('body')
+    if body in (None, ''):
+        raise ExtractorError('El proveedor anti-bot no devolvio HTML util.', status_code=502, required_action='manual_review')
+    if not isinstance(body, str):
+        body = json.dumps(body, ensure_ascii=False)
+    content = body.encode('utf-8', errors='ignore')
+    if len(content) > MAX_HTML_BYTES:
+        raise ExtractorError('HTML desbloqueado demasiado grande para extraer de forma segura.', status_code=413)
+
+    return _FetchedHtml(content, url, headers=payload.get('headers') or {})
+
+
 def _document_from_pasted_content(*, pasted_html=None, pasted_text=None):
     if pasted_html:
         raw = str(pasted_html)
@@ -285,12 +399,34 @@ def _playwright_enabled(value=None):
     return bool(getattr(settings, 'IMPORT_URL_PLAYWRIGHT_ENABLED', False))
 
 
+def _unlocker_enabled(value=None):
+    enabled = bool(value) if value is not None else bool(getattr(settings, 'IMPORT_URL_UNLOCKER_ENABLED', False))
+    if not enabled:
+        return False
+    provider = str(getattr(settings, 'IMPORT_URL_UNLOCKER_PROVIDER', 'brightdata') or '').strip().lower()
+    if provider != 'brightdata':
+        return False
+    return bool(getattr(settings, 'BRIGHTDATA_UNLOCKER_TOKEN', '') and getattr(settings, 'BRIGHTDATA_UNLOCKER_ZONE', ''))
+
+
 def _should_try_playwright(result):
-    if not result or result.get('required_action') not in (None, 'none', 'manual_review'):
+    if not result or result.get('required_action') not in (None, 'none', 'manual_review', 'blocked'):
         return False
     data = result.get('data') or {}
     return (
         (result.get('confidence') or 0) < LOW_CONFIDENCE_THRESHOLD
+        or not data.get('fotos')
+        or len(_meaningful_fields(data)) < 3
+    )
+
+
+def _should_try_unlocker(result):
+    if not result or result.get('required_action') not in (None, 'none', 'manual_review', 'blocked'):
+        return False
+    data = result.get('data') or {}
+    return (
+        not result.get('ok')
+        or (result.get('confidence') or 0) < LOW_CONFIDENCE_THRESHOLD
         or not data.get('fotos')
         or len(_meaningful_fields(data)) < 3
     )
@@ -714,7 +850,49 @@ def _images_from_document(document, base_url):
         srcset = node.get('srcset') or node.get('data-srcset')
         if srcset:
             images.extend(_images_from_srcset(srcset, base_url))
+    images.extend(_images_from_scripts(document, base_url))
     return _dedupe_urls(images)
+
+
+def _images_from_scripts(document, base_url):
+    images = []
+    for node in document.xpath('//script/text()'):
+        raw = str(node or '').strip()
+        if not raw:
+            continue
+        unescaped = raw.replace('\\/', '/')
+        images.extend(_image_urls_from_text(unescaped, base_url))
+        if raw[:1] in {'{', '['}:
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                continue
+            images.extend(_images_from_json_value(parsed, base_url))
+    return _dedupe_urls(images)
+
+
+def _images_from_json_value(value, base_url):
+    images = []
+    if isinstance(value, dict):
+        for item in value.values():
+            images.extend(_images_from_json_value(item, base_url))
+    elif isinstance(value, list):
+        for item in value:
+            images.extend(_images_from_json_value(item, base_url))
+    elif isinstance(value, str):
+        images.extend(_image_urls_from_text(value.replace('\\/', '/'), base_url))
+    return images
+
+
+def _image_urls_from_text(value, base_url):
+    if not value:
+        return []
+    pattern = r'((?:https?:)?//[^"\'<>\s\\]+?\.(?:jpe?g|png|webp|avif|heic|heif)(?:\?[^"\'<>\s\\]*)?|/[^"\'<>\s\\]+?\.(?:jpe?g|png|webp|avif|heic|heif)(?:\?[^"\'<>\s\\]*)?)'
+    return _dedupe_urls(
+        url
+        for url in (_absolute_media_url(match, base_url) for match in re.findall(pattern, str(value), flags=re.IGNORECASE))
+        if url
+    )
 
 
 def _images_from_srcset(srcset, base_url):
