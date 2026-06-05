@@ -447,9 +447,11 @@ DEFAULT_USER_SETTINGS = {
     'show_tips': True,
     'dark_mode': True,
     'glass_effects': True,
-    'locale': 'es',
+    'locale': 'auto',
     'timezone': 'America/Argentina/Buenos_Aires',
 }
+
+SUPPORTED_USER_LOCALES = {'auto', 'es', 'en', 'pt'}
 
 
 def _coerce_bool(value):
@@ -487,11 +489,20 @@ def _normalize_user_settings(raw_settings=None, base_settings=None):
     for key in text_keys:
         if key in raw_settings:
             value = raw_settings.get(key)
-            merged[key] = str(value).strip() if value is not None else DEFAULT_USER_SETTINGS[key]
+            normalized_value = str(value).strip() if value is not None else DEFAULT_USER_SETTINGS[key]
+            if key == 'locale':
+                normalized_value = normalized_value.lower()
+                if normalized_value not in SUPPORTED_USER_LOCALES:
+                    normalized_value = DEFAULT_USER_SETTINGS[key]
+            merged[key] = normalized_value
 
     for key, value in raw_settings.items():
         if key not in merged:
             merged[key] = value
+
+    merged['locale'] = str(merged.get('locale') or DEFAULT_USER_SETTINGS['locale']).strip().lower()
+    if merged['locale'] not in SUPPORTED_USER_LOCALES:
+        merged['locale'] = DEFAULT_USER_SETTINGS['locale']
 
     return merged
 
