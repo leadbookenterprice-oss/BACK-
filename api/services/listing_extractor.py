@@ -40,11 +40,16 @@ class _FetchedHtml:
         self.headers = headers or {}
 
 
+def _attempt(mode, status, reason=''):
+    return {'mode': mode, 'status': status, 'reason': _clean_text(reason) or ''}
+
+
 def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, pasted_html=None, pasted_text=None, use_playwright=None, use_unlocker=None):
     safe_url = _validate_url(url)
     source = source_hint or urlparse(safe_url).netloc.lower()
     extraction_id = uuid.uuid4().hex
     warnings = []
+    attempts = []
 
     logger.info('[EXTRACTOR] start url=%s source_hint=%s', safe_url, source_hint or '')
     if pasted_html or pasted_text:
@@ -59,6 +64,7 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
             warnings=warnings,
             extraction_id=extraction_id,
         )
+        result['attempts'] = [_attempt('manual', 'success' if result.get('ok') else result.get('required_action') or 'needs_input')]
         logger.info('[EXTRACTOR] manual url=%s confidence=%.2f photos=%s', safe_url, result['confidence'], len(result['media_candidates']))
         return result
 
@@ -71,6 +77,8 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
         if not _can_retry_after_error(exc):
             logger.warning('[EXTRACTOR] fail url=%s reason=%s', safe_url, str(exc))
             raise
+        logger.info('[EXTRACTOR] static %s url=%s reason=%s', exc.required_action or 'failed', safe_url, str(exc))
+        attempts.append(_attempt('static', exc.required_action or 'failed', str(exc)))
         result = _empty_result(
                 extraction_id=extraction_id,
                 source=source,
@@ -94,8 +102,13 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
             warnings=warnings,
             extraction_id=extraction_id,
         )
+        static_status = 'success' if result.get('ok') else (result.get('required_action') or result.get('status') or 'failed')
+        if static_status == 'blocked':
+            logger.info('[EXTRACTOR] static blocked url=%s reason=page_content', safe_url)
+        attempts.append(_attempt('static', static_status, '; '.join(result.get('warnings') or [])))
 
     if _should_try_playwright(result) and _playwright_enabled(use_playwright):
+        logger.info('[EXTRACTOR] playwright start url=%s', safe_url)
         try:
             rendered_html, rendered_final_url = _render_html_with_playwright(safe_url)
             rendered_response = _FetchedHtml(
@@ -112,6 +125,9 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
                 warnings=[],
                 extraction_id=extraction_id,
             )
+            rendered_status = 'success' if rendered_result.get('ok') else (rendered_result.get('required_action') or rendered_result.get('status') or 'failed')
+            attempts.append(_attempt('playwright', rendered_status, '; '.join(rendered_result.get('warnings') or [])))
+            logger.info('[EXTRACTOR] playwright %s url=%s confidence=%.2f photos=%s', rendered_status, safe_url, rendered_result.get('confidence') or 0, len(rendered_result.get('media_candidates') or []))
             if _result_quality(rendered_result) > _result_quality(result):
                 rendered_result['warnings'] = _dedupe_text((result.get('warnings') or []) + (rendered_result.get('warnings') or []))
                 result = rendered_result
@@ -119,9 +135,14 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
                 result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['Se intento render JS, pero no mejoro la extraccion.'])
         except Exception as exc:
             logger.warning('[EXTRACTOR] playwright fail url=%s reason=%s', safe_url, exc)
+            attempts.append(_attempt('playwright', 'fail', str(exc)))
             result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['No se pudo renderizar la pagina dinamica; podes pegar HTML/texto si falta informacion.'])
+    elif _should_try_playwright(result):
+        logger.info('[EXTRACTOR] playwright disabled url=%s', safe_url)
+        attempts.append(_attempt('playwright', 'disabled', 'IMPORT_URL_PLAYWRIGHT_ENABLED=false'))
 
-    if _should_try_unlocker(result) and _unlocker_enabled(use_unlocker):
+    if _should_try_unlocker(result) and _unlocker_requested(use_unlocker):
+        logger.info('[EXTRACTOR] unlocker start url=%s', safe_url)
         try:
             unlocked_response = _fetch_html_with_unlocker(safe_url)
             unlocked_result = _extract_from_html_response(
@@ -134,6 +155,9 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
                 warnings=[],
                 extraction_id=extraction_id,
             )
+            unlocked_status = 'success' if unlocked_result.get('ok') else (unlocked_result.get('required_action') or unlocked_result.get('status') or 'failed')
+            attempts.append(_attempt('unlocker', unlocked_status, '; '.join(unlocked_result.get('warnings') or [])))
+            logger.info('[EXTRACTOR] unlocker %s url=%s confidence=%.2f photos=%s', unlocked_status, safe_url, unlocked_result.get('confidence') or 0, len(unlocked_result.get('media_candidates') or []))
             if _result_quality(unlocked_result) > _result_quality(result):
                 unlocked_result['warnings'] = _dedupe_text((result.get('warnings') or []) + (unlocked_result.get('warnings') or []))
                 result = unlocked_result
@@ -141,13 +165,19 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, p
                 result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['El proveedor anti-bot respondio, pero no mejoro la extraccion.'])
         except Exception as exc:
             logger.warning('[EXTRACTOR] unlocker fail url=%s reason=%s', safe_url, exc)
+            status_label = 'not_configured' if _is_unlocker_config_error(exc) else 'fail'
+            attempts.append(_attempt('unlocker', status_label, str(exc)))
             result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['No se pudo desbloquear automaticamente la pagina; podes pegar texto/HTML o cargar manualmente.'])
+    elif _should_try_unlocker(result):
+        logger.info('[EXTRACTOR] unlocker disabled url=%s', safe_url)
+        attempts.append(_attempt('unlocker', 'disabled', 'IMPORT_URL_UNLOCKER_ENABLED=false'))
 
     if not result.get('ok') and result.get('required_action') in RETRYABLE_ACTIONS:
         result['required_action'] = 'manual_review'
         result['status'] = 'needs_input'
     if static_error and not result.get('ok'):
         result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['La extraccion automatica no pudo completar esta pagina.'])
+    result['attempts'] = attempts
 
     logger.info(
         '[EXTRACTOR] success url=%s source=%s mode=%s confidence=%.2f photos=%s required_action=%s',
@@ -354,12 +384,21 @@ def _fetch_html_with_unlocker(url):
         raise ExtractorError('Credenciales anti-bot invalidas o sin acceso.', status_code=502, required_action='manual_review')
     response.raise_for_status()
 
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise ExtractorError('El proveedor anti-bot devolvio una respuesta invalida.', status_code=502, required_action='manual_review') from exc
+    payload = None
+    body = response.text
+    if 'json' in (response.headers.get('Content-Type') or '').lower():
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ExtractorError('El proveedor anti-bot devolvio una respuesta invalida.', status_code=502, required_action='manual_review') from exc
+    else:
+        try:
+            candidate = response.json()
+            payload = candidate if isinstance(candidate, dict) else None
+        except ValueError:
+            payload = None
 
-    target_status = int(payload.get('status_code') or 0)
+    target_status = int((payload or {}).get('status_code') or response.status_code or 0)
     if target_status == 401:
         raise ExtractorError('La pagina requiere iniciar sesion para ver la publicacion.', status_code=200, required_action='login_required')
     if target_status in {403, 429}:
@@ -367,7 +406,8 @@ def _fetch_html_with_unlocker(url):
     if target_status >= 400:
         raise ExtractorError('El proveedor anti-bot no pudo leer la URL.', status_code=502, required_action='manual_review')
 
-    body = payload.get('body')
+    if payload and payload.get('body') not in (None, ''):
+        body = payload.get('body')
     if body in (None, ''):
         raise ExtractorError('El proveedor anti-bot no devolvio HTML util.', status_code=502, required_action='manual_review')
     if not isinstance(body, str):
@@ -376,7 +416,7 @@ def _fetch_html_with_unlocker(url):
     if len(content) > MAX_HTML_BYTES:
         raise ExtractorError('HTML desbloqueado demasiado grande para extraer de forma segura.', status_code=413)
 
-    return _FetchedHtml(content, url, headers=payload.get('headers') or {})
+    return _FetchedHtml(content, url, headers=(payload or {}).get('headers') or {})
 
 
 def _document_from_pasted_content(*, pasted_html=None, pasted_text=None):
@@ -399,14 +439,19 @@ def _playwright_enabled(value=None):
     return bool(getattr(settings, 'IMPORT_URL_PLAYWRIGHT_ENABLED', False))
 
 
-def _unlocker_enabled(value=None):
+def _unlocker_requested(value=None):
     enabled = bool(value) if value is not None else bool(getattr(settings, 'IMPORT_URL_UNLOCKER_ENABLED', False))
     if not enabled:
         return False
     provider = str(getattr(settings, 'IMPORT_URL_UNLOCKER_PROVIDER', 'brightdata') or '').strip().lower()
     if provider != 'brightdata':
-        return False
-    return bool(getattr(settings, 'BRIGHTDATA_UNLOCKER_TOKEN', '') and getattr(settings, 'BRIGHTDATA_UNLOCKER_ZONE', ''))
+        return True
+    return True
+
+
+def _is_unlocker_config_error(exc):
+    reason = _strip_accents(str(exc or '')).lower()
+    return 'no configurado' in reason or 'credenciales' in reason or 'proveedor anti-bot no soportado' in reason
 
 
 def _should_try_playwright(result):

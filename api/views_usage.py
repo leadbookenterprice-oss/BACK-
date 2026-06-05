@@ -19,6 +19,8 @@ SERVICIO_MAP = {
     'cerebras': {'nombre': 'Motor IA Cerebras', 'unidad': 'peticiones IA', 'icono': 'brain'},
 }
 
+USER_VISIBLE_SERVICES = {'gemini', 'elevenlabs', 'uploadpost'}
+
 
 def _has_pool_capacity(servicio, *, soft_exhaustion=False):
     if str(getattr(servicio, 'nombre', '') or '').strip().lower() == 'uploadpost':
@@ -67,7 +69,10 @@ def mi_uso_apis(request):
         quota.recalcular_limite(plan=user.plan_nombre)
         quota.maybe_reset_monthly()
 
-        svc_name = quota.servicio.nombre
+        svc_name = str(quota.servicio.nombre or '').strip().lower()
+        if svc_name not in USER_VISIBLE_SERVICES:
+            continue
+
         soft_exhaustion = svc_name in {'gemini', 'elevenlabs'}
         info = SERVICIO_MAP.get(svc_name, {
             'nombre': svc_name.capitalize(),

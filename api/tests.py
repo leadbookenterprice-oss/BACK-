@@ -233,7 +233,7 @@ class ListingExtractorTests(TestCase):
         html = '<html><body><h1>Access denied</h1><p>Verify you are human. CAPTCHA required.</p></body></html>'
         with patch('api.services.listing_extractor._assert_public_host'), \
              patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
-            result = extract_listing_from_url('https://example.com/blocked')
+            result = extract_listing_from_url('https://example.com/blocked', use_playwright=False, use_unlocker=False)
 
         self.assertFalse(result['ok'])
         self.assertEqual(result['required_action'], 'manual_review')
@@ -274,6 +274,8 @@ class ListingExtractorTests(TestCase):
         self.assertEqual(result['media_candidates'][0], 'https://cdn.example.com/unlocked.webp')
         self.assertEqual(playwright_mock.call_count, 1)
         self.assertEqual(unlocker_mock.call_count, 1)
+        self.assertEqual([item['mode'] for item in result['attempts']], ['static', 'playwright', 'unlocker'])
+        self.assertEqual(result['attempts'][-1]['status'], 'success')
 
     @override_settings(
         IMPORT_URL_PLAYWRIGHT_ENABLED=True,
@@ -297,6 +299,63 @@ class ListingExtractorTests(TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['required_action'], 'manual_review')
         self.assertEqual(result['status'], 'needs_input')
+        self.assertEqual([item['mode'] for item in result['attempts']], ['static', 'playwright', 'unlocker'])
+
+    @override_settings(IMPORT_URL_UNLOCKER_ENABLED=True, BRIGHTDATA_UNLOCKER_TOKEN='', BRIGHTDATA_UNLOCKER_ZONE='')
+    def test_unlocker_without_credentials_returns_attempt_not_configured(self):
+        blocked = ExtractorError(
+            'La pagina bloqueo la extraccion automatica.',
+            status_code=200,
+            required_action='blocked',
+            extraction_status='needs_input',
+        )
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor._fetch_html', side_effect=blocked):
+            result = extract_listing_from_url('https://example.com/blocked', use_playwright=False, use_unlocker=True)
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['required_action'], 'manual_review')
+        self.assertIn({'mode': 'unlocker', 'status': 'not_configured', 'reason': 'Proveedor anti-bot no configurado.'}, result['attempts'])
+
+    @override_settings(
+        IMPORT_URL_UNLOCKER_ENABLED=True,
+        BRIGHTDATA_UNLOCKER_TOKEN='token',
+        BRIGHTDATA_UNLOCKER_ZONE='web_unlocker1',
+    )
+    def test_brightdata_raw_html_response_extracts_data(self):
+        blocked = ExtractorError(
+            'La pagina bloqueo la extraccion automatica.',
+            status_code=200,
+            required_action='blocked',
+            extraction_status='needs_input',
+        )
+        raw_html = '''
+        <html><head><meta property="og:image" content="https://cdn.example.com/raw.webp"></head>
+        <body><h1>Residencia raw</h1>
+        <p>Casa en venta con 4 habitaciones, 5 banos y 433 m2. USD 1323383.</p></body></html>
+        '''
+
+        class RawUnlockerResponse:
+            status_code = 200
+            headers = {'Content-Type': 'text/html; charset=utf-8'}
+            text = raw_html
+            content = raw_html.encode('utf-8')
+
+            def json(self):
+                raise ValueError('raw html')
+
+            def raise_for_status(self):
+                return None
+
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor._fetch_html', side_effect=blocked), \
+             patch('api.services.listing_extractor.requests.post', return_value=RawUnlockerResponse()):
+            result = extract_listing_from_url('https://example.com/raw', use_playwright=False, use_unlocker=True)
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['mode'], 'unlocker')
+        self.assertEqual(result['data']['titulo'], 'Residencia raw')
+        self.assertEqual(result['media_candidates'][0], 'https://cdn.example.com/raw.webp')
 
     def test_unlocked_jamesedition_like_html_extracts_details_and_script_images(self):
         html = '''

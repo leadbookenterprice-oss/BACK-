@@ -6109,6 +6109,7 @@ def extract_listado_from_url(request):
             'warnings': result.get('warnings') or [],
             'required_action': result.get('required_action') or 'none',
             'final_url': result.get('final_url') or url,
+            'attempts': result.get('attempts') or [],
         }, status=status.HTTP_200_OK)
     except ExtractorError as exc:
         explicit_action = getattr(exc, 'required_action', None)
