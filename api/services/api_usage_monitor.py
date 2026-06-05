@@ -76,10 +76,14 @@ def _masked_key_label(key):
 
 
 def _assigned_user_payload(key):
+    service = str(getattr(getattr(key, 'servicio', None), 'nombre', '') or '').strip().lower()
+    if service != 'uploadpost':
+        return None
     assignment = (
         UserAPIAssignment.objects
-        .filter(apikey=key, activo=True, is_primary=True)
+        .filter(apikey=key, activo=True, servicio__nombre__iexact='uploadpost')
         .select_related('user')
+        .order_by('-is_primary', 'assigned_at')
         .first()
     )
     if not assignment or not assignment.user_id:
@@ -366,12 +370,16 @@ def _key_snapshot(key, create_alerts=True):
                 'started_at': run.started_at,
             }
 
+    status_value = key.status
+    if key.status == 'assigned' and service != 'uploadpost':
+        status_value = 'in_use'
+
     snapshot = {
         'id': key.id,
         'service': service,
         'service_raw': raw_service,
         'label': _masked_key_label(key),
-        'status': key.status,
+        'status': status_value,
         'usage': usage,
         'limit': limit,
         'unit': usage_window['unit'],
@@ -426,6 +434,7 @@ def _service_totals(keys):
         'keys_count': 0,
         'available': 0,
         'assigned': 0,
+        'in_use': 0,
         'busy': 0,
         'exhausted': 0,
         'dead': 0,
@@ -443,8 +452,9 @@ def _service_totals(keys):
         bucket = totals[item['service']]
         bucket['service'] = item['service']
         bucket['keys_count'] += 1
-        bucket[item['status']] = bucket.get(item['status'], 0) + 1
-        if item.get('locked_until'):
+        item_status = item['status']
+        bucket[item_status] = bucket.get(item_status, 0) + 1
+        if item_status == 'in_use' or item.get('locked_until'):
             bucket['busy'] += 1
         bucket['usage'] += _safe_int(item['usage'])
         bucket['limit'] += _safe_int(item['limit'])
@@ -469,7 +479,15 @@ def build_api_usage_summary(*, service=None, create_alerts=True):
     if service:
         keys_qs = keys_qs.filter(_service_filter_q('servicio__nombre', service))
 
-    keys = [_key_snapshot(key, create_alerts=create_alerts) for key in keys_qs]
+    keys = sorted(
+        [_key_snapshot(key, create_alerts=create_alerts) for key in keys_qs],
+        key=lambda item: (
+            -_safe_int(item.get('total_requests')),
+            -_safe_int(item.get('usage')),
+            item.get('service') or '',
+            item.get('id') or 0,
+        ),
+    )
     services = _service_totals(keys)
     cerebras_keys = [item for item in keys if item['service'] == 'cerebras']
     active_runs = list(

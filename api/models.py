@@ -862,6 +862,7 @@ class APIKey(models.Model):
     STATUS = [
         ('available',  'Disponible'),
         ('assigned',   'Asignada'),
+        ('in_use',     'En uso'),
         ('exhausted',  'Agotada hoy'),
         ('dead',       'Muerta'),
         ('disabled',   'Deshabilitada'),
@@ -1101,24 +1102,16 @@ class UserAPIQuota(models.Model):
         base = planes_limites.get(plan, {}).get(servicio_nombre, 1500)
         # LeadBook limita auto-posting por mes; la API/proveedor mantiene sus propios hard caps diarios.
 
-        # Extras activos
-        extras = UserAPIAssignment.objects.filter(
-            user=self.user,
-            servicio=self.servicio,
-            is_primary=False,
-            activo=True
-        ).count()
-
         incremento = self.servicio.extra_increment
         if servicio_nombre == 'uploadpost' and incremento == 1500:
             incremento = 10
-        nuevo_limite = base + (extras * incremento)
+        nuevo_limite = base
         if self.user_daily_limit != nuevo_limite:
             self.user_daily_limit = nuevo_limite
             self.save(update_fields=['user_daily_limit', 'updated_at'])
 
         monthly_base = planes_limites_mensuales.get(plan, {}).get(servicio_nombre)
-        nuevo_limite_mensual = None if monthly_base is None else monthly_base + (extras * incremento)
+        nuevo_limite_mensual = None if monthly_base is None else monthly_base
         if self.user_monthly_limit != nuevo_limite_mensual:
             self.user_monthly_limit = nuevo_limite_mensual
             self.save(update_fields=['user_monthly_limit', 'updated_at'])
@@ -1839,16 +1832,16 @@ def setup_nuevo_usuario(sender, instance, created, **kwargs):
         return
 
     if created and instance.is_active and not instance.eliminado_en:
-        from api.services.pool_service import assign_apis_to_agent
+        from api.services.pool_service import APIPoolService
         try:
             with transaction.atomic():
-                assign_apis_to_agent(instance)
+                APIPoolService.ensure_user_quotas(instance)
         except Exception as e:
             AdminAlert.objects.create(
-                tipo='assign_failed',
+                tipo='quota_setup_failed',
                 severidad='critical',
                 titulo=f'Fallo asignación de APIs — {instance.email}',
-                mensaje=f'Usuario creado sin APIs: {str(e)}',
+                mensaje=f'Usuario creado sin cuotas de API: {str(e)}',
                 related_user=instance,
             )
 
@@ -1861,8 +1854,7 @@ def liberar_key_al_desasignar(sender, instance, **kwargs):
     """
     try:
         key = instance.apikey
-        otras_activas = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
-        if not otras_activas:
+        if key.status == 'assigned' and not UserAPIAssignment.objects.filter(apikey=key, activo=True).exclude(id=instance.id).exists():
             key.status = 'available'
             key.save(update_fields=['status', 'updated_at'])
     except Exception:
@@ -1888,13 +1880,13 @@ def recalcular_quotas_al_cambiar_plan(sender, instance, created, **kwargs):
         if not instance.is_active or instance.eliminado_en:
             return
         try:
-            from api.services.pool_service import assign_apis_to_agent
-            assign_apis_to_agent(instance)
+            from api.services.pool_service import APIPoolService
+            APIPoolService.ensure_user_quotas(instance)
         except Exception as e:
             AdminAlert.objects.create(
-                tipo='assign_failed',
+                tipo='quota_setup_failed',
                 severidad='warning',
                 titulo=f'Fallo reasignación por plan — {instance.email}',
-                mensaje=f'No se pudieron completar APIs del plan {instance.plan_nombre}: {str(e)}',
+                mensaje=f'No se pudieron actualizar cuotas del plan {instance.plan_nombre}: {str(e)}',
                 related_user=instance,
             )

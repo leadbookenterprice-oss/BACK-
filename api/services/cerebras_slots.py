@@ -89,7 +89,7 @@ def _clear_slot_lock(key):
     key.slot_locked_listado = None
     key.slot_locked_at = None
     key.slot_locked_until = None
-    if key.status == 'assigned':
+    if key.status in {'assigned', 'in_use'}:
         key.status = 'available'
 
 
@@ -98,7 +98,7 @@ def release_expired_cerebras_slots(now=None):
     APIKey.objects.filter(
         servicio__nombre__iexact='cerebras',
         slot_locked_until__lt=now,
-        status='assigned',
+        status='in_use',
     ).update(
         status='available',
         slot_locked_by=None,
@@ -170,7 +170,7 @@ def reserve_cerebras_slot(user=None, *, listado_id=None, estimated_tokens=1):
                     if changed:
                         key.save(update_fields=['slot_tokens_today', 'slot_tokens_reset_at', 'slot_last_error', 'status', 'updated_at'])
                     continue
-                key.status = 'assigned'
+                key.status = 'in_use'
                 key.slot_locked_by_id = user_id
                 key.slot_locked_listado_id = listado_id
                 key.slot_locked_at = key.slot_locked_at or now

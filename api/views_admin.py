@@ -127,24 +127,27 @@ def _api_key_has_history(key):
 
 
 def _key_assignment_stats(key):
-    assignments = UserAPIAssignment.objects.filter(apikey=key, activo=True).select_related('user')
-    users = [a.user for a in assignments if a.user_id]
     service_name = _normalize_service_name(getattr(getattr(key, 'servicio', None), 'nombre', ''))
+    if service_name == 'uploadpost':
+        assignments = UserAPIAssignment.objects.filter(apikey=key, activo=True).select_related('user')
+        users = [a.user for a in assignments if a.user_id]
+        return {
+            'assigned_count': len(users),
+            'shared_capacity': 1,
+            'shared_available_slots': max(0, 1 - len(users)),
+            'sharing_mode': 'uploadpost_per_user',
+            'assigned_users': [
+                {'id': user.id, 'email': user.email, 'plan': getattr(user, 'plan_nombre', '')}
+                for user in users[:12]
+            ],
+        }
     shared_capacity = 1
-    assigned_count = len(users)
     return {
-        'assigned_count': assigned_count,
+        'assigned_count': 0,
         'shared_capacity': shared_capacity,
-        'shared_available_slots': max(0, shared_capacity - assigned_count),
-        'sharing_mode': 'backend_slot' if service_name == 'cerebras' else 'exclusive',
-        'assigned_users': [
-            {
-                'id': user.id,
-                'email': user.email,
-                'plan': getattr(user, 'plan_nombre', ''),
-            }
-            for user in users[:12]
-        ],
+        'shared_available_slots': shared_capacity,
+        'sharing_mode': 'leadbook_pool',
+        'assigned_users': [],
     }
 
 
@@ -477,11 +480,11 @@ def admin_apikeys_pool(request):
     
     from api.models import APIKey
     
-    servicio_filter = request.query_params.get('servicio')
-    keys = APIKey.objects.all().select_related('servicio', 'slot_locked_by', 'slot_locked_listado').order_by('servicio__nombre', '-creado_en')
-    
-    if servicio_filter:
-        keys = keys.filter(servicio__nombre__icontains=servicio_filter)
+    servicio_filter = _normalize_service_name(request.query_params.get('servicio') or request.query_params.get('service') or 'uploadpost')
+    if servicio_filter != 'uploadpost':
+        return Response({'keys': []})
+    keys = APIKey.objects.all().select_related('servicio', 'slot_locked_by', 'slot_locked_listado').order_by('servicio__nombre', '-total_requests', '-requests_today', '-slot_tokens_today', '-creado_en')
+    keys = keys.filter(servicio__nombre__iexact='uploadpost')
     
     data = []
     for k in keys:
@@ -492,8 +495,18 @@ def admin_apikeys_pool(request):
         
         # Encontrar quién la tiene asignada. Cerebras Starter puede ser compartida.
         assignment_stats = _key_assignment_stats(k)
-        asig_primaria = UserAPIAssignment.objects.filter(apikey=k, activo=True, is_primary=True).select_related('user').first()
-        asig_extras = UserAPIAssignment.objects.filter(apikey=k, activo=True, is_primary=False).count()
+        asig_primaria = None
+        if _normalize_service_name(k.servicio.nombre) == 'uploadpost':
+            asig_primaria = (
+                UserAPIAssignment.objects
+                .filter(apikey=k, activo=True, servicio__nombre__iexact='uploadpost')
+                .select_related('user')
+                .order_by('-is_primary', 'assigned_at')
+                .first()
+            )
+        status_value = k.status
+        if k.status == 'assigned' and _normalize_service_name(k.servicio.nombre) != 'uploadpost':
+            status_value = 'in_use'
         active_generation_run = None
         recent_cerebras_log = None
         if str(k.servicio.nombre or '').lower() == 'cerebras':
@@ -515,7 +528,7 @@ def admin_apikeys_pool(request):
             'id': k.id,
             'servicio': k.servicio.nombre,
             'label': k.label or f"{k.api_key[:10]}...",
-            'status': k.status,
+            'status': status_value,
             'consumo_hoy': consumo,
             'limite_hoy': limite,
             'consumo_mes': k.requests_this_month or 0,
@@ -529,7 +542,7 @@ def admin_apikeys_pool(request):
             'asignada_a': asig_primaria.user.email if asig_primaria else None,
             'assigned_to_email': asig_primaria.user.email if asig_primaria else None,
             'assigned_to_id': asig_primaria.user.id if asig_primaria else None,
-            'extras_count': asig_extras,
+            'extras_count': 0,
             'assigned_users_count': assignment_stats['assigned_count'],
             'shared_capacity': assignment_stats['shared_capacity'],
             'shared_available_slots': assignment_stats['shared_available_slots'],
@@ -658,6 +671,35 @@ def admin_api_usage_logs(request):
     return Response(payload)
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_api_usage_key_detail(request, key_id):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    key = APIKey.objects.filter(pk=key_id).select_related('servicio').first()
+    if not key:
+        return Response({'error': 'API key no encontrada'}, status=status.HTTP_404_NOT_FOUND)
+
+    summary = build_api_usage_summary(
+        service=key.servicio.nombre if key.servicio_id else None,
+        create_alerts=str(request.query_params.get('alerts', '1')).strip().lower() not in {'0', 'false', 'no'},
+    )
+    key_payload = next((item for item in summary.get('keys', []) if item.get('id') == key.id), None)
+    logs = build_api_usage_logs(
+        service=key.servicio.nombre if key.servicio_id else None,
+        api_key_id=key.id,
+        success=request.query_params.get('success'),
+        limit=request.query_params.get('limit', 100),
+    )
+    return Response({
+        'generated_at': summary.get('generated_at'),
+        'key': key_payload,
+        'logs': logs.get('logs', []),
+        'logs_count': logs.get('count', 0),
+    })
+
+
 @api_view(['POST'])
 def admin_apikeys_pool_crear(request):
     if not _is_staff_check(request): return Response({'error': 'Forbidden'}, status=403)
@@ -665,6 +707,8 @@ def admin_apikeys_pool_crear(request):
     key_val = _normalize_api_key_value(request.data.get('api_key') or request.data.get('key'))
     if not svc_name or not key_val:
         return Response({'error': 'Faltan servicio/api_key'}, status=400)
+    if svc_name != 'uploadpost':
+        return Response({'error': 'Desde este dashboard solo se administran keys UploadPost'}, status=400)
 
     svc = _get_or_create_service(svc_name)
     if not svc:
@@ -732,6 +776,9 @@ def admin_apikeys_pool_bulk(request):
 
             if not service_name or not api_key_str:
                 errors.append({'index': index, 'error': 'Faltan service o api_key'})
+                continue
+            if service_name != 'uploadpost':
+                errors.append({'index': index, 'service': service_name, 'error': 'Solo se aceptan keys UploadPost'})
                 continue
 
             servicio = _get_or_create_service(service_name)
@@ -820,43 +867,26 @@ def admin_enviar_email(request):
 
 @api_view(['POST'])
 def admin_add_extra_api(request, user_id):
-    """Asigna una API extra manualmente a un usuario."""
+    """Deprecated: solo UploadPost tiene asignacion por usuario."""
     if not _is_staff_check(request):
         return Response({'error': 'Forbidden'}, status=403)
-    
-    from api.services.pool_service import APIPoolService
-    servicio_nombre = request.data.get('servicio', 'gemini')
-    
-    try:
-        user = Agent.objects.get(id=user_id)
-        asig = APIPoolService.add_extra_key(user, servicio_nombre)
-        if asig:
-            return Response({'ok': True, 'key': f"{asig.apikey.api_key[:10]}..."})
-        return Response({'error': 'No hay stock disponible'}, status=400)
-    except Agent.DoesNotExist:
-        return Response({'error': 'Usuario no encontrado'}, status=404)
+    return Response({
+        'ok': False,
+        'disabled': True,
+        'message': 'Las API keys de IA son internas de LeadBook. Solo UploadPost se asigna por usuario.',
+    }, status=status.HTTP_410_GONE)
 
 @api_view(['POST'])
 def admin_apikeys_auto_repair(request):
-    """Repara las APIs de los usuarios activos."""
+    """Deprecated: no hay auto-repair de APIs de IA por usuario."""
     if not _is_staff_check(request):
         return Response({'error': 'Forbidden'}, status=403)
-    
-    from api.services.pool_service import APIPoolService
-    user_ids = request.data.get('user_ids', [])
-    
-    if user_ids:
-        users = Agent.objects.filter(id__in=user_ids, is_active=True, is_staff=False, is_superuser=False)
-    else:
-        users = Agent.objects.filter(is_active=True, is_staff=False, is_superuser=False)
-        
-    fixed = 0
-    for u in users:
-        repaired = APIPoolService.repair_user_apis(u)
-        if repaired:
-            fixed += 1
-            
-    return Response({"status": "success", "fixed_count": fixed})
+    return Response({
+        'status': 'disabled',
+        'disabled': True,
+        'fixed_count': 0,
+        'message': 'El pool de IA es interno de LeadBook. UploadPost se asigna automaticamente cuando el usuario lo necesita.',
+    })
 
 # --- Stubs para bundles (eliminados en v2) ---
 @api_view(['GET'])

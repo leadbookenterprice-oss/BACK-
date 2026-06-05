@@ -489,14 +489,6 @@ def reset_free_pool_counters():
         .filter(Q(is_blocked=True) | Q(requests_today__gte=F('user_daily_limit')))
         .values_list('user_id', flat=True)
     )
-    affected_user_ids.update(
-        UserAPIAssignment.objects.filter(
-            activo=True,
-            servicio__nombre__in=FREE_POOL_SERVICES,
-            apikey__status='exhausted',
-        ).values_list('user_id', flat=True)
-    )
-
     UserAPIQuota.objects.filter(servicio__nombre__in=FREE_POOL_SERVICES).update(
         requests_today=0,
         is_blocked=False,
@@ -507,8 +499,7 @@ def reset_free_pool_counters():
 
     exhausted_keys = APIKey.objects.filter(servicio__nombre__in=FREE_POOL_SERVICES, status='exhausted')
     for key in exhausted_keys:
-        has_assignment = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
-        key.status = 'assigned' if has_assignment else 'available'
+        key.status = 'available'
         key.save(update_fields=['status', 'updated_at'])
 
     for user in Agent.objects.filter(id__in=affected_user_ids):
@@ -552,8 +543,12 @@ def reset_monthly_counters():
     )
     exhausted_uploadpost = APIKey.objects.filter(servicio__nombre='uploadpost', status='exhausted')
     for key in exhausted_uploadpost:
-        has_assignment = UserAPIAssignment.objects.filter(apikey=key, activo=True).exists()
-        key.status = 'assigned' if has_assignment else 'available'
+        has_active_assignment = UserAPIAssignment.objects.filter(
+            apikey=key,
+            activo=True,
+            servicio__nombre__iexact='uploadpost',
+        ).exists()
+        key.status = 'assigned' if has_active_assignment else 'available'
         key.save(update_fields=['status', 'updated_at'])
 
 

@@ -258,7 +258,7 @@ def release_generation_run_slot(run):
         key.slot_locked_listado = None
         key.slot_locked_at = None
         key.slot_locked_until = None
-        if key.status == 'assigned':
+        if key.status in {'assigned', 'in_use'}:
             key.status = 'available'
         key.save(update_fields=[
             'status',

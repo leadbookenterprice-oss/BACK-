@@ -2,13 +2,13 @@ import json
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 from unittest.mock import patch
 
 from api.ai_services import APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError
-from api.models import APIKey, AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion, Servicio, UserAPIAssignment
+from api.models import APIKey, AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion, OTPCode, Servicio, UserAPIAssignment
 from api.pool_manager import get_next_available_api
 from api.services.listing_extractor import ExtractorError, extract_listing_from_url
 
@@ -66,8 +66,9 @@ class GeminiPoolSelectionTests(TestCase):
                 'default_daily_limit': 1500,
             },
         )
+        APIKey.objects.filter(servicio=self.service).delete()
 
-    def _create_key(self, api_key, status='assigned', requests_today=0):
+    def _create_key(self, api_key, status='available', requests_today=0):
         return APIKey.objects.create(
             servicio=self.service,
             api_key=api_key,
@@ -77,42 +78,89 @@ class GeminiPoolSelectionTests(TestCase):
         )
 
     def test_get_next_available_api_never_reuses_exhausted_key(self):
-        exhausted_key = self._create_key('AIza-exhausted', status='exhausted')
-        UserAPIAssignment.objects.update_or_create(
-            user=self.user,
-            servicio=self.service,
-            is_primary=True,
-            activo=True,
-            defaults={'apikey': exhausted_key},
-        )
+        self._create_key('AIza-exhausted', status='exhausted')
 
         selected = get_next_available_api(self.user, 'gemini')
 
         self.assertIsNone(selected)
 
-    def test_get_next_available_api_repairs_exhausted_assignment_with_available_key(self):
-        exhausted_key = self._create_key('AIza-exhausted', status='exhausted')
+    def test_get_next_available_api_uses_available_pool_key_without_assignment(self):
+        self._create_key('AIza-exhausted', status='exhausted')
         replacement_key = self._create_key('AIza-replacement', status='available')
-        UserAPIAssignment.objects.update_or_create(
-            user=self.user,
-            servicio=self.service,
-            is_primary=True,
-            activo=True,
-            defaults={'apikey': exhausted_key},
-        )
 
         selected = get_next_available_api(self.user, 'gemini')
 
         self.assertEqual(selected, 'AIza-replacement')
         replacement_key.refresh_from_db()
-        self.assertEqual(replacement_key.status, 'assigned')
-        self.assertTrue(
+        self.assertEqual(replacement_key.status, 'available')
+
+
+class UploadPostAssignmentTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email='uploadpost-user-one@leadbook.local',
+            password='test-pass',
+            nombre='UploadPost User One',
+            plan_nombre='starter',
+        )
+        self.other_user = get_user_model().objects.create_user(
+            email='uploadpost-user-two@leadbook.local',
+            password='test-pass',
+            nombre='UploadPost User Two',
+            plan_nombre='starter',
+        )
+        self.service, _ = Servicio.objects.update_or_create(
+            nombre='uploadpost',
+            defaults={
+                'descripcion': 'UploadPost',
+                'default_daily_limit': 999999,
+                'default_monthly_limit': 10,
+            },
+        )
+        APIKey.objects.filter(servicio=self.service).delete()
+
+    def _create_key(self, api_key, status='available', requests_this_month=0):
+        return APIKey.objects.create(
+            servicio=self.service,
+            api_key=api_key,
+            status=status,
+            requests_this_month=requests_this_month,
+            google_daily_limit=999999,
+            google_monthly_limit=10,
+        )
+
+    def test_uploadpost_assigns_one_key_per_user_and_reuses_it(self):
+        first_key = self._create_key('uploadpost-user-one-key')
+        self._create_key('uploadpost-spare-key')
+
+        selected = get_next_available_api(self.user, 'uploadpost')
+        selected_again = get_next_available_api(self.user, 'uploadpost')
+
+        self.assertEqual(selected, first_key.api_key)
+        self.assertEqual(selected_again, first_key.api_key)
+        first_key.refresh_from_db()
+        self.assertEqual(first_key.status, 'assigned')
+        self.assertEqual(
             UserAPIAssignment.objects.filter(
                 user=self.user,
                 servicio=self.service,
-                apikey=replacement_key,
                 activo=True,
-            ).exists()
+            ).count(),
+            1,
+        )
+
+    def test_uploadpost_second_user_gets_different_key(self):
+        first_key = self._create_key('uploadpost-user-one-key')
+        second_key = self._create_key('uploadpost-user-two-key')
+
+        selected = get_next_available_api(self.user, 'uploadpost')
+        selected_other = get_next_available_api(self.other_user, 'uploadpost')
+
+        self.assertEqual(selected, first_key.api_key)
+        self.assertEqual(selected_other, second_key.api_key)
+        self.assertEqual(
+            set(UserAPIAssignment.objects.filter(activo=True).values_list('apikey__api_key', flat=True)),
+            {first_key.api_key, second_key.api_key},
         )
 
 
@@ -138,6 +186,9 @@ class ListingExtractorTests(TestCase):
         self.assertEqual(result['data']['moneda'], 'USD')
         self.assertEqual(result['data']['recamaras'], 3)
         self.assertEqual(len(result['data']['fotos']), 2)
+        self.assertEqual(len(result['media_candidates']), 2)
+        self.assertEqual(result['required_action'], 'none')
+        self.assertIn('extraction_id', result)
 
     def test_fallback_extraction_when_no_structured_data(self):
         html = '''
@@ -160,6 +211,44 @@ class ListingExtractorTests(TestCase):
             extract_listing_from_url('ftp://example.com/a')
         self.assertEqual(ctx.exception.status_code, 400)
 
+    @override_settings(IMPORT_URL_PLAYWRIGHT_ENABLED=True)
+    def test_js_only_page_uses_playwright_when_enabled(self):
+        empty_html = '<html><head><title>Cargando</title></head><body><div id="app"></div></body></html>'
+        rendered_html = '''
+        <html><head><meta property="og:image" content="https://cdn.example.com/rendered.jpg"></head>
+        <body><h1>Casa renderizada en Punta</h1>
+        <p>Casa en venta con 4 habitaciones, 3 banos, piscina y 320 m2. USD 900000.</p></body></html>
+        '''
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(empty_html)), \
+             patch('api.services.listing_extractor._render_html_with_playwright', return_value=(rendered_html, 'https://example.com/js')):
+            result = extract_listing_from_url('https://example.com/js')
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['mode'], 'playwright')
+        self.assertEqual(result['data']['titulo'], 'Casa renderizada en Punta')
+        self.assertEqual(result['media_candidates'][0], 'https://cdn.example.com/rendered.jpg')
+
+    def test_blocked_page_returns_required_action(self):
+        html = '<html><body><h1>Access denied</h1><p>Verify you are human. CAPTCHA required.</p></body></html>'
+        with patch('api.services.listing_extractor._assert_public_host'), \
+             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
+            result = extract_listing_from_url('https://example.com/blocked')
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['required_action'], 'blocked')
+        self.assertEqual(result['status'], 'needs_input')
+
+    def test_pasted_text_fallback_extracts_manual_content(self):
+        text = 'Casa en venta en Recoleta. USD 450000. 3 habitaciones, 2 banos, 160 m2, balcon y cochera.'
+        with patch('api.services.listing_extractor._assert_public_host'):
+            result = extract_listing_from_url('https://example.com/private', pasted_text=text)
+
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['mode'], 'manual')
+        self.assertEqual(result['data']['operacion'], 'venta')
+        self.assertEqual(result['data']['recamaras'], 3)
+
 
 class AdsStudioEndpointTests(TestCase):
     def setUp(self):
@@ -176,10 +265,15 @@ class AdsStudioEndpointTests(TestCase):
     def test_extract_endpoint_integration(self):
         payload = {
             'ok': True,
+            'extraction_id': 'ext-123',
+            'status': 'ready',
             'source': 'example.com',
+            'mode': 'static',
             'confidence': 0.82,
             'data': {'titulo': 'Casa importada', 'fotos': ['https://example.com/a.jpg']},
+            'media_candidates': ['https://example.com/a.jpg'],
             'warnings': [],
+            'required_action': 'none',
             'final_url': 'https://example.com/propiedad',
         }
         with patch('api.views.extract_listing_from_url', return_value=payload):
@@ -191,6 +285,9 @@ class AdsStudioEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(response.json()['ok'])
         self.assertEqual(response.json()['data']['titulo'], 'Casa importada')
+        self.assertEqual(response.json()['extraction_id'], 'ext-123')
+        self.assertEqual(response.json()['media_candidates'], ['https://example.com/a.jpg'])
+        self.assertEqual(response.json()['required_action'], 'none')
 
     def test_generate_meta_variants_persists_on_listing(self):
         listado = Listado.objects.create(
@@ -362,6 +459,66 @@ class ListingResultPersistenceTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.content)
         destroy_mock.assert_called_once_with(safe_public_id, resource_type='image')
+
+    def test_upload_fotos_downloads_only_accepted_external_import_refs(self):
+        accepted_cover = {
+            'url': 'https://cdn.example.com/cover.webp',
+            'source': 'external_import',
+            'external_import': True,
+        }
+        accepted_gallery = {
+            'url': 'https://cdn.example.com/gallery.webp',
+            'source': 'external_import',
+            'external_import': True,
+        }
+        removed_external = {
+            'url': 'https://cdn.example.com/removed.webp',
+            'source': 'external_import',
+            'external_import': True,
+        }
+
+        downloaded_urls = []
+
+        def fake_download(url, *args, **kwargs):
+            downloaded_urls.append(url)
+            return b'image-bytes', 'image/webp'
+
+        def fake_upload(file_obj, user_id, listado_id=None, tipo_foto='portada', indice=0):
+            stem = file_obj.name.rsplit('.', 1)[0]
+            public_id = f'leadbook/listados/usuario_{user_id}/temp/foto_{stem}_{tipo_foto}_{indice}'
+            return {
+                'public_id': public_id,
+                'secure_url': f'https://res.cloudinary.com/demo/image/upload/{public_id}.webp',
+                'url': f'https://res.cloudinary.com/demo/image/upload/{public_id}.webp',
+                'resource_type': 'image',
+                'cloudinary_account': 'demo',
+                'format': 'webp',
+                'width': 1200,
+                'height': 900,
+                'bytes': 128,
+            }
+
+        with patch('api.views._download_remote_asset', side_effect=fake_download), \
+             patch('api.services.almacenamiento.AlmacenamientoCloudinary.guardar_foto_propiedad_file', side_effect=fake_upload):
+            response = self.client.post(
+                reverse('upload_fotos_listado'),
+                {
+                    'mode': 'replace',
+                    'delete_removed': True,
+                    'download_remote': True,
+                    'portadaUrl': accepted_cover,
+                    'fotosRecorrido': [accepted_gallery],
+                    'removedMediaRefs': [removed_external],
+                },
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertEqual(downloaded_urls, ['https://cdn.example.com/cover.webp', 'https://cdn.example.com/gallery.webp'])
+        self.assertIn('cover', payload['portadaUrl']['public_id'])
+        self.assertEqual(len(payload['fotosRecorrido']), 1)
+        self.assertIn('gallery', payload['fotosRecorrido'][0]['public_id'])
 
     def test_update_preserves_existing_generated_results(self):
         listado = Listado.objects.create(
@@ -594,6 +751,8 @@ class CommercialAgentPhotoFlowTests(TestCase):
             email='agent-photo-test@leadbook.local',
             password='test-pass',
             nombre='Test Agent',
+            plan_nombre='pro',
+            plan_activo=True,
         )
         self.profile = ComercialAgentProfile.objects.create(
             owner=self.user,
@@ -663,3 +822,98 @@ class CommercialAgentPhotoFlowTests(TestCase):
         )
         self.assertEqual(prefs_update.status_code, 200, prefs_update.content)
         self.assertEqual(prefs_update.json()['hashtags'], ['#venta', '#lujo'])
+
+
+class PasswordRecoveryCodeTests(TestCase):
+    def setUp(self):
+        self.user_model = get_user_model()
+        self.user = self.user_model.objects.create_user(
+            email='password-code-test@leadbook.local',
+            password='OldPass123!',
+            nombre='Password Code Tester',
+        )
+        self.client = APIClient()
+
+    @patch('api.tasks.send_otp_email_async', return_value='sent:test')
+    def test_public_recovery_allows_password_reset_with_code(self, send_otp):
+        response = self.client.post(
+            '/api/auth/recuperar-password/',
+            {'email': self.user.email},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        code = send_otp.call_args.args[1]
+        confirm = self.client.post(
+            '/api/auth/confirmar-recuperacion/',
+            {'email': self.user.email, 'codigo': code, 'nueva_password': 'NewPass123!'},
+            format='json',
+        )
+
+        self.assertEqual(confirm.status_code, 200, confirm.content)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('NewPass123!'))
+        self.assertTrue(OTPCode.objects.filter(email=self.user.email, tipo='recuperacion', verified=True).exists())
+
+    @patch('api.tasks.send_otp_email_async', return_value='sent:test')
+    def test_public_recovery_uses_generic_response_for_unknown_email(self, send_otp):
+        response = self.client.post(
+            '/api/auth/recuperar-password/',
+            {'email': 'missing@leadbook.local'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(send_otp.called)
+        self.assertFalse(OTPCode.objects.filter(email='missing@leadbook.local', tipo='recuperacion').exists())
+
+    @patch('api.tasks.send_otp_email_async', return_value='sent:test')
+    def test_public_recovery_wrong_code_increments_attempts(self, send_otp):
+        self.client.post('/api/auth/recuperar-password/', {'email': self.user.email}, format='json')
+        otp = OTPCode.objects.get(email=self.user.email, tipo='recuperacion')
+
+        response = self.client.post(
+            '/api/auth/confirmar-recuperacion/',
+            {'email': self.user.email, 'codigo': '000000', 'nueva_password': 'NewPass123!'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        otp.refresh_from_db()
+        self.assertEqual(otp.attempts, 1)
+        self.assertFalse(otp.verified)
+
+    @patch('api.tasks.send_otp_email_async', return_value='sent:test')
+    def test_authenticated_password_change_with_code_keeps_session_alive(self, send_otp):
+        self.client.force_authenticate(user=self.user)
+        request_code = self.client.post('/api/auth/password-change-code/', {}, format='json')
+
+        self.assertEqual(request_code.status_code, 200, request_code.content)
+        code = send_otp.call_args.args[1]
+        response = self.client.post(
+            '/api/auth/cambiar-password/',
+            {'codigo': code, 'new_password': 'NewPass123!'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        body = response.json()
+        self.assertIn('access', body)
+        self.assertIn('sessions_closed', body)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('NewPass123!'))
+
+    @patch('api.tasks.send_otp_email_async', return_value='sent:test')
+    def test_authenticated_password_change_rejects_unsafe_password(self, send_otp):
+        self.client.force_authenticate(user=self.user)
+        self.client.post('/api/auth/password-change-code/', {}, format='json')
+        code = send_otp.call_args.args[1]
+
+        response = self.client.post(
+            '/api/auth/cambiar-password/',
+            {'codigo': code, 'new_password': '12345678'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json().get('error'), 'password_insegura')

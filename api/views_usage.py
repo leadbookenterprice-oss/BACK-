@@ -1,63 +1,43 @@
 """
-api/views_usage.py — LeadBook v2.0
-Estadísticas de uso de APIs para usuarios y admin.
-Lógica migrada al nuevo schema de Servicio / UserAPIQuota / UserAPIAssignment.
+api/views_usage.py - LeadBook v2.0
+Estadisticas de uso de APIs para usuarios y admin.
+Las API keys pertenecen al pool interno de LeadBook; los usuarios solo consumen cuota.
 """
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
-from api.models import APIKey, UserAPIQuota, Servicio, UserAPIAssignment
-from django.utils import timezone
-import requests
+
+from api.models import APIKey, UserAPIQuota
+from api.services.pool_service import APIPoolService, ensure_core_services
 
 
-# Nombres amigables para el frontend
 SERVICIO_MAP = {
-    'gemini': {
-        'nombre': "Generación de Contenido IA",
-        'unidad': "peticiones",
-        'icono': "brain"
-    },
-    'elevenlabs': {
-        'nombre': "Voces Neurales",
-        'unidad': "caracteres",
-        'icono': "mic"
-    },
-    'uploadpost': {
-        'nombre': "Gestor de Redes",
-        'unidad': "publicaciones",
-        'icono': "share"
-    },
-    'cerebras': {
-        'nombre': "Motor IA Cerebras",
-        'unidad': "peticiones IA",
-        'icono': "brain"
-    }
+    'gemini': {'nombre': 'Generacion de Contenido IA', 'unidad': 'peticiones', 'icono': 'brain'},
+    'elevenlabs': {'nombre': 'Voces Neurales', 'unidad': 'caracteres', 'icono': 'mic'},
+    'uploadpost': {'nombre': 'Gestor de Redes', 'unidad': 'publicaciones', 'icono': 'share'},
+    'cerebras': {'nombre': 'Motor IA Cerebras', 'unidad': 'peticiones IA', 'icono': 'brain'},
 }
+
+
+def _has_pool_capacity(servicio, *, soft_exhaustion=False):
+    if str(getattr(servicio, 'nombre', '') or '').strip().lower() == 'uploadpost':
+        return APIKey.objects.filter(servicio=servicio, status__in=['available', 'assigned']).exists()
+    statuses = ['available', 'in_use', 'exhausted'] if soft_exhaustion else ['available', 'in_use']
+    return APIKey.objects.filter(servicio=servicio, status__in=statuses).exists()
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def mi_uso_apis(request):
-    """
-    Devuelve el uso de APIs del usuario actual.
-    Cruza datos de UserAPIQuota con las keys asignadas en UserAPIAssignment.
-    """
+    """Devuelve el uso del usuario sin exponer keys asignadas."""
     user = request.user
-    from api.services.pool_service import APIPoolService, ensure_core_services
     ensure_core_services()
-    
-    # 1. Obtener todas las cuotas del usuario
-    quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
-    
-    # Si no tiene cuotas, intentar repararlas (asignar keys si es nuevo)
-    if not quotas.exists():
-        APIPoolService.assign_keys_to_user(user)
-        quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
+    APIPoolService.ensure_user_quotas(user)
 
     from api.tracking import get_uploadpost_quota, sync_uploadpost_quota_from_sql
     get_uploadpost_quota(user)
+
     quotas = UserAPIQuota.objects.filter(user=user).select_related('servicio')
 
     from api.plan_utils import get_daily_listing_quota
@@ -67,155 +47,114 @@ def mi_uso_apis(request):
         listing_limit = listing_quota['limit'] or 0
         listing_used = listing_quota['used'] or 0
         stats.append({
-            "servicio": "listados_dia",
-            "nombre": "Listados diarios Starter",
-            "icono": "home",
-            "consumido": listing_used,
-            "limite": listing_limit,
-            "ilimitado": False,
-            "limite_label": listing_limit,
-            "extras_activos": 0,
-            "unidad": "listados/dia",
-            "porcentaje": min(100, int((listing_used / listing_limit) * 100)) if listing_limit else 0,
-            "status": "exhausted" if listing_quota['exhausted'] else "ok",
-            "window": "day",
-            "excludes_video": True,
+            'servicio': 'listados_dia',
+            'nombre': 'Listados diarios Starter',
+            'icono': 'home',
+            'consumido': listing_used,
+            'limite': listing_limit,
+            'ilimitado': False,
+            'limite_label': listing_limit,
+            'extras_activos': 0,
+            'unidad': 'listados/dia',
+            'porcentaje': min(100, int((listing_used / listing_limit) * 100)) if listing_limit else 0,
+            'status': 'exhausted' if listing_quota['exhausted'] else 'ok',
+            'window': 'day',
+            'excludes_video': True,
         })
-    for q in quotas:
-        q.maybe_reset_daily()
-        q.recalcular_limite(plan=user.plan_nombre)
-        if q.is_blocked and q.requests_today < q.user_daily_limit:
-            q.is_blocked = False
-            q.blocked_reason = None
-            q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
 
-        svc_name = q.servicio.nombre
+    for quota in quotas:
+        quota.maybe_reset_daily()
+        quota.recalcular_limite(plan=user.plan_nombre)
+        quota.maybe_reset_monthly()
+
+        svc_name = quota.servicio.nombre
         soft_exhaustion = svc_name in {'gemini', 'elevenlabs'}
         info = SERVICIO_MAP.get(svc_name, {
             'nombre': svc_name.capitalize(),
-            'unidad': "unidades",
-            'icono': "api"
+            'unidad': 'unidades',
+            'icono': 'api',
         })
-        
+
         if svc_name == 'uploadpost':
-            q.maybe_reset_monthly()
-            q.recalcular_limite(plan=user.plan_nombre)
-            q = sync_uploadpost_quota_from_sql(user, q)
-            limite = q.user_monthly_limit
-            consumido = q.requests_this_month
+            quota = sync_uploadpost_quota_from_sql(user, quota)
+            limite = quota.user_monthly_limit
+            consumido = quota.requests_this_month
+            window = 'month'
         else:
-            limite = q.user_daily_limit or 1500
-            consumido = q.requests_today
+            limite = quota.user_daily_limit or 1500
+            consumido = quota.requests_today
+            window = 'day'
+
         unlimited = svc_name == 'uploadpost' and limite is None
-        usable_statuses = ['assigned', 'available', 'exhausted'] if soft_exhaustion else ['assigned', 'available']
-        active_assignments = UserAPIAssignment.objects.filter(
-            user=user,
-            servicio=q.servicio,
-            activo=True,
-            apikey__status__in=usable_statuses,
-        ).select_related('apikey')
-        if soft_exhaustion:
-            has_usable_key = active_assignments.exists()
-            exhausted_by_key = False
-            if q.is_blocked:
-                q.is_blocked = False
-                q.blocked_reason = None
-                q.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
-        else:
-            has_usable_key = any(
-                not (a.apikey.google_daily_limit and a.apikey.requests_today >= a.apikey.google_daily_limit)
-                for a in active_assignments
-            )
-            exhausted_by_key = not has_usable_key and UserAPIAssignment.objects.filter(
-                user=user,
-                servicio=q.servicio,
-                activo=True,
-                apikey__status='exhausted',
-            ).exists()
-        extras_activos = UserAPIAssignment.objects.filter(
-            user=user,
-            servicio=q.servicio,
-            activo=True,
-            is_primary=False,
-        ).count()
-        
-        # ElevenLabs: si es posible, consultar a la API real para mayor precisión
-        # (Solo si tiene una key asignada y activa)
-        if svc_name == 'elevenlabs':
-            asig = UserAPIAssignment.objects.filter(user=user, servicio=q.servicio, activo=True).first()
-            if asig and asig.apikey:
-                try:
-                    # Opcional: consulta en vivo a ElevenLabs. 
-                    # Por ahora usamos el contador interno para velocidad.
-                    pass
-                except Exception:
-                    pass
+        pool_available = _has_pool_capacity(quota.servicio, soft_exhaustion=soft_exhaustion)
+        exhausted_by_quota = bool(not unlimited and limite and consumido >= limite)
+        exhausted_by_pool = not pool_available and not soft_exhaustion
+
+        if quota.is_blocked and not exhausted_by_quota:
+            quota.is_blocked = False
+            quota.blocked_reason = None
+            quota.save(update_fields=['is_blocked', 'blocked_reason', 'updated_at'])
 
         porcentaje = 0 if unlimited else (min(100, int((consumido / limite) * 100)) if limite else 0)
-        if q.is_blocked or exhausted_by_key:
-            porcentaje = 100
-            if limite:
-                consumido = max(consumido, limite)
-            if not q.is_blocked:
-                q.is_blocked = True
-                q.blocked_reason = 'API key obligatoria agotada'
-                q.requests_today = consumido
-                q.save(update_fields=['is_blocked', 'blocked_reason', 'requests_today', 'updated_at'])
-            
+        status_value = 'ok'
+        if exhausted_by_quota or exhausted_by_pool or quota.is_blocked:
+            status_value = 'exhausted'
+            if limite and not unlimited:
+                porcentaje = 100
+
         stats.append({
-            "servicio": svc_name,
-            "nombre": info['nombre'],
-            "icono": info['icono'],
-            "consumido": consumido,
-            "limite": limite,
-            "ilimitado": unlimited,
-            "limite_label": "∞" if unlimited else limite,
-            "extras_activos": extras_activos,
-            "unidad": info['unidad'],
-            "porcentaje": porcentaje,
-            "status": "ok" if soft_exhaustion else ("exhausted" if q.is_blocked or exhausted_by_key else "ok")
+            'servicio': svc_name,
+            'nombre': info['nombre'],
+            'icono': info['icono'],
+            'consumido': consumido,
+            'limite': limite,
+            'ilimitado': unlimited,
+            'limite_label': 'inf' if unlimited else limite,
+            'extras_activos': 0,
+            'unidad': info['unidad'],
+            'porcentaje': porcentaje,
+            'status': status_value,
+            'window': window,
+            'pool_available': pool_available,
         })
 
-    return Response({
-        "success": True,
-        "plan": user.plan_nombre,
-        "stats": stats
-    })
+    return Response({'success': True, 'plan': user.plan_nombre, 'stats': stats})
 
 
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
 def admin_uso_global(request):
-    """
-    Dashboard administrativo de uso de llaves.
-    Muestra el estado de salud y consumo de cada APIKey en la bodega.
-    """
-    keys = APIKey.objects.all().select_related('servicio').order_by('servicio', '-total_requests')
-    
+    """Resumen administrativo simple de llaves del pool LeadBook."""
+    keys = APIKey.objects.all().select_related('servicio').order_by('servicio__nombre', '-total_requests')
+
     resultado = []
-    for k in keys:
-        limite = k.google_daily_limit or 1500
-        consumido = k.requests_today
+    for key in keys:
+        service = key.servicio.nombre
+        if service == 'cerebras':
+            limite = key.google_daily_limit or 1000000
+            if limite < 100000:
+                limite = 1000000
+            consumido = key.slot_tokens_today or 0
+        elif service == 'elevenlabs':
+            limite = key.google_monthly_limit or 10000
+            consumido = key.requests_this_month
+        else:
+            limite = key.google_daily_limit or 1500
+            consumido = key.requests_today
         porcentaje = min(100, int((consumido / limite) * 100)) if limite else 0
-        if k.status == 'exhausted':
-            porcentaje = 100
-            consumido = max(consumido, limite)
-        
+
         resultado.append({
-            "id": k.id,
-            "servicio": k.servicio.nombre,
-            "label": k.label or f"{k.api_key[:8]}...",
-            "empresa": k.empresa,
-            "status": k.status,
-            "consumido_hoy": consumido,
-            "limite_hoy": limite,
-            "porcentaje": porcentaje,
-            "total_requests": k.total_requests,
-            "error_count": k.error_count,
-            "ultima_vez": k.last_used_at
+            'id': key.id,
+            'servicio': service,
+            'label': key.label or f'{key.api_key[:8]}...',
+            'empresa': key.empresa,
+            'status': key.status,
+            'consumido_hoy': consumido,
+            'limite_hoy': limite,
+            'porcentaje': 100 if key.status == 'exhausted' else porcentaje,
+            'total_requests': key.total_requests,
+            'error_count': key.error_count,
+            'ultima_vez': key.last_used_at,
         })
-        
-    return Response({
-        "success": True,
-        "keys": resultado
-    })
+
+    return Response({'success': True, 'keys': resultado})

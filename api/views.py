@@ -278,6 +278,138 @@ def retry_content_generation_run(request, run_id):
     return Response({'success': True, 'run': serialize_generation_run(run)}, status=status.HTTP_200_OK)
 
 
+def _build_generation_run_payload(run, incoming=None, step_name=''):
+    listado = run.listado
+    payload = {}
+    if isinstance(listado.datos_extra, dict):
+        payload.update(listado.datos_extra)
+    if isinstance(incoming, dict):
+        nested = incoming.get('payload') if isinstance(incoming.get('payload'), dict) else {}
+        payload.update(nested)
+        payload.update({key: value for key, value in incoming.items() if key != 'payload'})
+
+    payload.update({
+        'listado_id': listado.id,
+        'listadoId': listado.id,
+        'titulo': payload.get('titulo') or listado.titulo,
+        'tipoPropiedad': payload.get('tipoPropiedad') or listado.tipo_propiedad,
+        'tipo_propiedad': payload.get('tipo_propiedad') or listado.tipo_propiedad,
+        'operacion': payload.get('operacion') or listado.operacion,
+        'ciudad': payload.get('ciudad') or listado.ciudad,
+        'barrio': payload.get('barrio') or listado.barrio or '',
+        'precio': payload.get('precio') or listado.precio,
+        'moneda': payload.get('moneda') or listado.moneda,
+        'generation_run_id': run.id,
+        'generationRunId': run.id,
+        'generation_step': step_name,
+        'generationStep': step_name,
+    })
+    if listado.metros_cuadrados and not payload.get('superficieTotal'):
+        payload['superficieTotal'] = listado.metros_cuadrados
+    selected_template = (run.metadata or {}).get('selected_template')
+    if selected_template and not payload.get('template_id'):
+        payload['template_id'] = selected_template
+        payload['selectedTemplateId'] = selected_template
+    return payload
+
+
+def _validate_generated_pdf_html(html_string, context):
+    html_text = str(html_string or '')
+    lower_html = html_text.lower()
+    errors = []
+    if '<html' not in lower_html or '</html>' not in lower_html:
+        errors.append('html_document_missing')
+    web_nav_terms = ('<nav', 'inicio', 'propiedades', 'blog', 'menu')
+    if any(term in lower_html for term in web_nav_terms) and 'leadbook-pdf' not in lower_html:
+        errors.append('looks_like_web_page')
+
+    description = str(context.get('descripcion') or '').strip()
+    if description and not any(term in lower_html for term in ('descripcion', 'descripción', 'description')):
+        errors.append('description_section_missing')
+
+    amenities = context.get('amenidades')
+    if amenities and isinstance(amenities, (list, tuple)) and not any(term in lower_html for term in ('amenidad', 'amenities', 'comodidad')):
+        errors.append('amenities_section_missing')
+
+    gallery = context.get('fotos_recorrido') or []
+    if gallery and '<img' not in lower_html:
+        errors.append('gallery_images_missing')
+    return errors
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_active_plan
+def advance_content_generation_run(request, run_id):
+    run = get_generation_run_for_user(request.user, run_id)
+    if not run:
+        return Response({'error': 'generation_run_not_found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if run.status in {'done', 'cancelled'}:
+        return Response({'success': True, 'run': serialize_generation_run(run), 'already_complete': True})
+
+    if run.status in {'pending', 'waiting_slot'} or not run.api_key_id:
+        run, reservation = start_or_resume_generation_run(
+            request.user,
+            run.listado,
+            metadata={'advance_run_id': run.id, **(run.metadata or {})},
+        )
+        if reservation.get('error'):
+            return Response({
+                'success': False,
+                'run': serialize_generation_run(run),
+                'error': 'ia_rate_limited',
+                'mensaje': str(reservation['error']),
+                'provider': 'cerebras',
+                'scope': getattr(reservation['error'], 'scope', None),
+                'quota_state': getattr(reservation['error'], 'quota_state', None),
+                'retry_after_seconds': reservation.get('retry_after_seconds'),
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+    steps = list(run.steps.all().order_by('order', 'id'))
+    next_step = next((step for step in steps if step.status != 'done'), None)
+    if not next_step:
+        mark_generation_step(run.id, CONTENT_PACK_STEPS[-1], 'done')
+        refreshed = get_generation_run_for_user(request.user, run.id)
+        return Response({'success': True, 'run': serialize_generation_run(refreshed), 'already_complete': True})
+
+    if next_step.status in {'running', 'uploading'}:
+        return Response({
+            'success': False,
+            'error': 'generation_step_in_progress',
+            'step': next_step.step,
+            'run': serialize_generation_run(run),
+        }, status=status.HTTP_409_CONFLICT)
+
+    step_views = {
+        'pdf': generar_pdf,
+        'post': generar_imagen_post,
+        'story': generar_imagen_story,
+        'carrusel': generar_carrusel,
+        'email': generar_email,
+    }
+    step_view = step_views.get(next_step.step)
+    if not step_view:
+        return Response({'error': 'generation_step_not_supported', 'step': next_step.step}, status=status.HTTP_400_BAD_REQUEST)
+
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    payload = _build_generation_run_payload(run, request.data, next_step.step)
+    factory = APIRequestFactory()
+    internal_request = factory.post('/api/internal/generation-step/', payload, format='json')
+    force_authenticate(internal_request, user=request.user)
+    response = step_view(internal_request)
+
+    refreshed = get_generation_run_for_user(request.user, run.id)
+    response_data = getattr(response, 'data', None)
+    return Response({
+        'success': 200 <= getattr(response, 'status_code', 500) < 300,
+        'step': next_step.step,
+        'step_response': response_data,
+        'run': serialize_generation_run(refreshed or run),
+    }, status=getattr(response, 'status_code', status.HTTP_500_INTERNAL_SERVER_ERROR))
+
+
 def _safe_persisted_media_url(value):
     """Nunca devolver blobs data: desde campos persistidos."""
     if _is_data_url(value):
@@ -2348,7 +2480,7 @@ def _extract_urls_for_export(value):
     return unique
 
 
-def _is_safe_remote_asset_url(url, allowed_hosts=None):
+def _is_safe_remote_asset_url(url, allowed_hosts=None, allow_any_host=False, allowed_schemes=None):
     try:
         import ipaddress
         import socket
@@ -2356,33 +2488,62 @@ def _is_safe_remote_asset_url(url, allowed_hosts=None):
         from django.conf import settings
 
         parsed = urlparse(str(url or '').strip())
-        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        schemes = set(allowed_schemes or ('https',))
+        if parsed.scheme not in schemes or not parsed.hostname or parsed.username or parsed.password:
             return False
 
         hostname = parsed.hostname.lower().rstrip('.')
-        allowed = allowed_hosts or getattr(settings, 'REMOTE_ASSET_ALLOWED_HOSTS', ['res.cloudinary.com'])
+        allowed = [] if allow_any_host else (allowed_hosts or getattr(settings, 'REMOTE_ASSET_ALLOWED_HOSTS', ['res.cloudinary.com']))
         allowed = {str(host).lower().rstrip('.') for host in allowed if str(host).strip()}
-        if allowed and not any(hostname == host or hostname.endswith(f'.{host}') for host in allowed):
+        if not allow_any_host and allowed and not any(hostname == host or hostname.endswith(f'.{host}') for host in allowed):
             return False
 
         for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
             ip = ipaddress.ip_address(sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
                 return False
         return True
     except Exception:
         return False
 
 
-def _download_remote_asset(url, timeout=25, max_bytes=20 * 1024 * 1024):
-    if not _is_safe_remote_asset_url(url):
+def _download_remote_asset(
+    url,
+    timeout=25,
+    max_bytes=20 * 1024 * 1024,
+    *,
+    allow_any_host=False,
+    allowed_hosts=None,
+    allowed_schemes=None,
+    content_type_prefixes=None,
+    max_redirects=3,
+):
+    allowed_schemes = allowed_schemes or ('https',)
+    if not _is_safe_remote_asset_url(url, allowed_hosts=allowed_hosts, allow_any_host=allow_any_host, allowed_schemes=allowed_schemes):
         return None, None
     try:
-        response = requests.get(url, timeout=timeout, stream=True, allow_redirects=False)
+        current_url = str(url or '').strip()
+        response = None
+        for _ in range(max_redirects + 1):
+            response = requests.get(current_url, timeout=timeout, stream=True, allow_redirects=False)
+            if response.status_code in (301, 302, 303, 307, 308):
+                next_url = response.headers.get('location')
+                if not next_url:
+                    return None, None
+                from urllib.parse import urljoin
+                current_url = urljoin(current_url, next_url)
+                if not _is_safe_remote_asset_url(current_url, allowed_hosts=allowed_hosts, allow_any_host=allow_any_host, allowed_schemes=allowed_schemes):
+                    return None, None
+                continue
+            break
+        if response is None:
+            return None, None
         if response.status_code != 200:
             return None, None
 
         content_type = response.headers.get('content-type', '').lower()
+        if content_type_prefixes and not any(content_type.startswith(prefix) for prefix in content_type_prefixes):
+            return None, None
         chunks = []
         total = 0
         for chunk in response.iter_content(chunk_size=8192):
@@ -3189,7 +3350,7 @@ def _blacklist_refresh_tokens_for_user(user):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def cambiar_password(request):
+def _legacy_cambiar_password_current_password(request):
     current_password = request.data.get('current_password') or ''
     new_password = request.data.get('new_password') or ''
 
@@ -3214,6 +3375,141 @@ def cambiar_password(request):
         "sessions_closed": blacklisted,
     }, status=status.HTTP_200_OK)
     return _set_refresh_cookie(response, str(refresh))
+
+
+def _password_validation_error(new_password, user):
+    if not new_password:
+        return Response({"error": "Nueva contrasena requerida"}, status=status.HTTP_400_BAD_REQUEST)
+    if len(new_password) < 8:
+        return Response({"error": "La nueva contrasena debe tener al menos 8 caracteres"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        from django.contrib.auth.password_validation import validate_password
+        validate_password(new_password, user=user)
+    except Exception as exc:
+        return Response({
+            "error": "password_insegura",
+            "detalle": list(getattr(exc, 'messages', [str(exc)])),
+        }, status=status.HTTP_400_BAD_REQUEST)
+    return None
+
+
+def _password_changed_response(user):
+    blacklisted = _blacklist_refresh_tokens_for_user(user)
+    refresh = RefreshToken.for_user(user)
+    response = Response({
+        "mensaje": "Contrasena actualizada correctamente",
+        "access": str(refresh.access_token),
+        "sessions_closed": blacklisted,
+    }, status=status.HTTP_200_OK)
+    return _set_refresh_cookie(response, str(refresh))
+
+
+def _create_and_send_recovery_otp(email, debug_email=None):
+    from django.conf import settings
+    import secrets
+
+    recent = OTPCode.objects.filter(
+        email=email,
+        tipo="recuperacion",
+        creado_en__gte=timezone.now() - timedelta(minutes=15)
+    ).count()
+    if recent >= 3:
+        return Response({"error": "Demasiados intentos. Espera 15 minutos."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+    code = str(secrets.randbelow(900000) + 100000)
+    OTPCode.objects.create(
+        email=email,
+        code_hash=OTPCode.hash_code(code),
+        expires_at=timezone.now() + timedelta(minutes=10),
+        tipo="recuperacion",
+    )
+
+    sent_mode = None
+    try:
+        from .tasks import send_otp_email_async
+        sent_mode = str(send_otp_email_async(email, code))
+        print(f"[OTP-RECOV] Resultado envio a {email}: {sent_mode}", flush=True)
+    except Exception as exc:
+        print(f"[OTP-RECOV] ERROR envio: {type(exc).__name__}: {exc}", flush=True)
+        sent_mode = f'error:{type(exc).__name__}'
+
+    if not str(sent_mode or '').startswith('sent:'):
+        return Response({
+            "error": "email_send_failed",
+            "message": "No se pudo enviar el codigo por email. Intenta de nuevo en unos minutos.",
+            "email": debug_email if settings.DEBUG else None,
+            "_mode": sent_mode if settings.DEBUG else None,
+        }, status=status.HTTP_502_BAD_GATEWAY)
+
+    return None
+
+
+def _find_latest_recovery_otp(email):
+    return OTPCode.objects.filter(
+        email=email,
+        tipo="recuperacion",
+        verified=False
+    ).order_by('-creado_en').first()
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def cambiar_password(request):
+    current_password = request.data.get('current_password') or ''
+    new_password = request.data.get('new_password') or ''
+    codigo = (request.data.get('codigo') or request.data.get('code') or '').strip()
+
+    if codigo:
+        validation_error = _password_validation_error(new_password, request.user)
+        if validation_error:
+            return validation_error
+        if request.user.check_password(new_password):
+            return Response({"error": "La nueva contrasena debe ser distinta a la actual"}, status=status.HTTP_400_BAD_REQUEST)
+
+        otp = _find_latest_recovery_otp(request.user.email)
+        if not otp:
+            return Response({"error": "Codigo invalido o ya utilizado"}, status=status.HTTP_400_BAD_REQUEST)
+        if otp.is_expired():
+            return Response({"error": "Codigo expirado. Pedi uno nuevo."}, status=status.HTTP_400_BAD_REQUEST)
+        if otp.attempts >= 5:
+            return Response({"error": "Demasiados intentos. Pedi un nuevo codigo."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        if not otp.is_valid(codigo):
+            otp.attempts += 1
+            otp.save(update_fields=['attempts'])
+            return Response({"error": "Codigo incorrecto"}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.set_password(new_password)
+        request.user.save(update_fields=['password', 'updated_at'])
+        otp.verified = True
+        otp.save(update_fields=['verified'])
+        return _password_changed_response(request.user)
+
+    if not current_password or not new_password:
+        return Response({"error": "Contrasena actual y nueva contrasena requeridas"}, status=status.HTTP_400_BAD_REQUEST)
+    if not request.user.check_password(current_password):
+        return Response({"error": "La contrasena actual no es correcta"}, status=status.HTTP_400_BAD_REQUEST)
+    validation_error = _password_validation_error(new_password, request.user)
+    if validation_error:
+        return validation_error
+    if current_password == new_password:
+        return Response({"error": "La nueva contrasena debe ser distinta a la actual"}, status=status.HTTP_400_BAD_REQUEST)
+
+    request.user.set_password(new_password)
+    request.user.save(update_fields=['password', 'updated_at'])
+    return _password_changed_response(request.user)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def password_change_code(request):
+    email = (request.user.email or '').strip().lower()
+    if not email:
+        return Response({"error": "Tu cuenta no tiene email asociado"}, status=status.HTTP_400_BAD_REQUEST)
+
+    send_error = _create_and_send_recovery_otp(email, debug_email=email)
+    if send_error:
+        return send_error
+    return Response({"mensaje": "Codigo enviado a tu email"}, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])
@@ -5102,6 +5398,14 @@ def generar_carrusel(request):
         descripcion_corta = descripcion[:180].rstrip() if descripcion else 'Una propuesta pensada para vivir, invertir y decidir con informacion clara.'
         ubicacion_text = str(data.get('ciudad') or '').strip()
         operacion_text = data.get('operacion', 'Venta')
+        carousel_gallery_logo_position = str(
+            data.get('carousel_gallery_logo_position')
+            or data.get('carouselGalleryLogoPosition')
+            or data.get('logoPosition')
+            or 'top_right'
+        ).strip().lower()
+        if carousel_gallery_logo_position not in {'top_left', 'top_right', 'center', 'hidden'}:
+            carousel_gallery_logo_position = 'top_right'
 
         def build_specs_sentence():
             parts = []
@@ -5131,7 +5435,18 @@ def generar_carrusel(request):
                 return None
             return images_pool[index % len(images_pool)]
 
-        def render_clean_gallery_slide(image_url):
+        def render_clean_gallery_slide(image_url, logo_url='', logo_position='top_right'):
+            logo_position = str(logo_position or 'top_right').strip().lower()
+            if logo_position not in {'top_left', 'top_right', 'center', 'hidden'}:
+                logo_position = 'top_right'
+            logo_class = {
+                'top_left': 'logo top-left',
+                'top_right': 'logo top-right',
+                'center': 'logo center',
+            }.get(logo_position, '')
+            logo_html = ''
+            if logo_url and logo_position != 'hidden':
+                logo_html = f'<img class="{logo_class}" src="{logo_url}" alt="Logo inmobiliaria">'
             return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -5140,10 +5455,15 @@ def generar_carrusel(request):
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ width: 1080px; height: 1350px; background: #050505; overflow: hidden; }}
   .photo {{ width: 100%; height: 100%; object-fit: contain; display: block; background: #050505; }}
+  .logo {{ position: absolute; z-index: 2; width: 138px; max-height: 86px; object-fit: contain; padding: 12px; border-radius: 18px; background: rgba(255,255,255,.92); box-shadow: 0 10px 34px rgba(0,0,0,.28); }}
+  .top-left {{ top: 42px; left: 42px; }}
+  .top-right {{ top: 42px; right: 42px; }}
+  .center {{ top: 50%; left: 50%; transform: translate(-50%, -50%); width: 180px; max-height: 112px; }}
 </style>
 </head>
 <body>
   <img class="photo" src="{image_url}" alt="Galeria propiedad">
+  {logo_html}
 </body>
 </html>"""
 
@@ -5259,7 +5579,7 @@ def generar_carrusel(request):
             }
 
             if slide.get('kind') == 'gallery':
-                html_content = render_clean_gallery_slide(slide.get('image'))
+                html_content = render_clean_gallery_slide(slide.get('image'), branding.get('logo_url', ''), carousel_gallery_logo_position)
             else:
                 html_content = render_to_string(template_carousel, context)
                 html_content = _apply_template_tokens_to_html(html_content, template_id, selection.get('template_tokens'))
@@ -5335,6 +5655,7 @@ Requisitos obligatorios:
                     "total_slides": len(slides_urls),
                     "gallery_used": len(gallery_images),
                     "gallery_omitted": gallery_omitted,
+                    "carousel_gallery_logo_position": carousel_gallery_logo_position,
                 },
             )
 
@@ -5358,6 +5679,7 @@ Requisitos obligatorios:
             "total_slides": len(slides_urls),
             "gallery_used": len(gallery_images),
             "gallery_omitted": gallery_omitted,
+            "carousel_gallery_logo_position": carousel_gallery_logo_position,
         }
         _mark_generation_done(generation_run_id, generation_step_name, {
             "slides": slides_urls,
@@ -5624,7 +5946,22 @@ class ListadosView(APIView):
 @require_active_plan
 @require_pro_feature('organic_content')
 def extract_listado_from_url(request):
-    payload = request.data if isinstance(request.data, dict) else {}
+    from django.conf import settings
+
+    if not getattr(settings, 'IMPORT_URL_ENABLED', True):
+        return Response({
+            'ok': False,
+            'status': 'disabled',
+            'source': '',
+            'confidence': 0,
+            'data': {},
+            'media_candidates': [],
+            'warnings': ['La importacion por URL no esta habilitada.'],
+            'required_action': 'blocked',
+            'final_url': request.data.get('url') if hasattr(request.data, 'get') else '',
+        }, status=status.HTTP_403_FORBIDDEN)
+
+    payload = request.data if hasattr(request.data, 'get') else {}
     url = payload.get('url')
     source_hint = payload.get('source_hint') or payload.get('sourceHint')
     try:
@@ -5633,32 +5970,119 @@ def extract_listado_from_url(request):
             pais=payload.get('pais'),
             idioma=payload.get('idioma'),
             source_hint=source_hint,
+            pasted_html=payload.get('pasted_html') or payload.get('pastedHtml'),
+            pasted_text=payload.get('pasted_text') or payload.get('pastedText'),
         )
+        result = _maybe_enrich_imported_listing_data(result, request.user, url)
+        data = result.get('data') or {}
+        media_candidates = result.get('media_candidates') or data.get('fotos') or []
         return Response({
             'ok': bool(result.get('ok')),
+            'extraction_id': result.get('extraction_id') or '',
+            'status': result.get('status') or ('ready' if result.get('ok') else 'needs_input'),
             'source': result.get('source') or '',
+            'mode': result.get('mode') or '',
             'confidence': result.get('confidence') or 0,
-            'data': result.get('data') or {},
+            'data': data,
+            'media_candidates': media_candidates,
             'warnings': result.get('warnings') or [],
+            'required_action': result.get('required_action') or 'none',
             'final_url': result.get('final_url') or url,
         }, status=status.HTTP_200_OK)
     except ExtractorError as exc:
+        explicit_action = getattr(exc, 'required_action', None)
+        action = explicit_action or 'manual_review'
+        response_status = status.HTTP_200_OK if explicit_action in {'paste_html', 'manual_review', 'blocked', 'login_required'} else getattr(exc, 'status_code', status.HTTP_400_BAD_REQUEST)
         return Response({
             'ok': False,
+            'extraction_id': '',
+            'status': getattr(exc, 'extraction_status', None) or 'needs_input',
             'source': source_hint or '',
             'confidence': 0,
             'data': {},
+            'media_candidates': [],
             'warnings': list(exc.warnings or []) + [str(exc)],
-        }, status=getattr(exc, 'status_code', status.HTTP_400_BAD_REQUEST))
+            'required_action': action,
+            'final_url': url,
+        }, status=response_status)
     except Exception as exc:
         logger.exception('[EXTRACTOR] fail url=%s reason=unexpected:%s', url, exc)
         return Response({
             'ok': False,
+            'extraction_id': '',
+            'status': 'error',
             'source': source_hint or '',
             'confidence': 0,
             'data': {},
+            'media_candidates': [],
             'warnings': ['Error inesperado al extraer la URL.'],
+            'required_action': 'manual_review',
+            'final_url': url,
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _maybe_enrich_imported_listing_data(result, user, source_url=''):
+    from django.conf import settings
+
+    if not getattr(settings, 'IMPORT_URL_AI_ENRICHMENT_ENABLED', False):
+        return result
+    data = result.get('data') if isinstance(result, dict) else {}
+    if not isinstance(data, dict) or not data:
+        return result
+
+    raw_context = '\n'.join(
+        str(data.get(key) or '')
+        for key in ('titulo', 'descripcion', 'direccion', 'ciudad', 'precio', 'moneda', 'tipo_propiedad', 'operacion')
+    ).strip()
+    if len(raw_context) < 40:
+        return result
+
+    prompt = f"""
+Normaliza datos de una publicacion inmobiliaria importada. No generes piezas finales, solo campos limpios.
+Devuelve JSON con estas claves si las podes inferir:
+titulo, descripcion, tipo_propiedad, operacion, pais, ciudad, direccion, precio, moneda, recamaras, banos,
+superficie_total, superficie_cubierta, estacionamientos, amenidades.
+
+URL fuente: {source_url}
+Datos extraidos:
+{json.dumps(data, ensure_ascii=False)[:6000]}
+"""
+    try:
+        raw = smart_call(
+            prompt,
+            retries=1,
+            agente=user,
+            system_prompt='Sos un asistente de limpieza de datos inmobiliarios. Respondes solo JSON valido.',
+            task='listing_import_enrichment',
+        )
+        parsed = _parse_json_object(raw)
+        if not isinstance(parsed, dict):
+            return result
+        allowed = {
+            'titulo', 'descripcion', 'tipo_propiedad', 'operacion', 'pais', 'ciudad', 'direccion',
+            'precio', 'moneda', 'recamaras', 'banos', 'superficie_total', 'superficie_cubierta',
+            'estacionamientos', 'amenidades',
+        }
+        enriched = dict(data)
+        for key in allowed:
+            value = parsed.get(key)
+            if value in (None, '', [], {}):
+                continue
+            if key == 'amenidades':
+                if isinstance(value, list):
+                    enriched[key] = [str(item).strip() for item in value if str(item).strip()][:20]
+                continue
+            if key == 'descripcion' and len(str(value)) > len(str(enriched.get(key) or '')):
+                enriched[key] = _repair_mojibake_text(str(value).strip())[:2200]
+                continue
+            enriched.setdefault(key, _repair_mojibake_text(str(value).strip()))
+        next_result = dict(result)
+        next_result['data'] = enriched
+        next_result['warnings'] = list(result.get('warnings') or []) + ['Datos normalizados con IA antes de la revision.']
+        return next_result
+    except Exception as exc:
+        logger.warning('[EXTRACTOR] enrichment skipped url=%s reason=%s', source_url, exc)
+        return result
 
 
 @api_view(['POST'])
@@ -6239,6 +6663,36 @@ def generar_pdf(request):
 
         html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
         html_string = _repair_mojibake_text(html_string)
+        validation_errors = _validate_generated_pdf_html(html_string, context)
+        if validation_errors:
+            try:
+                repair_context = {
+                    **context,
+                    'pdf_repair_errors': validation_errors,
+                    'pdf_repair_instruction': (
+                        'Rehacer el HTML de PDF respetando template, galeria, amenidades, descripcion y contacto. '
+                        'No generar una pagina web ni navegacion.'
+                    ),
+                }
+                html_string = generar_html_gemini(repair_context, request.user)
+                html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
+                html_string = _repair_mojibake_text(html_string)
+                validation_errors = _validate_generated_pdf_html(html_string, context)
+            except Exception:
+                logger.exception('[PDF] Fallo retry de reparacion HTML')
+
+        if validation_errors:
+            detalle = f"Cerebras devolvio HTML incompleto para PDF: {', '.join(validation_errors)}"
+            logger.error("[PDF] HTML invalido listado_id=%s errores=%s", listado_id_hint, validation_errors)
+            _mark_generation_failed(generation_run_id, generation_step_name, detalle, error_code='pdf_html_invalid')
+            return Response(
+                {
+                    "error": "pdf_html_invalid",
+                    "detalle": detalle,
+                    "template_id": template_id,
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ ConversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n a PDF Real con Playwright ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
         pdf_url = None
@@ -7207,63 +7661,10 @@ def _mp_notify(user, tipo, titulo, mensaje):
 
 
 def _mp_assign_paid_extra(agent, tipo, pago):
-    from .models import AdminAlert, Servicio, UserAPIAssignment
     from .services.pool_service import APIPoolService
 
-    assigned = []
-    missing = []
-    for service_name in MP_EXTRA_SERVICES.get(tipo, []):
-        servicio = Servicio.objects.filter(nombre=service_name, activo=True).first()
-        if not servicio:
-            missing.append(service_name)
-            continue
-
-        exists = UserAPIAssignment.objects.filter(
-            user=agent,
-            servicio=servicio,
-            pago=pago,
-            is_primary=False,
-            activo=True,
-        ).exists()
-        if exists:
-            continue
-
-        assignment = APIPoolService.add_extra_key(agent, service_name, pago=pago)
-        if assignment:
-            print(
-                f"[MP] extra assigned user={agent.email} service={service_name} "
-                f"payment={pago.mp_payment_id} key_id={assignment.apikey_id}",
-                flush=True,
-            )
-            assigned.append(service_name)
-        else:
-            missing.append(service_name)
-
-    if assigned:
-        _mp_notify(
-            agent,
-            'api_extra_asignada',
-            'Recurso adicional activado',
-            f"Se activÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ tu recurso adicional: {', '.join(assigned)}.",
-        )
-
-    if missing:
-        AdminAlert.objects.create(
-            tipo='assign_failed',
-            severidad='critical',
-            titulo=f'Pago aprobado sin stock extra ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â {agent.email}',
-            mensaje=f"Pago {pago.mp_payment_id} aprobado, pero faltÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ stock para: {', '.join(missing)}.",
-            related_user=agent,
-        )
-        _mp_notify(
-            agent,
-            'pago_aprobado',
-            'Pago aprobado en revisiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n',
-            'Recibimos tu pago. Estamos activando el recurso adicional y te avisaremos cuando esté disponible.',
-        )
-
-    return assigned, missing
-
+    APIPoolService.ensure_user_quotas(agent)
+    return [], []
 
 def _mp_process_payment(payment_data):
     from .models import Agent, Pago
@@ -8248,16 +8649,11 @@ def admin_pagos(request):
     if not check_admin(request):
         return Response({"error": "Forbidden"}, status=403)
     from django.db.models import Count, Sum
-    from .models import Pago, UserAPIAssignment, WebhookLog
+    from .models import Pago, WebhookLog
 
     pagos = Pago.objects.select_related('user').order_by('-creado_en')[:200]
     data = []
     for pago in pagos:
-        asignaciones = UserAPIAssignment.objects.filter(
-            pago=pago,
-            activo=True,
-        ).select_related('servicio', 'apikey')
-        servicios = [a.servicio.nombre for a in asignaciones]
         data.append({
             "id": pago.id,
             "email": pago.user.email if pago.user else '',
@@ -8272,8 +8668,8 @@ def admin_pagos(request):
             "moneda": pago.moneda,
             "mp_payment_id": pago.mp_payment_id,
             "external_reference": pago.external_reference or '',
-            "servicios_asignados": servicios,
-            "keys_asignadas": asignaciones.count(),
+            "servicios_asignados": [],
+            "keys_asignadas": 0,
             "fecha_registro": pago.creado_en.strftime('%Y-%m-%d %H:%M') if pago.creado_en else '',
             "procesado_en": pago.procesado_en.strftime('%Y-%m-%d %H:%M') if pago.procesado_en else '',
         })
@@ -8372,22 +8768,12 @@ def conexiones_init(request):
         
         # 1. Key del bundle/pool del usuario
         api_key = get_api_key(user, 'uploadpost')
-        
-        # 2. Fallback: key global del .env de producciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n
-        if not api_key:
-            api_key = (
-                getattr(settings, 'UPLOADPOST_API_KEY', '') or
-                os.environ.get('UPLOADPOST_API_KEY', '') or
-                os.environ.get('UPLOAD_POST_API_KEY', '')
-            ) or None
-            if api_key:
-                print(f"[conexiones_init] Usando UPLOADPOST_API_KEY global para {user.email}", flush=True)
-        
+
         if not api_key:
             print(f"[conexiones_init] Sin key uploadpost para {user.email}. Plan={getattr(user, 'plan_nombre', 'starter')}", flush=True)
             return Response({
                 "success": False,
-                "error": "Tu cuenta no tiene una API de publicaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n asignada. ContactÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a soporte."
+                "error": "Tu cuenta no tiene una API de publicacion asignada. Contacta a soporte."
             }, status=400)
         
         headers = {
@@ -8409,7 +8795,7 @@ def conexiones_init(request):
             if "PROFILE_LIMIT_REACHED" in err_text or "limit of 2 profiles" in err_text:
                 return Response({
                     "success": False,
-                    "error": "Alcanzaste el lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­mite de cuentas vinculadas de tu plan actual. Para conectar mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s redes sociales, por favor mejorÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a un Plan Pro."
+                    "error": "Alcanzaste el limite de cuentas vinculadas de tu plan actual. Para conectar mas redes sociales, mejora a un Plan Pro."
                 }, status=400)
                 
             return Response({
@@ -8423,8 +8809,8 @@ def conexiones_init(request):
             "username": username,
             "redirect_url": f"{settings.FRONTEND_URL}/conexiones",
             "logo_image": "https://res.cloudinary.com/dpqgbgilw/image/upload/leadbook_logo",
-            "connect_title": "ConectÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tus redes sociales",
-            "connect_description": "ConectÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ tus cuentas para publicar automÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ticamente con LeadBook",
+            "connect_title": "Conecta tus redes sociales",
+            "connect_description": "Conecta tus cuentas para publicar automaticamente con LeadBook",
             "show_calendar": True
         }
         # Si viene una plataforma especÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­fica, pre-seleccionarla en el wizard de UploadPost
@@ -8472,7 +8858,7 @@ def conexiones_eliminar(request):
         api_key = get_api_key(user, 'uploadpost')
         
         if not api_key:
-            return Response({"success": False, "error": "No se encontrÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ API Key vinculada para este usuario"}, status=400)
+            return Response({"success": False, "error": "No se encontro API Key vinculada para este usuario"}, status=400)
             
         headers = {
             "Authorization": f"Apikey {api_key}",
@@ -8487,7 +8873,7 @@ def conexiones_eliminar(request):
         )
         
         if resp.status_code in [200, 204]:
-            return Response({"success": True, "message": "Perfil eliminado. PodÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s volver a vincular tus cuentas."})
+            return Response({"success": True, "message": "Perfil eliminado. Podes volver a vincular tus cuentas."})
         else:
             return Response({"success": False, "error": f"Error al eliminar: {resp.text[:200]}"}, status=400)
             
@@ -8512,16 +8898,6 @@ def conexiones_estado(request):
 
         # 1. Key del pool del usuario
         api_key = get_api_key(user, 'uploadpost')
-
-        # 2. Fallback a key global de .env
-        if not api_key:
-            api_key = (
-                getattr(settings, 'UPLOADPOST_API_KEY', '') or
-                os.environ.get('UPLOADPOST_API_KEY', '') or
-                os.environ.get('UPLOAD_POST_API_KEY', '')
-            ) or None
-            if api_key:
-                print(f"[conexiones_estado] Usando key global para {user.email}", flush=True)
 
         if not api_key:
             print(f"[conexiones_estado] Sin key uploadpost para {user.email}", flush=True)
@@ -9368,6 +9744,7 @@ def upload_fotos_listado(request):
     mode = str(data.get('mode') or '').strip().lower()
     replace_mode = mode == 'replace'
     delete_removed = str(data.get('delete_removed') or '').strip().lower() in ('1', 'true', 'yes', 'on')
+    download_remote = str(data.get('download_remote') or data.get('downloadRemote') or '').strip().lower() in ('1', 'true', 'yes', 'on')
     portada_input = _parse_media_ref_input(data.get('portadaUrl'))
     if hasattr(data, 'getlist'):
         fotos_input = data.getlist('fotosRecorrido') or data.get('fotosRecorrido', [])
@@ -9397,7 +9774,8 @@ def upload_fotos_listado(request):
     user_id = request.user.id
     response_data = {
         'portadaUrl': None,
-        'fotosRecorrido': []
+        'fotosRecorrido': [],
+        'warnings': [],
     }
 
     try:
@@ -9478,6 +9856,55 @@ def upload_fotos_listado(request):
                 return None, "No se pudo subir una foto a Cloudinary."
             return complete_media_ref(uploaded, role, order), None
 
+        def remote_url_from_item(item):
+            if isinstance(item, str) and item.startswith(('http://', 'https://')):
+                return item
+            if isinstance(item, dict):
+                return item.get('url') or item.get('secure_url') or item.get('remote_url')
+            return None
+
+        def guess_remote_filename(url, content_type, fallback):
+            from urllib.parse import urlparse
+            raw_path = urlparse(str(url or '')).path.rsplit('/', 1)[-1]
+            raw_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', raw_path or fallback or 'foto')
+            if '.' in raw_name[-8:]:
+                return raw_name[:90]
+            ct = str(content_type or '').split(';', 1)[0].lower()
+            ext_by_type = {
+                'image/jpeg': '.jpg',
+                'image/jpg': '.jpg',
+                'image/png': '.png',
+                'image/webp': '.webp',
+                'image/avif': '.avif',
+                'image/heic': '.heic',
+                'image/heif': '.heif',
+                'image/gif': '.gif',
+                'image/bmp': '.bmp',
+                'image/tiff': '.tiff',
+            }
+            return f"{raw_name[:80]}{ext_by_type.get(ct, '.jpg')}"
+
+        def upload_remote_url(item, role, order):
+            remote_url = remote_url_from_item(item)
+            if not remote_url:
+                return None, "Referencia remota incompleta."
+            raw_bytes, content_type = _download_remote_asset(
+                remote_url,
+                timeout=18,
+                max_bytes=15 * 1024 * 1024,
+                allow_any_host=True,
+                allowed_schemes=('https', 'http'),
+                content_type_prefixes=('image/',),
+                max_redirects=3,
+            )
+            if not raw_bytes:
+                response_data['warnings'].append(f"No se pudo descargar una imagen remota: {remote_url}")
+                return None, None
+            from django.core.files.base import ContentFile
+            filename = guess_remote_filename(remote_url, content_type, f'{role}_{order}')
+            file_obj = ContentFile(raw_bytes, name=filename)
+            return upload_file(file_obj, role, order, max(order - 1, 0))
+
         def normalize_media(item, role, order):
             if item and isinstance(item, str) and item.startswith('data:image'):
                 if not allow_legacy_base64:
@@ -9494,11 +9921,16 @@ def upload_fotos_listado(request):
                     return None, "No se pudo subir una foto a Cloudinary."
                 return complete_media_ref(uploaded, role, order), None
             if isinstance(item, dict):
+                remote_url = remote_url_from_item(item)
+                if download_remote and remote_url and not item.get('public_id'):
+                    return upload_remote_url(item, role, order)
                 media = complete_media_ref(item, role, order)
                 if not (media.get('url') or media.get('secure_url') or media.get('public_id')):
                     return None, "Referencia de imagen incompleta."
                 return media, None
             if item and isinstance(item, str) and item.startswith('http'):
+                if download_remote:
+                    return upload_remote_url(item, role, order)
                 if not _is_safe_remote_asset_url(item):
                     return None, "URL de imagen no permitida."
                 return {
@@ -9667,7 +10099,7 @@ def estado_cuota_ia(request):
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def debug_quota(request):
-    from .models import UserAPIAssignment, UserAPIQuota
+    from .models import APIKey, UserAPIQuota
     if not debug_endpoints_enabled():
         return Response({"error": "Not found"}, status=404)
     if not check_admin(request):
@@ -9692,17 +10124,13 @@ def debug_quota(request):
         'user_id', 'servicio__nombre', 'user_daily_limit', 'user_monthly_limit',
         'requests_today', 'is_blocked'
     ))
-    assignments = UserAPIAssignment.objects.filter(activo=True).select_related('user', 'servicio', 'apikey')
-    keys_info = []
-    for a in assignments:
-        k = a.apikey
-        if k:
-            keys_info.append({
-                'user': a.user.email,
-                'service': a.servicio.nombre,
-                'key_id': k.id,
-                'daily_limit': k.google_daily_limit,
-                'monthly_limit': k.google_monthly_limit,
-                'status': k.status
-            })
+    keys_info = [{
+        'service': key.servicio.nombre if key.servicio_id else '',
+        'key_id': key.id,
+        'daily_limit': key.google_daily_limit,
+        'monthly_limit': key.google_monthly_limit,
+        'status': 'in_use' if key.status == 'assigned' else key.status,
+        'locked_user_id': key.slot_locked_by_id,
+        'locked_listado_id': key.slot_locked_listado_id,
+    } for key in APIKey.objects.select_related('servicio').order_by('servicio__nombre', '-total_requests')]
     return Response({'quotas': quotas, 'keys': keys_info})

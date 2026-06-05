@@ -58,7 +58,7 @@ def _get_cerebras_key(agente=None):
         return None
 
     if _allow_global_api_fallback():
-        pool_key = APIKey.objects.filter(servicio__nombre__iexact='cerebras', status__in=['available', 'assigned']).first()
+        pool_key = APIKey.objects.filter(servicio__nombre__iexact='cerebras', status='available').first()
         if pool_key:
             return pool_key.api_key
         return _settings_or_env('CEREBRAS_API_KEY')
@@ -701,14 +701,14 @@ PASO2_CASCADE = [
 
 def _get_nvidia_key():
     from api.models import APIKey
-    pool_key = APIKey.objects.filter(servicio__nombre__iexact='nvidia', status__in=['available', 'assigned']).first()
+    pool_key = APIKey.objects.filter(servicio__nombre__iexact='nvidia', status='available').first()
     if pool_key:
         return pool_key.api_key
     return settings.NVIDIA_API_KEY
 
 def _get_groq_key():
     from api.models import APIKey
-    pool_key = APIKey.objects.filter(servicio__nombre__iexact='groq', status__in=['available', 'assigned']).first()
+    pool_key = APIKey.objects.filter(servicio__nombre__iexact='groq', status='available').first()
     if pool_key:
         return pool_key.api_key
     return settings.GROQ_API_KEY

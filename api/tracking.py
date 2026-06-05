@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from api.models import (
     APIKey, APIRequestLog, AdminAlert, Servicio, SocialPublicationLog,
-    UserAPIAssignment, UserAPIQuota
+    UserAPIQuota
 )
 from api.services.pool_service import APIPoolService, CONTENT_BUNDLE_SERVICES
 
@@ -336,32 +336,12 @@ def _raise_service_exhausted(service, message):
 
 
 def _raise_api_key_unavailable(service, agente=None):
-    message = f"No hay API key asignada para {service}. El admin debe cargar stock o reparar el pool."
+    message = f"No hay API key disponible para {service}. El admin debe cargar stock en el pool LeadBook."
     service_name = str(service or '').lower()
     if service_name in FREE_POOL_SERVICES:
         from api.ai_services import APIKeyUnavailableError
-        if agente:
-            retry_after_seconds = max(
-                int(config('SOFT_RATE_LIMIT_RETRY_SECONDS', default=600, cast=int)),
-                60,
-            )
-            has_assigned_keys = UserAPIAssignment.objects.filter(
-                user=agente,
-                servicio__nombre__iexact=service_name,
-                activo=True,
-                apikey__status__in=['available', 'assigned', 'exhausted'],
-            ).exists()
-            if has_assigned_keys:
-                raise APIKeyUnavailableError(
-                    f"Servicio temporalmente bloqueado para {service_name}. Reintentá en 10 minutos.",
-                    provider=service_name,
-                    scope='provider',
-                    quota_state='soft_rate_limited',
-                    retry_after_seconds=retry_after_seconds,
-                )
         raise APIKeyUnavailableError(message, provider=service_name, scope='pool')
     raise Exception(message)
-
 
 def emit_ws_event(event_data):
     """Envía un evento al consumer de WebSockets del Admin Dashboard."""
@@ -430,33 +410,6 @@ def track_api_call(service, action=''):
             if not soft_exhaustion and quota.requests_today >= quota.user_daily_limit:
                 _mark_service_exhausted(agente, servicio, quota, reason='Límite diario alcanzado')
                 _raise_service_exhausted(service, f"Servicio {service} agotado: límite diario alcanzado")
-
-            usable_assignment = UserAPIAssignment.objects.filter(
-                user=agente,
-                servicio=servicio,
-                activo=True,
-                apikey__status__in=['assigned', 'available'],
-            ).select_related('apikey').order_by('-is_primary', 'assigned_at').first()
-
-            if not usable_assignment and not soft_exhaustion:
-                exhausted_assignment = UserAPIAssignment.objects.filter(
-                    user=agente,
-                    servicio=servicio,
-                    activo=True,
-                    apikey__status='exhausted',
-                ).select_related('apikey').order_by('-is_primary', 'assigned_at').first()
-                if exhausted_assignment:
-                    _mark_service_exhausted(agente, servicio, quota, exhausted_assignment.apikey, reason='API keys agotadas')
-                    _raise_service_exhausted(service, f"Servicio {service} agotado para este usuario")
-
-            disabled_assignment = UserAPIAssignment.objects.filter(
-                user=agente,
-                servicio=servicio,
-                activo=True,
-                apikey__status__in=['dead', 'disabled'],
-            ).select_related('apikey').first()
-            if disabled_assignment and not usable_assignment:
-                raise Exception(f"Servicio {service} no disponible para este usuario")
 
             from api.pool_manager import get_next_available_api
 
