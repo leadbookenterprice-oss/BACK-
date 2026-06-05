@@ -3,9 +3,12 @@ import json
 import logging
 import re
 import socket
+import uuid
+from html import escape as html_escape
 from urllib.parse import urljoin, urlparse
 
 import requests
+from django.conf import settings
 from lxml import html
 
 
@@ -17,24 +20,52 @@ MAX_REDIRECTS = 4
 MAX_IMAGE_URLS = 30
 DEFAULT_TIMEOUT = (5, 12)
 USER_AGENT = 'LeadBookExtractor/1.0 (+https://leadbook.com.ar)'
+LOW_CONFIDENCE_THRESHOLD = 0.42
 
 
 class ExtractorError(Exception):
-    def __init__(self, message, *, status_code=400, warnings=None):
+    def __init__(self, message, *, status_code=400, warnings=None, required_action=None, extraction_status=None):
         super().__init__(message)
         self.status_code = status_code
         self.warnings = warnings or []
+        self.required_action = required_action
+        self.extraction_status = extraction_status
 
 
-def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None):
+def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None, pasted_html=None, pasted_text=None, use_playwright=None):
     safe_url = _validate_url(url)
     source = source_hint or urlparse(safe_url).netloc.lower()
+    extraction_id = uuid.uuid4().hex
     warnings = []
 
     logger.info('[EXTRACTOR] start url=%s source_hint=%s', safe_url, source_hint or '')
+    if pasted_html or pasted_text:
+        document = _document_from_pasted_content(pasted_html=pasted_html, pasted_text=pasted_text)
+        result = _extract_from_document(
+            document,
+            safe_url,
+            pais=pais,
+            idioma=idioma,
+            source=source,
+            mode='manual',
+            warnings=warnings,
+            extraction_id=extraction_id,
+        )
+        logger.info('[EXTRACTOR] manual url=%s confidence=%.2f photos=%s', safe_url, result['confidence'], len(result['media_candidates']))
+        return result
+
     try:
         response = _fetch_html(safe_url)
     except ExtractorError as exc:
+        if exc.required_action:
+            return _empty_result(
+                extraction_id=extraction_id,
+                source=source,
+                final_url=safe_url,
+                warnings=list(exc.warnings or []) + [str(exc)],
+                required_action=exc.required_action,
+                status_value=exc.extraction_status or 'needs_input',
+            )
         logger.warning('[EXTRACTOR] fail url=%s reason=%s', safe_url, str(exc))
         raise
     except Exception as exc:
@@ -47,6 +78,57 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None):
     except Exception as exc:
         logger.warning('[EXTRACTOR] fail url=%s reason=parse_error:%s', safe_url, exc)
         raise ExtractorError('No se pudo interpretar el HTML de la propiedad.', status_code=422) from exc
+
+    result = _extract_from_document(
+        document,
+        final_url,
+        pais=pais,
+        idioma=idioma,
+        source=source,
+        mode='static',
+        warnings=warnings,
+        extraction_id=extraction_id,
+    )
+
+    if _should_try_playwright(result) and _playwright_enabled(use_playwright):
+        try:
+            rendered_html, rendered_final_url = _render_html_with_playwright(safe_url)
+            rendered_document = html.fromstring(rendered_html)
+            rendered_result = _extract_from_document(
+                rendered_document,
+                rendered_final_url or final_url,
+                pais=pais,
+                idioma=idioma,
+                source=source,
+                mode='playwright',
+                warnings=[],
+                extraction_id=extraction_id,
+            )
+            if _result_quality(rendered_result) > _result_quality(result):
+                rendered_result['warnings'] = _dedupe_text((result.get('warnings') or []) + (rendered_result.get('warnings') or []))
+                result = rendered_result
+            else:
+                result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['Se intento render JS, pero no mejoro la extraccion.'])
+        except Exception as exc:
+            logger.warning('[EXTRACTOR] playwright fail url=%s reason=%s', safe_url, exc)
+            result['warnings'] = _dedupe_text((result.get('warnings') or []) + ['No se pudo renderizar la pagina dinamica; podes pegar HTML/texto si falta informacion.'])
+
+    logger.info(
+        '[EXTRACTOR] success url=%s source=%s mode=%s confidence=%.2f photos=%s required_action=%s',
+        safe_url,
+        source,
+        result.get('mode'),
+        result.get('confidence') or 0,
+        len(result.get('media_candidates') or []),
+        result.get('required_action'),
+    )
+    return result
+
+
+def _extract_from_document(document, final_url, *, pais=None, idioma=None, source='', mode='static', warnings=None, extraction_id=''):
+    warnings = list(warnings or [])
+    body_text = _clean_text(' '.join(document.xpath('//body//text()[normalize-space()]'))) or ''
+    required_action = _detect_required_action(body_text)
 
     structured_data = _extract_structured_data(document, final_url)
     meta_data = _extract_meta_data(document, final_url)
@@ -66,24 +148,44 @@ def extract_listing_from_url(url, *, pais=None, idioma=None, source_hint=None):
     if not data.get('fotos'):
         warnings.append('No se detectaron fotos publicas en la URL.')
 
+    meaningful = _meaningful_fields(data)
     confidence = _confidence_score(data, structured=used_structured)
-    ok = confidence >= 0.25 and bool(_meaningful_fields(data))
+    ok = confidence >= 0.25 and bool(meaningful)
+    if required_action:
+        ok = False
+        warnings.append('La pagina parece requerir una accion manual antes de poder importarla.')
     if not ok:
         warnings.append('No se pudo extraer suficiente informacion de la pagina.')
 
-    logger.info(
-        '[EXTRACTOR] success url=%s source=%s confidence=%.2f photos=%s',
-        safe_url,
-        source,
-        confidence,
-        len(data.get('fotos') or []),
-    )
+    action = required_action or ('manual_review' if not ok else 'none')
+    status_value = 'ready' if ok and action == 'none' else ('needs_input' if action != 'none' else ('partial' if meaningful else 'needs_input'))
     return {
         'ok': ok,
+        'extraction_id': extraction_id or uuid.uuid4().hex,
+        'status': status_value,
         'source': source,
+        'mode': mode,
         'confidence': confidence,
         'data': data,
-        'warnings': warnings,
+        'media_candidates': data.get('fotos') or [],
+        'warnings': _dedupe_text(warnings),
+        'required_action': action,
+        'final_url': final_url,
+    }
+
+
+def _empty_result(*, extraction_id, source, final_url, warnings, required_action, status_value='needs_input'):
+    return {
+        'ok': False,
+        'extraction_id': extraction_id,
+        'status': status_value,
+        'source': source,
+        'mode': 'static',
+        'confidence': 0,
+        'data': {},
+        'media_candidates': [],
+        'warnings': _dedupe_text(warnings),
+        'required_action': required_action,
         'final_url': final_url,
     }
 
@@ -135,6 +237,20 @@ def _fetch_html(url):
             current_url = urljoin(current_url, location)
             continue
 
+        if response.status_code == 401:
+            raise ExtractorError(
+                'La pagina requiere iniciar sesion para ver la publicacion.',
+                status_code=200,
+                required_action='login_required',
+                extraction_status='needs_input',
+            )
+        if response.status_code in {403, 429}:
+            raise ExtractorError(
+                'La pagina bloqueo la extraccion automatica.',
+                status_code=200,
+                required_action='blocked',
+                extraction_status='needs_input',
+            )
         response.raise_for_status()
         content_type = (response.headers.get('Content-Type') or '').lower()
         if 'html' not in content_type and 'text/plain' not in content_type and content_type:
@@ -147,6 +263,81 @@ def _fetch_html(url):
         return response
 
     raise ExtractorError('Demasiados redirects al descargar la URL.', status_code=400)
+
+
+def _document_from_pasted_content(*, pasted_html=None, pasted_text=None):
+    if pasted_html:
+        raw = str(pasted_html)
+    else:
+        raw = f'<html><body><p>{html_escape(str(pasted_text or ""))}</p></body></html>'
+    encoded = raw.encode('utf-8', errors='ignore')
+    if len(encoded) > MAX_HTML_BYTES:
+        raise ExtractorError('El contenido pegado es demasiado grande para extraer de forma segura.', status_code=413)
+    try:
+        return html.fromstring(encoded)
+    except Exception as exc:
+        raise ExtractorError('No se pudo interpretar el HTML/texto pegado.', status_code=422) from exc
+
+
+def _playwright_enabled(value=None):
+    if value is not None:
+        return bool(value)
+    return bool(getattr(settings, 'IMPORT_URL_PLAYWRIGHT_ENABLED', False))
+
+
+def _should_try_playwright(result):
+    if not result or result.get('required_action') not in (None, 'none', 'manual_review'):
+        return False
+    data = result.get('data') or {}
+    return (
+        (result.get('confidence') or 0) < LOW_CONFIDENCE_THRESHOLD
+        or not data.get('fotos')
+        or len(_meaningful_fields(data)) < 3
+    )
+
+
+def _result_quality(result):
+    data = result.get('data') or {}
+    return (result.get('confidence') or 0) + min(0.20, len(result.get('media_candidates') or []) * 0.01) + len(_meaningful_fields(data)) * 0.01
+
+
+def _render_html_with_playwright(url):
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(
+                user_agent=USER_AGENT,
+                viewport={'width': 1440, 'height': 1200},
+                locale='es-AR',
+            )
+            page.goto(url, wait_until='domcontentloaded', timeout=15000)
+            try:
+                page.wait_for_load_state('networkidle', timeout=5000)
+            except Exception:
+                pass
+            final_url = page.url or url
+            _validate_url(final_url)
+            content = page.content()
+            if len(content.encode('utf-8', errors='ignore')) > MAX_HTML_BYTES:
+                raise ExtractorError('HTML renderizado demasiado grande para extraer de forma segura.', status_code=413)
+            return content, final_url
+        finally:
+            browser.close()
+
+
+def _detect_required_action(text):
+    source = _strip_accents(text or '').lower()
+    if not source:
+        return None
+    if any(token in source for token in ('captcha', 'cloudflare', 'access denied', 'acceso denegado', 'robot check', 'verifica que eres humano', 'verify you are human')):
+        return 'blocked'
+    if any(token in source for token in ('iniciar sesion', 'inicia sesion', 'sign in', 'log in', 'login required', 'registrate para ver', 'create an account')):
+        return 'login_required'
+    if any(token in source for token in ('contenido no disponible', 'publicacion no disponible', 'listing unavailable')):
+        return 'manual_review'
+    return None
 
 
 def _extract_structured_data(document, base_url):
@@ -315,7 +506,7 @@ def _normalize_data(data):
         'superficie_cubierta': _number_from_any(data.get('superficie_cubierta')),
         'estacionamientos': _number_from_any(data.get('estacionamientos')),
         'amenidades': _dedupe_text(data.get('amenidades') or [])[:20],
-        'fotos': _dedupe_urls(data.get('fotos') or [])[:MAX_IMAGE_URLS],
+        'fotos': _rank_image_urls(_dedupe_urls(data.get('fotos') or []))[:MAX_IMAGE_URLS],
     }
     return {key: value for key, value in normalized.items() if value not in (None, '', [], {})}
 
@@ -516,10 +707,22 @@ def _images_from_document(document, base_url):
     for node in document.xpath('//img'):
         value = node.get('src') or node.get('data-src') or node.get('data-original') or node.get('data-lazy-src')
         srcset = node.get('srcset') or node.get('data-srcset')
-        if srcset and not value:
-            value = srcset.split(',')[-1].strip().split(' ')[0]
+        if srcset:
+            images.extend(_images_from_srcset(srcset, base_url))
         images.extend(_images_from_any(value, base_url))
+    for node in document.xpath('//source'):
+        srcset = node.get('srcset') or node.get('data-srcset')
+        if srcset:
+            images.extend(_images_from_srcset(srcset, base_url))
     return _dedupe_urls(images)
+
+
+def _images_from_srcset(srcset, base_url):
+    images = []
+    for candidate in str(srcset or '').split(','):
+        value = candidate.strip().split(' ')[0]
+        images.extend(_images_from_any(value, base_url))
+    return images
 
 
 def _images_from_any(value, base_url):
@@ -560,6 +763,30 @@ def _dedupe_urls(values):
         seen.add(key)
         result.append(cleaned)
     return result
+
+
+def _rank_image_urls(values):
+    ranked = []
+    for index, value in enumerate(values or []):
+        ranked.append((_image_quality_score(value), -index, value))
+    ranked.sort(reverse=True)
+    return [value for _score, _index, value in ranked]
+
+
+def _image_quality_score(value):
+    raw = str(value or '').lower()
+    score = 20
+    if any(ext in raw for ext in ('.jpg', '.jpeg', '.png', '.webp', '.avif', '.heic', '.heif')):
+        score += 8
+    if any(token in raw for token in ('hero', 'gallery', 'photo', 'image', 'listing', 'property', 'upload')):
+        score += 6
+    if re.search(r'(?:^|[^\d])(?:1[0-9]{3}|2[0-9]{3}|3[0-9]{3})[x_\-](?:[6-9][0-9]{2}|1[0-9]{3}|2[0-9]{3})', raw):
+        score += 8
+    if any(token in raw for token in ('logo', 'icon', 'avatar', 'profile', 'sprite', 'favicon', 'placeholder', 'map')):
+        score -= 18
+    if raw.endswith('.svg'):
+        score -= 20
+    return score
 
 
 def _dedupe_text(values):
