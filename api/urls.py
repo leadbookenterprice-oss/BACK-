@@ -27,12 +27,14 @@ from .views import (
     brand_template_publish_revision, brand_template_preview, brand_template_chat,
     brand_template_draft_preview, brand_template_draft_chat, CookieTokenRefreshView,
     cambiar_password, logout_all,
+    start_content_generation_pack, content_generation_run_detail, retry_content_generation_run,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
     admin_usuario_detalle, admin_usuarios_eliminados, admin_usuario_restaurar,
     admin_usuario_suspender, admin_apikeys_resumen, admin_apikeys_pool,
     admin_apikeys_pool_crear, admin_apikeys_pool_bulk, admin_apikeys_pool_detail, admin_apikeys_global,
+    admin_cerebras_usage_logs,
     admin_pool_estado, admin_alerts_read, admin_health_check, admin_enviar_email,
     admin_bundles_list, admin_bundles_crear, admin_bundles_detail, admin_add_extra_api,
     admin_bundles_asignar, admin_bundles_liberar, admin_bundles_stats,
@@ -112,6 +114,9 @@ urlpatterns = [
     path('listados/upload-fotos/', upload_fotos_listado, name='upload_fotos_listado'),
     path('listados/<int:pk>/html/', generar_html, name='generar_html'),
     path('listados/<int:pk>/export-zip/', export_listado_zip, name='export_listado_zip'),
+    path('listados/<int:pk>/generar-pack/', start_content_generation_pack, name='start_content_generation_pack'),
+    path('generation-runs/<int:run_id>/', content_generation_run_detail, name='content_generation_run_detail'),
+    path('generation-runs/<int:run_id>/retry/', retry_content_generation_run, name='retry_content_generation_run'),
     path('listados/<int:pk>/generar-video/', generar_video, name='generar_video'),
     path('listados/<int:pk>/video/', generar_video, name='generar_video_legacy'),
     path('listados/<int:listado_id>/video-status/', video_status, name='video_status_legacy'),
@@ -177,6 +182,7 @@ urlpatterns = [
     path('admin/apikeys/pool/<int:key_id>/', admin_apikeys_pool_detail),
     path('admin/apikeys/pool/<int:key_id>/detalle/', admin_apikeys_pool_detail),
     path('admin/apikeys/global/', admin_apikeys_global),
+    path('admin/cerebras/logs/', admin_cerebras_usage_logs),
     path('admin/apikeys/pool/auto-repair/', admin_apikeys_auto_repair),
     path('admin/pool/estado/', admin_pool_estado),
     path('admin/pool/listar/', admin_apikeys_pool), # Alias

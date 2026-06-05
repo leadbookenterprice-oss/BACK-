@@ -887,6 +887,27 @@ class APIKey(models.Model):
     last_used_at         = models.DateTimeField(null=True, blank=True)
     last_health_check    = models.DateTimeField(null=True, blank=True)
     last_health_status   = models.BooleanField(default=True)
+    slot_locked_by       = models.ForeignKey(
+        Agent,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='locked_api_slots',
+    )
+    slot_locked_listado  = models.ForeignKey(
+        'Listado',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='locked_api_slots',
+    )
+    slot_locked_at       = models.DateTimeField(null=True, blank=True)
+    slot_locked_until    = models.DateTimeField(null=True, blank=True)
+    slot_tokens_today    = models.IntegerField(default=0)
+    slot_tokens_reset_at = models.DateTimeField(null=True, blank=True)
+    slot_last_error      = models.TextField(null=True, blank=True)
+    slot_last_rate_limit_headers = models.JSONField(default=dict, blank=True)
+    slot_last_rate_limit_at = models.DateTimeField(null=True, blank=True)
     cloudinary_total_bytes = models.BigIntegerField(null=True, blank=True)
     cloudinary_used_bytes = models.BigIntegerField(null=True, blank=True)
     cloudinary_free_bytes = models.BigIntegerField(null=True, blank=True)
@@ -906,6 +927,8 @@ class APIKey(models.Model):
         indexes = [
             models.Index(fields=['servicio', 'status']),
             models.Index(fields=['status']),
+            models.Index(fields=['servicio', 'slot_locked_until']),
+            models.Index(fields=['slot_locked_by', 'slot_locked_listado']),
         ]
 
 
@@ -1438,6 +1461,228 @@ class APIRequestLog(models.Model):
             models.Index(fields=['user', 'creado_en']),
             models.Index(fields=['api_key', 'creado_en']),
             models.Index(fields=['archivado', 'creado_en']),
+        ]
+
+
+class ContentGenerationRun(models.Model):
+    """Corrida secuencial de contenido para un listado."""
+    STATUS = [
+        ('pending', 'Pendiente'),
+        ('running', 'En progreso'),
+        ('waiting_slot', 'Esperando slot'),
+        ('waiting_rate_limit', 'Esperando rate limit'),
+        ('done', 'Lista'),
+        ('failed', 'Fallida'),
+        ('cancelled', 'Cancelada'),
+    ]
+
+    user = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='content_generation_runs')
+    listado = models.ForeignKey('Listado', on_delete=models.CASCADE, related_name='content_generation_runs')
+    api_key = models.ForeignKey(
+        APIKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='content_generation_runs',
+    )
+    status = models.CharField(max_length=30, choices=STATUS, default='pending', db_index=True)
+    current_step = models.CharField(max_length=30, blank=True, db_index=True)
+    total_estimated_tokens = models.PositiveIntegerField(default=0)
+    total_actual_tokens = models.PositiveIntegerField(default=0)
+    requests_count = models.PositiveIntegerField(default=0)
+    safe_daily_limit = models.PositiveIntegerField(default=800000)
+    last_rate_limit_headers = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=80, blank=True, db_index=True)
+    error_message = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    started_at = models.DateTimeField(default=timezone.now, db_index=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-started_at', '-id']
+        indexes = [
+            models.Index(fields=['user', 'status', 'started_at']),
+            models.Index(fields=['listado', 'status', 'started_at']),
+            models.Index(fields=['api_key', 'status', 'started_at']),
+        ]
+
+    def __str__(self):
+        return f"Run #{self.id} listado={self.listado_id} status={self.status}"
+
+
+class ContentGenerationStep(models.Model):
+    """Estado de cada paso del pack sin video."""
+    STEPS = [
+        ('pdf', 'PDF'),
+        ('post', 'Post'),
+        ('story', 'Story'),
+        ('carrusel', 'Carrusel'),
+        ('email', 'Email'),
+    ]
+    STATUS = [
+        ('pending', 'Pendiente'),
+        ('running', 'Generando'),
+        ('uploading', 'Subiendo'),
+        ('waiting_rate_limit', 'Esperando rate limit'),
+        ('done', 'Lista'),
+        ('failed', 'Fallida'),
+        ('skipped', 'Saltada'),
+    ]
+
+    run = models.ForeignKey(ContentGenerationRun, on_delete=models.CASCADE, related_name='steps')
+    step = models.CharField(max_length=30, choices=STEPS, db_index=True)
+    order = models.PositiveSmallIntegerField(default=0)
+    status = models.CharField(max_length=30, choices=STATUS, default='pending', db_index=True)
+    estimated_tokens = models.PositiveIntegerField(default=0)
+    actual_tokens = models.PositiveIntegerField(default=0)
+    requests_count = models.PositiveIntegerField(default=0)
+    rate_limit_headers = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=80, blank=True, db_index=True)
+    error_message = models.TextField(blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['run_id', 'order', 'id']
+        indexes = [
+            models.Index(fields=['run', 'step']),
+            models.Index(fields=['run', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=['run', 'step'], name='unique_generation_step_per_run'),
+        ]
+
+    def __str__(self):
+        return f"Run #{self.run_id} {self.step}: {self.status}"
+
+
+class CerebrasUsageLog(models.Model):
+    """Una fila por llamada real al endpoint de Cerebras."""
+    api_key = models.ForeignKey(
+        APIKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cerebras_usage_logs',
+    )
+    user = models.ForeignKey(
+        Agent,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cerebras_usage_logs',
+    )
+    listado = models.ForeignKey(
+        'Listado',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cerebras_usage_logs',
+    )
+    run = models.ForeignKey(
+        ContentGenerationRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cerebras_usage_logs',
+    )
+    step = models.ForeignKey(
+        ContentGenerationStep,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cerebras_usage_logs',
+    )
+    model = models.CharField(max_length=120, blank=True, db_index=True)
+    task = models.CharField(max_length=80, blank=True, db_index=True)
+    endpoint = models.CharField(max_length=255, default='chat/completions')
+    status_code = models.IntegerField(null=True, blank=True, db_index=True)
+    success = models.BooleanField(default=False, db_index=True)
+    estimated_tokens = models.PositiveIntegerField(default=0)
+    actual_tokens = models.PositiveIntegerField(default=0)
+    charged_tokens = models.PositiveIntegerField(default=0)
+    response_time_ms = models.PositiveIntegerField(default=0)
+    rate_limit_headers = models.JSONField(default=dict, blank=True)
+    retry_after_seconds = models.PositiveIntegerField(null=True, blank=True)
+    error_message = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    creado_en = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-creado_en', '-id']
+        indexes = [
+            models.Index(fields=['api_key', 'creado_en']),
+            models.Index(fields=['user', 'creado_en']),
+            models.Index(fields=['listado', 'creado_en']),
+            models.Index(fields=['run', 'creado_en']),
+            models.Index(fields=['task', 'success']),
+        ]
+
+    def __str__(self):
+        return f"Cerebras {self.task or self.model} {self.status_code}"
+
+
+class CloudinaryStorageLog(models.Model):
+    """Auditoria de cada intento de escritura/test contra el pool Cloudinary."""
+    STATUS = [
+        ('success', 'Exitosa'),
+        ('failed', 'Fallida'),
+        ('skipped', 'Saltada'),
+    ]
+    OPERATIONS = [
+        ('upload', 'Upload'),
+        ('health_usage', 'Health usage'),
+        ('health_probe', 'Health probe'),
+    ]
+
+    api_key = models.ForeignKey(
+        APIKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cloudinary_storage_logs',
+    )
+    user = models.ForeignKey(
+        Agent,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cloudinary_storage_logs',
+    )
+    listado = models.ForeignKey(
+        'Listado',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cloudinary_storage_logs',
+    )
+    cloud_name = models.CharField(max_length=120, blank=True)
+    asset_type = models.CharField(max_length=40, blank=True, db_index=True)
+    operation = models.CharField(max_length=30, choices=OPERATIONS, default='upload')
+    status = models.CharField(max_length=20, choices=STATUS, default='failed', db_index=True)
+    public_id = models.CharField(max_length=500, blank=True)
+    resource_type = models.CharField(max_length=30, blank=True)
+    bytes = models.BigIntegerField(default=0)
+    error_code = models.CharField(max_length=80, blank=True, db_index=True)
+    error_message = models.TextField(blank=True)
+    duration_ms = models.PositiveIntegerField(default=0)
+    is_probe = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True)
+    creado_en = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    def __str__(self):
+        return f"Cloudinary {self.operation} {self.status} {self.cloud_name or 'sin-cuenta'}"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['api_key', 'creado_en']),
+            models.Index(fields=['user', 'creado_en']),
+            models.Index(fields=['listado', 'creado_en']),
+            models.Index(fields=['asset_type', 'status']),
+            models.Index(fields=['operation', 'is_probe']),
         ]
 
 

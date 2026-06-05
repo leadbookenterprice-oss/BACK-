@@ -14,7 +14,7 @@ import cloudinary.uploader
 from .models import (
     Agent, Listado, Plan, APIKey, AdminAlert, Servicio, 
     UserAPIAssignment, UserAPIQuota, VideoMusic, VideoSFX, ConfiguracionSistema,
-    AccessCode
+    AccessCode, ContentGenerationRun, CerebrasUsageLog
 )
 from api.services.pool_service import SERVICE_DEFAULTS
 from admin_panel.auth import is_admin_request
@@ -64,9 +64,9 @@ def _service_defaults(nombre):
     return {
         'descripcion': descripcion,
         'activo': True,
-        'default_daily_limit': 1710 if nombre == 'cerebras' else (1500 if nombre in {'gemini', 'elevenlabs'} else (999999 if nombre == 'uploadpost' else 1500)),
+        'default_daily_limit': 1000000 if nombre == 'cerebras' else (1500 if nombre in {'gemini', 'elevenlabs'} else (999999 if nombre == 'uploadpost' else 1500)),
         'default_monthly_limit': 10 if nombre == 'uploadpost' else None,
-        'extra_increment': 10 if nombre == 'uploadpost' else 1500,
+        'extra_increment': 1000000 if nombre == 'cerebras' else (10 if nombre == 'uploadpost' else 1500),
     }
 
 
@@ -86,6 +86,17 @@ ELEVENLABS_MONTHLY_DEFAULT = 10000
 
 def _key_window_usage(key):
     service_name = _normalize_service_name(getattr(getattr(key, 'servicio', None), 'nombre', ''))
+    if service_name == 'cerebras':
+        limit = key.google_daily_limit or 1000000
+        if limit < 100000:
+            limit = 1000000
+        return {
+            'service': service_name,
+            'usage': int(key.slot_tokens_today or 0),
+            'limit': int(limit or 0),
+            'unit': 'tokens',
+            'window': 'day',
+        }
     if service_name == 'elevenlabs':
         limit = key.google_monthly_limit or ELEVENLABS_MONTHLY_DEFAULT
         usage = key.requests_this_month or 0
@@ -118,13 +129,13 @@ def _key_assignment_stats(key):
     assignments = UserAPIAssignment.objects.filter(apikey=key, activo=True).select_related('user')
     users = [a.user for a in assignments if a.user_id]
     service_name = _normalize_service_name(getattr(getattr(key, 'servicio', None), 'nombre', ''))
-    shared_capacity = 57 if service_name == 'cerebras' else 1
+    shared_capacity = 1
     assigned_count = len(users)
     return {
         'assigned_count': assigned_count,
         'shared_capacity': shared_capacity,
         'shared_available_slots': max(0, shared_capacity - assigned_count),
-        'sharing_mode': 'starter_shared_57' if service_name == 'cerebras' else 'exclusive',
+        'sharing_mode': 'backend_slot' if service_name == 'cerebras' else 'exclusive',
         'assigned_users': [
             {
                 'id': user.id,
@@ -466,7 +477,7 @@ def admin_apikeys_pool(request):
     from api.models import APIKey
     
     servicio_filter = request.query_params.get('servicio')
-    keys = APIKey.objects.all().select_related('servicio').order_by('servicio__nombre', '-creado_en')
+    keys = APIKey.objects.all().select_related('servicio', 'slot_locked_by', 'slot_locked_listado').order_by('servicio__nombre', '-creado_en')
     
     if servicio_filter:
         keys = keys.filter(servicio__nombre__icontains=servicio_filter)
@@ -482,6 +493,22 @@ def admin_apikeys_pool(request):
         assignment_stats = _key_assignment_stats(k)
         asig_primaria = UserAPIAssignment.objects.filter(apikey=k, activo=True, is_primary=True).select_related('user').first()
         asig_extras = UserAPIAssignment.objects.filter(apikey=k, activo=True, is_primary=False).count()
+        active_generation_run = None
+        recent_cerebras_log = None
+        if str(k.servicio.nombre or '').lower() == 'cerebras':
+            active_generation_run = (
+                ContentGenerationRun.objects
+                .filter(api_key=k, status__in=['pending', 'running', 'waiting_slot', 'waiting_rate_limit'])
+                .select_related('user', 'listado')
+                .order_by('-started_at')
+                .first()
+            )
+            recent_cerebras_log = (
+                CerebrasUsageLog.objects
+                .filter(api_key=k)
+                .order_by('-creado_en', '-id')
+                .first()
+            )
 
         data.append({
             'id': k.id,
@@ -507,9 +534,98 @@ def admin_apikeys_pool(request):
             'shared_available_slots': assignment_stats['shared_available_slots'],
             'sharing_mode': assignment_stats['sharing_mode'],
             'assigned_users': assignment_stats['assigned_users'],
+            'slot_locked_by_id': k.slot_locked_by_id,
+            'slot_locked_by_email': k.slot_locked_by.email if k.slot_locked_by_id and k.slot_locked_by else None,
+            'slot_locked_listado_id': k.slot_locked_listado_id,
+            'slot_locked_until': k.slot_locked_until,
+            'slot_tokens_today': k.slot_tokens_today or 0,
+            'slot_tokens_limit': (k.google_daily_limit if (k.google_daily_limit or 0) >= 100000 else 1000000),
+            'slot_last_error': k.slot_last_error or '',
+            'slot_last_rate_limit_headers': k.slot_last_rate_limit_headers or {},
+            'slot_last_rate_limit_at': k.slot_last_rate_limit_at,
+            'active_generation_run_id': active_generation_run.id if active_generation_run else None,
+            'active_generation_run_status': active_generation_run.status if active_generation_run else None,
+            'active_generation_run_step': active_generation_run.current_step if active_generation_run else None,
+            'active_generation_run_user_email': active_generation_run.user.email if active_generation_run and active_generation_run.user_id else None,
+            'active_generation_run_listado_id': active_generation_run.listado_id if active_generation_run else None,
+            'last_cerebras_log': {
+                'id': recent_cerebras_log.id,
+                'task': recent_cerebras_log.task,
+                'model': recent_cerebras_log.model,
+                'status_code': recent_cerebras_log.status_code,
+                'success': recent_cerebras_log.success,
+                'estimated_tokens': recent_cerebras_log.estimated_tokens,
+                'actual_tokens': recent_cerebras_log.actual_tokens,
+                'charged_tokens': recent_cerebras_log.charged_tokens,
+                'retry_after_seconds': recent_cerebras_log.retry_after_seconds,
+                'creado_en': recent_cerebras_log.creado_en,
+            } if recent_cerebras_log else None,
         })
     
     return Response({'keys': data})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_cerebras_usage_logs(request):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        limit = max(1, min(int(request.query_params.get('limit', 50)), 200))
+    except (TypeError, ValueError):
+        limit = 50
+
+    qs = (
+        CerebrasUsageLog.objects
+        .select_related('api_key', 'user', 'listado', 'run', 'step')
+        .order_by('-creado_en', '-id')
+    )
+    api_key_id = request.query_params.get('api_key_id') or request.query_params.get('key_id')
+    run_id = request.query_params.get('run_id')
+    listado_id = request.query_params.get('listado_id')
+    user_id = request.query_params.get('user_id')
+    success = request.query_params.get('success')
+
+    if api_key_id:
+        qs = qs.filter(api_key_id=api_key_id)
+    if run_id:
+        qs = qs.filter(run_id=run_id)
+    if listado_id:
+        qs = qs.filter(listado_id=listado_id)
+    if user_id:
+        qs = qs.filter(user_id=user_id)
+    if str(success).lower() in {'true', '1', 'false', '0'}:
+        qs = qs.filter(success=str(success).lower() in {'true', '1'})
+
+    logs = []
+    for item in qs[:limit]:
+        logs.append({
+            'id': item.id,
+            'api_key_id': item.api_key_id,
+            'api_key_label': item.api_key.label if item.api_key_id and item.api_key else None,
+            'user_id': item.user_id,
+            'user_email': item.user.email if item.user_id and item.user else None,
+            'listado_id': item.listado_id,
+            'run_id': item.run_id,
+            'run_status': item.run.status if item.run_id and item.run else None,
+            'step': item.step.step if item.step_id and item.step else None,
+            'model': item.model,
+            'task': item.task,
+            'status_code': item.status_code,
+            'success': item.success,
+            'estimated_tokens': item.estimated_tokens,
+            'actual_tokens': item.actual_tokens,
+            'charged_tokens': item.charged_tokens,
+            'response_time_ms': item.response_time_ms,
+            'rate_limit_headers': item.rate_limit_headers or {},
+            'retry_after_seconds': item.retry_after_seconds,
+            'error_message': item.error_message or '',
+            'creado_en': item.creado_en,
+        })
+
+    return Response({'logs': logs, 'count': len(logs)})
+
 
 @api_view(['POST'])
 def admin_apikeys_pool_crear(request):

@@ -9,6 +9,20 @@ import random
 import re
 import unicodedata
 from api.tracking import track_api_call
+from api.services.cerebras_slots import (
+    CerebrasSlotUnavailable,
+    estimate_cerebras_tokens,
+    mark_cerebras_slot_exhausted,
+    record_cerebras_slot_result,
+    reserve_cerebras_slot,
+    resolve_cerebras_max_completion_tokens,
+)
+from api.services.content_generation import (
+    extract_rate_limit_headers,
+    infer_step_from_task,
+    record_cerebras_usage,
+    retry_after_from_headers,
+)
 
 logger = logging.getLogger(__name__)
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
@@ -41,18 +55,14 @@ def _get_cerebras_key(agente=None):
     from api.models import APIKey
 
     if agente is not None:
-        try:
-            from api.pool_manager import get_next_available_api
-            assigned_key = get_next_available_api(agente, 'cerebras')
-            if assigned_key:
-                return assigned_key
-        except Exception:
-            logger.exception('No se pudo resolver key Cerebras asignada para user_id=%s', getattr(agente, 'id', None))
+        return None
 
-    pool_key = APIKey.objects.filter(servicio__nombre__iexact='cerebras', status__in=['available', 'assigned']).first()
-    if pool_key:
-        return pool_key.api_key
-    return _settings_or_env('CEREBRAS_API_KEY')
+    if _allow_global_api_fallback():
+        pool_key = APIKey.objects.filter(servicio__nombre__iexact='cerebras', status__in=['available', 'assigned']).first()
+        if pool_key:
+            return pool_key.api_key
+        return _settings_or_env('CEREBRAS_API_KEY')
+    return None
 
 
 def _mark_cerebras_exhausted(key_value):
@@ -67,6 +77,57 @@ def _mark_cerebras_exhausted(key_value):
         key_obj.save(update_fields=['status', 'requests_today', 'updated_at'])
     except Exception:
         pass
+
+
+def _record_cerebras_request_log(slot_id, user, *, success, status_code, elapsed_ms, tokens_used, error_message=''):
+    try:
+        from api.models import APIKey, APIRequestLog, Servicio
+
+        key_obj = APIKey.objects.filter(pk=slot_id, servicio__nombre__iexact='cerebras').select_related('servicio').first() if slot_id else None
+        servicio = key_obj.servicio if key_obj else Servicio.objects.filter(nombre__iexact='cerebras').first()
+        if not servicio or not key_obj or not getattr(user, 'is_authenticated', False):
+            return
+        APIRequestLog.objects.create(
+            api_key=key_obj,
+            user=user,
+            servicio=servicio,
+            endpoint='call_cerebras_api',
+            method='POST',
+            success=bool(success),
+            status_code=status_code,
+            response_time_ms=max(int(elapsed_ms or 0), 0),
+            tokens_used=max(int(tokens_used or 0), 0),
+            error_message=str(error_message or '')[:500],
+        )
+    except Exception:
+        pass
+
+
+def _record_cerebras_usage_log(slot_id, user, *, listado_id=None, run_id=None, step_name=None, model='', task='',
+                               success=False, status_code=None, elapsed_ms=0, estimated_tokens=0,
+                               actual_tokens=None, rate_limit_headers=None, retry_after_seconds=None,
+                               error_message='', metadata=None):
+    try:
+        record_cerebras_usage(
+            slot_id=slot_id,
+            user=user,
+            listado_id=listado_id,
+            run_id=run_id,
+            step_name=step_name,
+            model=model,
+            task=task,
+            status_code=status_code,
+            success=success,
+            estimated_tokens=estimated_tokens,
+            actual_tokens=actual_tokens,
+            response_time_ms=elapsed_ms,
+            rate_limit_headers=rate_limit_headers or {},
+            retry_after_seconds=retry_after_seconds,
+            error_message=error_message,
+            metadata=metadata or {},
+        )
+    except Exception:
+        logger.exception("[CEREBRAS] No se pudo registrar CerebrasUsageLog")
 
 
 def normalize_elevenlabs_voice_choice(voz='femenina'):
@@ -799,18 +860,55 @@ def call_groq_api(prompt: str, **kwargs) -> str:
     raise RuntimeError(f"Groq sin modelos disponibles: {last_err}")
 
 
-@track_api_call(service='cerebras')
 def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
-    """Llama a Cerebras usando su API compatible con OpenAI."""
-    key = _get_cerebras_key(agente=agente)
+    """Llama a Cerebras usando un slot backend temporal, no una key asignada al usuario."""
+    system_prompt = kwargs.get('system_prompt', '')
+    task = kwargs.get('task') or 'general'
+    listado_id = kwargs.get('listado_id') or kwargs.get('listadoId')
+    generation_run_id = kwargs.get('generation_run_id') or kwargs.get('generationRunId')
+    generation_step = (
+        kwargs.get('generation_step')
+        or kwargs.get('generationStep')
+        or infer_step_from_task(task)
+    )
+    max_completion_tokens = resolve_cerebras_max_completion_tokens(
+        task,
+        kwargs.get('max_completion_tokens'),
+    )
+    estimated_tokens = estimate_cerebras_tokens(
+        prompt,
+        system_prompt=system_prompt,
+        max_completion_tokens=max_completion_tokens,
+    )
+
+    slot = None
+    key = None
+    if agente is not None:
+        try:
+            slot = reserve_cerebras_slot(
+                agente,
+                listado_id=listado_id,
+                estimated_tokens=estimated_tokens,
+            )
+            key = slot.api_key
+        except CerebrasSlotUnavailable as exc:
+            raise APIKeyUnavailableError(
+                str(exc),
+                provider='cerebras',
+                scope=getattr(exc, 'scope', 'slot'),
+                quota_state=getattr(exc, 'quota_state', 'soft_rate_limited'),
+                retry_after_seconds=getattr(exc, 'retry_after_seconds', None),
+            )
+    else:
+        key = _get_cerebras_key(agente=None)
+
     if not key:
         raise APIKeyUnavailableError(
-            API_KEY_UNAVAILABLE_MESSAGE,
+            'No hay slot Cerebras disponible para esta generación.',
             provider='cerebras',
             scope='pool',
         )
 
-    system_prompt = kwargs.get('system_prompt', '')
     full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
     requested_model = kwargs.get('model') or CEREBRAS_MODELS_CASCADE[0]
     models_fallback = [requested_model] + [m for m in CEREBRAS_MODELS_CASCADE if m != requested_model]
@@ -823,7 +921,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
         'stream': False,
         'temperature': kwargs.get('temperature', 0.7),
         'top_p': kwargs.get('top_p', 1),
-        'max_completion_tokens': kwargs.get('max_completion_tokens', 8192),
+        'max_completion_tokens': max_completion_tokens,
     }
 
     if system_prompt:
@@ -833,22 +931,136 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
         ]
 
     last_err = None
+    last_status_code = None
     for model_id in models_fallback:
         payload = dict(payload_base)
         payload['model'] = model_id
+        attempt_started_at = time.time()
+        attempt_recorded = False
         try:
             response = requests.post(CEREBRAS_CHAT_COMPLETIONS_URL, json=payload, headers=headers, timeout=60)
+            last_status_code = response.status_code
+            elapsed_ms = int((time.time() - attempt_started_at) * 1000)
+            rate_limit_headers = extract_rate_limit_headers(response.headers)
             if response.status_code == 200:
                 data = response.json() if response.content else {}
                 content = ((data.get('choices') or [{}])[0].get('message') or {}).get('content')
+                usage = data.get('usage') or {}
+                actual_tokens = usage.get('total_tokens') or usage.get('total_tokens_used')
+                try:
+                    actual_tokens_value = int(actual_tokens) if actual_tokens is not None else None
+                except (TypeError, ValueError):
+                    actual_tokens_value = None
                 if content:
+                    if slot:
+                        record_cerebras_slot_result(
+                            slot.key_id,
+                            estimated_tokens=estimated_tokens,
+                            actual_tokens=actual_tokens_value,
+                            success=True,
+                        )
+                        _record_cerebras_request_log(
+                            slot.key_id,
+                            agente,
+                            success=True,
+                            status_code=response.status_code,
+                            elapsed_ms=elapsed_ms,
+                            tokens_used=max(actual_tokens_value or 0, estimated_tokens),
+                        )
+                    _record_cerebras_usage_log(
+                        slot.key_id if slot else None,
+                        agente,
+                        listado_id=listado_id,
+                        run_id=generation_run_id,
+                        step_name=generation_step,
+                        model=model_id,
+                        task=task,
+                        success=True,
+                        status_code=response.status_code,
+                        elapsed_ms=elapsed_ms,
+                        estimated_tokens=estimated_tokens,
+                        actual_tokens=actual_tokens_value,
+                        rate_limit_headers=rate_limit_headers,
+                        metadata={'max_completion_tokens': max_completion_tokens},
+                    )
+                    attempt_recorded = True
                     return content
+
                 last_err = RuntimeError('Cerebras devolvio una respuesta vacia')
+                if slot:
+                    record_cerebras_slot_result(
+                        slot.key_id,
+                        estimated_tokens=estimated_tokens,
+                        success=False,
+                        error_message=last_err,
+                    )
+                    _record_cerebras_request_log(
+                        slot.key_id,
+                        agente,
+                        success=False,
+                        status_code=response.status_code,
+                        elapsed_ms=elapsed_ms,
+                        tokens_used=0,
+                        error_message=last_err,
+                    )
+                _record_cerebras_usage_log(
+                    slot.key_id if slot else None,
+                    agente,
+                    listado_id=listado_id,
+                    run_id=generation_run_id,
+                    step_name=generation_step,
+                    model=model_id,
+                    task=task,
+                    success=False,
+                    status_code=response.status_code,
+                    elapsed_ms=elapsed_ms,
+                    estimated_tokens=estimated_tokens,
+                    actual_tokens=actual_tokens_value,
+                    rate_limit_headers=rate_limit_headers,
+                    error_message=last_err,
+                    metadata={'max_completion_tokens': max_completion_tokens, 'empty_response': True},
+                )
+                attempt_recorded = True
                 continue
 
             response_text = str(getattr(response, 'text', '') or '')
             normalized = response_text.lower()
             if response.status_code in (401, 403):
+                if slot:
+                    record_cerebras_slot_result(
+                        slot.key_id,
+                        estimated_tokens=estimated_tokens,
+                        success=False,
+                        error_message=response_text or 'Cerebras auth failed',
+                    )
+                    _record_cerebras_request_log(
+                        slot.key_id,
+                        agente,
+                        success=False,
+                        status_code=response.status_code,
+                        elapsed_ms=elapsed_ms,
+                        tokens_used=0,
+                        error_message=response_text or 'Cerebras auth failed',
+                    )
+                _record_cerebras_usage_log(
+                    slot.key_id if slot else None,
+                    agente,
+                    listado_id=listado_id,
+                    run_id=generation_run_id,
+                    step_name=generation_step,
+                    model=model_id,
+                    task=task,
+                    success=False,
+                    status_code=response.status_code,
+                    elapsed_ms=elapsed_ms,
+                    estimated_tokens=estimated_tokens,
+                    rate_limit_headers=rate_limit_headers,
+                    error_message=response_text or 'Cerebras auth failed',
+                    metadata={'max_completion_tokens': max_completion_tokens},
+                )
+                attempt_recorded = True
+                if slot:
+                    mark_cerebras_slot_exhausted(slot.key_id, response_text or 'Cerebras auth failed')
                 raise APIKeyUnavailableError(
                     API_KEY_UNAVAILABLE_MESSAGE,
                     provider='cerebras',
@@ -856,9 +1068,47 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                 )
 
             if response.status_code == 429:
+                retry_after_seconds = retry_after_from_headers(rate_limit_headers, 600)
+                if slot:
+                    record_cerebras_slot_result(
+                        slot.key_id,
+                        estimated_tokens=estimated_tokens,
+                        success=False,
+                        error_message=response_text or 'Cerebras rate limited',
+                    )
+                    _record_cerebras_request_log(
+                        slot.key_id,
+                        agente,
+                        success=False,
+                        status_code=response.status_code,
+                        elapsed_ms=elapsed_ms,
+                        tokens_used=0,
+                        error_message=response_text or 'Cerebras rate limited',
+                    )
+                _record_cerebras_usage_log(
+                    slot.key_id if slot else None,
+                    agente,
+                    listado_id=listado_id,
+                    run_id=generation_run_id,
+                    step_name=generation_step,
+                    model=model_id,
+                    task=task,
+                    success=False,
+                    status_code=response.status_code,
+                    elapsed_ms=elapsed_ms,
+                    estimated_tokens=estimated_tokens,
+                    rate_limit_headers=rate_limit_headers,
+                    retry_after_seconds=retry_after_seconds,
+                    error_message=response_text or 'Cerebras rate limited',
+                    metadata={'max_completion_tokens': max_completion_tokens},
+                )
+                attempt_recorded = True
                 hard_terms = ('quota', 'credits', 'insufficient', 'exceeded', 'monthly', 'payment', 'balance', 'limit')
                 if any(term in normalized for term in hard_terms):
-                    _mark_cerebras_exhausted(key)
+                    if slot:
+                        mark_cerebras_slot_exhausted(slot.key_id, response_text or 'Cerebras quota exhausted')
+                    else:
+                        _mark_cerebras_exhausted(key)
                     raise GeminiQuotaExhaustedError(
                         LIMIT_REACHED_MESSAGE,
                         provider='cerebras',
@@ -870,19 +1120,115 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                     provider='cerebras',
                     scope='provider',
                     quota_state='soft_rate_limited',
-                    retry_after_seconds=600,
+                    retry_after_seconds=retry_after_seconds,
                 )
 
             model_terms = ('model', 'not found', 'invalid model', 'unsupported model', 'deprecated')
+            error_obj = RuntimeError(response_text or f'Error Cerebras ({response.status_code})')
+            if slot:
+                record_cerebras_slot_result(
+                    slot.key_id,
+                    estimated_tokens=estimated_tokens,
+                    success=False,
+                    error_message=error_obj,
+                )
+                _record_cerebras_request_log(
+                    slot.key_id,
+                    agente,
+                    success=False,
+                    status_code=response.status_code,
+                    elapsed_ms=elapsed_ms,
+                    tokens_used=0,
+                    error_message=error_obj,
+                )
+            _record_cerebras_usage_log(
+                slot.key_id if slot else None,
+                agente,
+                listado_id=listado_id,
+                run_id=generation_run_id,
+                step_name=generation_step,
+                model=model_id,
+                task=task,
+                success=False,
+                status_code=response.status_code,
+                elapsed_ms=elapsed_ms,
+                estimated_tokens=estimated_tokens,
+                rate_limit_headers=rate_limit_headers,
+                error_message=error_obj,
+                metadata={'max_completion_tokens': max_completion_tokens},
+            )
+            attempt_recorded = True
             if any(term in normalized for term in model_terms):
                 last_err = RuntimeError(response_text or f'Modelo Cerebras no soportado: {model_id}')
                 continue
 
-            last_err = RuntimeError(response_text or f'Error Cerebras ({response.status_code})')
-        except APIKeyUnavailableError:
+            last_err = error_obj
+        except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as exc:
+            if slot and not attempt_recorded:
+                record_cerebras_slot_result(
+                    slot.key_id,
+                    estimated_tokens=estimated_tokens,
+                    success=False,
+                    error_message=exc,
+                )
+                _record_cerebras_request_log(
+                    slot.key_id,
+                    agente,
+                    success=False,
+                    status_code=last_status_code or 500,
+                    elapsed_ms=int((time.time() - attempt_started_at) * 1000),
+                    tokens_used=0,
+                    error_message=exc,
+                )
+                _record_cerebras_usage_log(
+                    slot.key_id,
+                    agente,
+                    listado_id=listado_id,
+                    run_id=generation_run_id,
+                    step_name=generation_step,
+                    model=model_id,
+                    task=task,
+                    success=False,
+                    status_code=last_status_code or 500,
+                    elapsed_ms=int((time.time() - attempt_started_at) * 1000),
+                    estimated_tokens=estimated_tokens,
+                    error_message=exc,
+                    metadata={'max_completion_tokens': max_completion_tokens},
+                )
             raise
         except Exception as exc:
             last_err = exc
+            if slot and not attempt_recorded:
+                record_cerebras_slot_result(
+                    slot.key_id,
+                    estimated_tokens=estimated_tokens,
+                    success=False,
+                    error_message=last_err,
+                )
+                _record_cerebras_request_log(
+                    slot.key_id,
+                    agente,
+                    success=False,
+                    status_code=last_status_code or 500,
+                    elapsed_ms=int((time.time() - attempt_started_at) * 1000),
+                    tokens_used=0,
+                    error_message=last_err,
+                )
+                _record_cerebras_usage_log(
+                    slot.key_id,
+                    agente,
+                    listado_id=listado_id,
+                    run_id=generation_run_id,
+                    step_name=generation_step,
+                    model=model_id,
+                    task=task,
+                    success=False,
+                    status_code=last_status_code or 500,
+                    elapsed_ms=int((time.time() - attempt_started_at) * 1000),
+                    estimated_tokens=estimated_tokens,
+                    error_message=last_err,
+                    metadata={'max_completion_tokens': max_completion_tokens},
+                )
 
     if last_err:
         raise last_err
@@ -906,6 +1252,8 @@ def call_groq_html(prompt: str, system_prompt: str = "") -> str:
             ],
         )
         return completion.choices[0].message.content
+    except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError):
+        raise
     except Exception as e:
         logger.error(f"Error en call_groq_html: {e}")
         return None
@@ -967,7 +1315,7 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
             result = call_cerebras_api(prompt, agente=agente, **kwargs)
             if result:
                 return result
-        except APIKeyUnavailableError:
+        except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError):
             raise
         except Exception as e:
             print(f"Cerebras attempt {attempt+1}/{retries} failed: {str(e)}")
@@ -1307,11 +1655,21 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
             try:
                 print(f"[HTML] ▶ Paso 1 - Intentando con {provider} ({model_id})...")
                 if provider == 'cerebras':
-                    design_prompt = call_cerebras_api(prompt_step1, agente=agente, model=model_id)
+                    design_prompt = call_cerebras_api(
+                        prompt_step1,
+                        agente=agente,
+                        model=model_id,
+                        task='html_design',
+                        listado_id=context.get('listado_id'),
+                        generation_run_id=context.get('generation_run_id'),
+                        generation_step=context.get('generation_step') or 'pdf',
+                    )
                 
                 if design_prompt:
                     print(f"[HTML] ✅ Paso 1 exitoso con {provider} ({model_id})")
                     break
+            except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError):
+                raise
             except Exception as e:
                 error_msg = str(e).lower()
                 logger.warning(f"[HTML] ⚠️ Paso 1 - {provider} ({model_id}) falló: {e}")
@@ -1458,10 +1816,20 @@ REGLAS DE DISEÑO PREMIUM:
             print(f"[HTML] ▶ Paso 2 - Intentando con {provider} ({model_id})...")
             try:
                 if provider == 'cerebras':
-                    html_output = call_cerebras_api(prompt_step2_nim, agente=agente, model=model_id)
+                    html_output = call_cerebras_api(
+                        prompt_step2_nim,
+                        agente=agente,
+                        model=model_id,
+                        task='html_full',
+                        listado_id=context.get('listado_id'),
+                        generation_run_id=context.get('generation_run_id'),
+                        generation_step=context.get('generation_step') or 'pdf',
+                    )
                 if html_output:
                     print(f"[HTML] ✅ Paso 2 exitoso con {provider} ({model_id})")
                     break
+            except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError):
+                raise
             except Exception as e:
                 error_msg = str(e).lower()
                 last_error = e
@@ -1491,6 +1859,8 @@ REGLAS DE DISEÑO PREMIUM:
         logger.info(f"[HTML Gen] Paso 2 completado. HTML generado ({len(html_output)} chars).")
         return html_output.strip()
 
+    except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError):
+        raise
     except Exception as e:
         print(f"[HTML] ❌ Error en generar_html_gemini: {type(e).__name__}: {str(e)}")
         import traceback

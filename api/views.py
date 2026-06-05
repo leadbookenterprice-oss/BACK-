@@ -71,6 +71,16 @@ from .services.ads_studio import (
     parse_meta_ads_response,
 )
 from .services.listing_extractor import ExtractorError, extract_listing_from_url
+from .services.content_generation import (
+    CONTENT_PACK_STEPS,
+    extract_generation_run_id,
+    extract_generation_step,
+    mark_generation_step,
+    mark_generation_step_from_exception,
+    serialize_generation_run,
+    start_or_resume_generation_run,
+    get_generation_run_for_user,
+)
 
 
 def require_active_plan(view_func):
@@ -165,6 +175,107 @@ def _quota_error_response(exc, fallback_status=status.HTTP_429_TOO_MANY_REQUESTS
     elif fallback_status:
         status_code = fallback_status
     return Response(payload, status=status_code)
+
+
+def _generation_payload_context(data, fallback_step):
+    run_id = extract_generation_run_id(data)
+    step_name = extract_generation_step(data, fallback_step) or fallback_step
+    return run_id, step_name
+
+
+def _mark_generation_running(data, fallback_step):
+    run_id, step_name = _generation_payload_context(data, fallback_step)
+    mark_generation_step(run_id, step_name, 'running')
+    return run_id, step_name
+
+
+def _mark_generation_done(run_id, step_name, result=None):
+    mark_generation_step(run_id, step_name, 'done', result=result or {})
+
+
+def _mark_generation_failed(run_id, step_name, exc_or_message, *, error_code='step_failed'):
+    if not run_id or step_name not in CONTENT_PACK_STEPS:
+        return
+    if isinstance(exc_or_message, (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError)):
+        mark_generation_step_from_exception(run_id, step_name, exc_or_message)
+        return
+    mark_generation_step(
+        run_id,
+        step_name,
+        'failed',
+        error_code=error_code,
+        error_message=str(exc_or_message or ''),
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_active_plan
+def start_content_generation_pack(request, pk):
+    listado = get_object_or_404(Listado, pk=pk, agente=request.user)
+    selected_template = (
+        request.data.get('template_id')
+        or request.data.get('brand_template_id')
+        or request.data.get('selectedTemplateId')
+        if isinstance(request.data, dict)
+        else None
+    )
+    metadata = {
+        'source': 'frontend-new',
+        'selected_template': str(selected_template or ''),
+        'video_included': False,
+    }
+    run, reservation = start_or_resume_generation_run(request.user, listado, metadata=metadata)
+    payload = {
+        'success': run.status not in {'waiting_slot', 'failed'},
+        'run': serialize_generation_run(run),
+        'retry_after_seconds': reservation.get('retry_after_seconds'),
+        'quota_state': getattr(reservation.get('error'), 'quota_state', None),
+        'scope': getattr(reservation.get('error'), 'scope', None),
+        'provider': 'cerebras',
+    }
+    if reservation.get('error'):
+        http_status = (
+            status.HTTP_429_TOO_MANY_REQUESTS
+            if getattr(reservation['error'], 'quota_state', '') == 'soft_rate_limited'
+            else status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+        payload['mensaje'] = str(reservation['error'])
+        payload['error'] = 'ia_rate_limited' if http_status == status.HTTP_429_TOO_MANY_REQUESTS else 'api_key_unavailable'
+        return Response(payload, status=http_status)
+    return Response(payload, status=status.HTTP_201_CREATED if reservation.get('created') else status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def content_generation_run_detail(request, run_id):
+    run = get_generation_run_for_user(request.user, run_id)
+    if not run:
+        return Response({'error': 'generation_run_not_found'}, status=status.HTTP_404_NOT_FOUND)
+    return Response({'success': True, 'run': serialize_generation_run(run)}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_active_plan
+def retry_content_generation_run(request, run_id):
+    run = get_generation_run_for_user(request.user, run_id)
+    if not run:
+        return Response({'error': 'generation_run_not_found'}, status=status.HTTP_404_NOT_FOUND)
+    listado = run.listado
+    run, reservation = start_or_resume_generation_run(request.user, listado, metadata={'retry_run_id': run_id})
+    if reservation.get('error'):
+        return Response({
+            'success': False,
+            'run': serialize_generation_run(run),
+            'error': 'ia_rate_limited',
+            'mensaje': str(reservation['error']),
+            'provider': 'cerebras',
+            'scope': getattr(reservation['error'], 'scope', None),
+            'quota_state': getattr(reservation['error'], 'quota_state', None),
+            'retry_after_seconds': reservation.get('retry_after_seconds'),
+        }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+    return Response({'success': True, 'run': serialize_generation_run(run)}, status=status.HTTP_200_OK)
 
 
 def _safe_persisted_media_url(value):
@@ -2279,7 +2390,7 @@ def _sanitize_caption_text(raw_text, max_chars=2200):
     if not raw_text:
         return ''
 
-    text = str(raw_text).strip()
+    text = _repair_mojibake_text(raw_text).strip()
     text = re.sub(r"```(?:json|markdown|text)?", "", text, flags=re.IGNORECASE)
     text = text.replace("```", "")
     text = text.replace("**", "")
@@ -2377,13 +2488,14 @@ def _caption_needs_fallback(text):
 
 
 def _finalize_caption_text(raw_text, data, formato='post', prefs=None, max_chars=2200):
-    caption = _sanitize_caption_text(raw_text, max_chars=max_chars)
+    caption = _sanitize_caption_text(_repair_mojibake_text(raw_text), max_chars=max_chars)
     if _caption_needs_fallback(caption):
         caption = ''
     caption = _ensure_caption_length(caption, data, formato=formato)
     if prefs:
         caption = _apply_caption_preferences(caption, prefs, max_chars=max_chars, data=data, formato=formato)
-    return caption
+    caption = _repair_mojibake_text(caption)
+    return caption[:max_chars].rstrip()
 
 
 def _fallback_caption_text(data, formato='post'):
@@ -2519,6 +2631,7 @@ def _ensure_caption_length(text, data, formato='post'):
                 "#RealEstate #Propiedades #Inmobiliaria #Inversion #BienesRaices #PropiedadPremium #OportunidadInmobiliaria #AgendaTuVisita #LuxuryRealEstate #BrokerInmobiliario",
             ]
 
+        extension_blocks = [_repair_mojibake_text(block) for block in extension_blocks]
         for block in extension_blocks:
             if len(caption) >= min_chars:
                 break
@@ -2528,7 +2641,7 @@ def _ensure_caption_length(text, data, formato='post'):
     if len(caption) > max_chars:
         caption = caption[:max_chars].rstrip()
 
-    return caption
+    return _repair_mojibake_text(caption)
 
 LIMITES_PLAN = {
     'free':     {'listados_mes': 10},
@@ -3409,12 +3522,26 @@ Contenido original:
 {str(raw_text)[:7000]}
 """
         with concurrent.futures.ThreadPoolExecutor() as ex:
-            future = ex.submit(smart_call, repair_prompt, retries=1, agente=request.user)
+            future = ex.submit(
+                smart_call,
+                repair_prompt,
+                retries=1,
+                agente=request.user,
+                task='video_script',
+                listado_id=data.get('listado_id') or data.get('listadoId'),
+            )
             return future.result(timeout=25)
 
     try:
         with concurrent.futures.ThreadPoolExecutor() as ex:
-            future = ex.submit(smart_call, prompt, retries=1, agente=request.user)
+            future = ex.submit(
+                smart_call,
+                prompt,
+                retries=1,
+                agente=request.user,
+                task='video_script',
+                listado_id=data.get('listado_id') or data.get('listadoId'),
+            )
             raw_response = future.result(timeout=25)
     except APIKeyUnavailableError as e:
         return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_guion')
@@ -3511,7 +3638,7 @@ def generar_listado(request):
         
     system_prompt = "Sos un as copywriter de real estate. EscribÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ descripciones profesionales, persuasivas y completas (listados) para propiedades en venta o alquiler en espaÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â±ol."
 
-    result = smart_call(prompt_text, retries=1, agente=request.user, system_prompt=system_prompt)
+    result = smart_call(prompt_text, retries=1, agente=request.user, system_prompt=system_prompt, task='listing_description')
     if not result:
         return Response({
             "error": "IA no disponible",
@@ -4293,7 +4420,7 @@ Fuentes permitidas: {', '.join(SYSTEM_FONT_IMPORT_MAP.keys())}.
 Colores solo HEX. No uses HTML ni CSS libre.
 """
     try:
-        raw = smart_call(prompt, retries=1, agente=user)
+        raw = smart_call(prompt, retries=1, agente=user, task='ads_json')
         parsed = _parse_json_object(raw)
         if not isinstance(parsed, dict):
             return None
@@ -4890,6 +5017,8 @@ def publicar_redes_logs(request):
 @require_active_plan
 def generar_carrusel(request):
     """Genera carrusel narrativo con secciones editadas y galeria limpia."""
+    generation_run_id = None
+    generation_step_name = 'carrusel'
     try:
         user = request.user
         # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
@@ -4901,6 +5030,7 @@ def generar_carrusel(request):
         #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
+        generation_run_id, generation_step_name = _mark_generation_running(data, 'carrusel')
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -5135,6 +5265,7 @@ def generar_carrusel(request):
                 slides_urls.append(url)
             except Exception as cloud_err:
                 print(f"[DEBUG] ERROR Almacenamiento Slide {i+1}: {str(cloud_err)}")
+                _mark_generation_failed(generation_run_id, generation_step_name, cloud_err, error_code='carrusel_upload_failed')
                 return Response({"error": f"Error subiendo slide {i+1}"}, status=500)
 
         caption_style = _get_random_caption_style_instructions(listado_obj, formato='carrusel')
@@ -5159,7 +5290,16 @@ Requisitos obligatorios:
 - Cerrar con 25 a 30 hashtags variados y especificos, no genericos repetidos.
 - No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
-        caption = smart_call(prompt_text, system_prompt="Sos un director de marketing inmobiliario digital. Devolves solo copy final listo para publicar.", agente=user)
+        prompt_text = _repair_mojibake_text(prompt_text)
+        caption = smart_call(
+            prompt_text,
+            system_prompt="Sos un director de marketing inmobiliario digital. Devolves solo copy final listo para publicar.",
+            agente=user,
+            task='carousel_caption',
+            listado_id=listado_id_val,
+            generation_run_id=generation_run_id,
+            generation_step=generation_step_name,
+        )
         caption = _finalize_caption_text(caption, data, formato='carrusel', prefs=content_prefs, max_chars=2200)
 
         if listado_obj:
@@ -5191,7 +5331,7 @@ Requisitos obligatorios:
                 'El carrusel fue generado correctamente y ya lo tenés disponible para publicar.',
             )
 
-        return Response({
+        response_payload = {
             "slides": slides_urls,
             "caption": caption,
             "caption_style_id": style_id,
@@ -5202,13 +5342,22 @@ Requisitos obligatorios:
             "total_slides": len(slides_urls),
             "gallery_used": len(gallery_images),
             "gallery_omitted": gallery_omitted,
-        }, status=status.HTTP_200_OK)
+        }
+        _mark_generation_done(generation_run_id, generation_step_name, {
+            "slides": slides_urls,
+            "template_id": template_id,
+            "total_slides": len(slides_urls),
+        })
+        return Response(response_payload, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_carrusel')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, user=request.user, source='generar_carrusel')
-    except Exception:
+    except Exception as exc:
         logger.exception("Error generando carrusel")
+        _mark_generation_failed(generation_run_id, generation_step_name, exc, error_code='carrusel_failed')
         return Response({"error": "Error al generar carrusel"}, status=500)
 
 @api_view(['POST'])
@@ -5535,6 +5684,8 @@ def generate_meta_variants(request):
                 retries=1,
                 agente=request.user,
                 system_prompt='Sos un performance marketer inmobiliario. Respondes solo JSON valido.',
+                task='ads_json',
+                listado_id=listado_id,
             )
             variants = parse_meta_ads_response(raw, params['cantidad_variantes'])
             result = build_ads_result(variants, params, listado_id=listado_obj.id if listado_obj else None)
@@ -5896,17 +6047,31 @@ Parrafo 1: Descripcion general de la propiedad y ubicacion (3-4 oraciones).
 Parrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
 Tono elegante y persuasivo. Solo los 2 parrafos, sin titulos ni bullets."""
         try:
-            descripcion_ia = smart_call(prompt_desc, system_prompt="Sos un copywriter inmobiliario de lujo. Escribis en espanol, con tono sofisticado y persuasivo.", agente=user)
+            descripcion_ia = smart_call(
+                prompt_desc,
+                system_prompt="Sos un copywriter inmobiliario de lujo. Escribis en espanol, con tono sofisticado y persuasivo.",
+                agente=user,
+                task='pdf_description',
+                listado_id=data.get('listado_id') or data.get('listadoId'),
+                generation_run_id=data.get('generation_run_id') or data.get('generationRunId'),
+                generation_step=data.get('generation_step') or data.get('generationStep') or 'pdf',
+            )
         except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as exc:
-            logger.warning("[PDF] Gemini no disponible para descripcion (%s). Usando fallback estatico.", exc)
-            descripcion_ia = None
+            logger.warning("[PDF] Cerebras no disponible para descripcion (%s).", exc)
+            raise
         if descripcion_ia:
             descripcion = descripcion_ia
             from .plan_utils import registrar_uso
             registrar_uso(user, 'ai')
         else:
-            logger.warning("[PDF] Gemini sin key/respuesta para descripcion. Usando fallback estatico.")
-            descripcion = _fallback_descripcion_pdf(data)
+            logger.warning("[PDF] Cerebras no devolvio descripcion.")
+            raise APIKeyUnavailableError(
+                'Cerebras no devolvio descripcion para el PDF.',
+                provider='cerebras',
+                scope='provider',
+                quota_state='soft_rate_limited',
+                retry_after_seconds=60,
+            )
 
 
     # QR Code del agente
@@ -5973,8 +6138,11 @@ def generar_pdf(request):
     #         "upgrade_url": "/precios"
     #     }, status=status.HTTP_403_FORBIDDEN)
 
+    generation_run_id = None
+    generation_step_name = 'pdf'
     try:
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        generation_run_id, generation_step_name = _mark_generation_running(data, 'pdf')
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -6001,7 +6169,7 @@ def generar_pdf(request):
         from django.http import HttpResponse
         from api.services.render_engine import render_html_to_pdf
         from api.services.almacenamiento import AlmacenamientoCloudinary
-        from api.ai_services import generar_html_gemini, generar_html_desde_template
+        from api.ai_services import generar_html_gemini
 
         listado_obj = None
         if listado_id_hint:
@@ -6014,6 +6182,8 @@ def generar_pdf(request):
         context['template_id'] = template_id
         context['template_tokens'] = selection.get('template_tokens')
         context['template_instructions'] = selection.get('template_instructions')
+        context['generation_run_id'] = generation_run_id
+        context['generation_step'] = generation_step_name
 
         logger.info(
             "[PDF] generar_pdf listado_id=%s template_id=%s user_id=%s",
@@ -6026,21 +6196,30 @@ def generar_pdf(request):
             _persist_template_selection(listado_obj, selection, source='pdf')
 
         try:
-            html_string = generar_html_desde_template(context, request.user)
+            html_string = generar_html_gemini(context, request.user)
         except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as e:
-            logger.warning("[PDF] IA no disponible en template (%s). Usando render estatico.", e)
-            html_string = render_to_string('pdf/property_brochure_html.html', context)
+            logger.warning("[PDF] IA no disponible en template (%s).", e)
+            raise
         except Exception as e:
-            print(f"[PDF] Error en sistema de templates: {e}. Usando fallback IA Cerebras.")
-            try:
-                html_string = generar_html_gemini(context, request.user)
-            except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as cerebras_exc:
-                logger.warning("[PDF] Fallback IA Cerebras no disponible (%s). Usando render estatico.", cerebras_exc)
-                html_string = render_to_string('pdf/property_brochure_html.html', context)
+            logger.exception("[PDF] Error en sistema de templates IA")
+            _mark_generation_failed(generation_run_id, generation_step_name, e, error_code='pdf_ia_failed')
+            return Response(
+                {
+                    "error": "pdf_ia_failed",
+                    "detalle": str(e)[:300],
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
             
         if not html_string:
-            print("[PDF] Fallback IA fallido, usando render_to_string estatico")
-            html_string = render_to_string('pdf/property_brochure_html.html', context)
+            _mark_generation_failed(generation_run_id, generation_step_name, "Cerebras no devolvio HTML para el PDF.", error_code='pdf_ia_empty')
+            return Response(
+                {
+                    "error": "pdf_ia_empty",
+                    "detalle": "Cerebras no devolvio HTML para el PDF.",
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
         html_string = _repair_mojibake_text(html_string)
@@ -6100,6 +6279,7 @@ def generar_pdf(request):
         if not pdf_url:
             detalle = pdf_error_detail or "No se pudo generar un PDF valido para guardar."
             logger.error("[PDF] Fallo sin URL persistida listado_id=%s detalle=%s", listado_id_hint, detalle)
+            _mark_generation_failed(generation_run_id, generation_step_name, detalle, error_code='pdf_render_failed')
             return Response(
                 {
                     "error": "No se pudo generar un PDF valido",
@@ -6117,7 +6297,7 @@ def generar_pdf(request):
                 'La ficha PDF fue generada correctamente y ya la tenés disponible para descargar.',
             )
 
-        return Response({
+        response_payload = {
             "html": html_string,
             "url": pdf_url,
             "cover_frame_url": pdf_cover_url,
@@ -6126,15 +6306,24 @@ def generar_pdf(request):
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
-        }, status=status.HTTP_200_OK)
+        }
+        _mark_generation_done(generation_run_id, generation_step_name, {
+            "url": pdf_url,
+            "cover_url": pdf_cover_url,
+            "template_id": template_id,
+        })
+        return Response(response_payload, status=status.HTTP_200_OK)
 
     except APIKeyUnavailableError as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_pdf')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, user=request.user, source='generar_pdf')
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Error generando PDF")
+        _mark_generation_failed(generation_run_id, generation_step_name, exc, error_code='pdf_failed')
         return Response({"error": "Error al generar PDF"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -6143,6 +6332,8 @@ def generar_pdf(request):
 @require_active_plan
 def generar_imagen_post(request):
     """Genera imagen POST y la sube a Cloudinary"""
+    generation_run_id = None
+    generation_step_name = 'post'
     try:
         # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # if not puede_generar(request.user, 'image'):
@@ -6153,6 +6344,7 @@ def generar_imagen_post(request):
         #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
+        generation_run_id, generation_step_name = _mark_generation_running(data, 'post')
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -6254,7 +6446,16 @@ Requisitos obligatorios:
 - Cerrar con 25 a 30 hashtags variados, mezclando ciudad, pais, tipo de propiedad, operacion, inversion, lujo y real estate.
 - No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
 Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
-        caption = smart_call(prompt_text, system_prompt="Sos un experto en marketing inmobiliario para redes sociales. Devolves solo copy final listo para publicar.", agente=request.user)
+        prompt_text = _repair_mojibake_text(prompt_text)
+        caption = smart_call(
+            prompt_text,
+            system_prompt="Sos un experto en marketing inmobiliario para redes sociales. Devolves solo copy final listo para publicar.",
+            agente=request.user,
+            task='post_caption',
+            listado_id=listado_id_val,
+            generation_run_id=generation_run_id,
+            generation_step=generation_step_name,
+        )
         caption = _finalize_caption_text(caption, data, formato='post', prefs=content_prefs, max_chars=2200)
 
         # Intentar subir a Cloudinary via Almacenamiento
@@ -6267,6 +6468,7 @@ Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
                 raise Exception("Cloudinary no devolviÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ una URL vÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lida")
             public_id = img_url
         except Exception as cloud_err:
+            _mark_generation_failed(generation_run_id, generation_step_name, cloud_err, error_code='post_upload_failed')
             print(f"[Cloudinary] Error crÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tico subiendo imagen: {cloud_err}")
             return Response({
                 "error": "error_subida",
@@ -6301,7 +6503,7 @@ Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
                 'La pieza para feed fue generada correctamente y ya la tenés disponible en tu historial.',
             )
 
-        return Response({
+        response_payload = {
             "url": img_url,
             "public_id": public_id,
             "caption": caption,
@@ -6311,13 +6513,21 @@ Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
-        }, status=status.HTTP_200_OK)
+        }
+        _mark_generation_done(generation_run_id, generation_step_name, {
+            "url": img_url,
+            "template_id": template_id,
+        })
+        return Response(response_payload, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_imagen_post')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, user=request.user, source='generar_imagen_post')
-    except Exception:
+    except Exception as exc:
         logger.exception("Error generando imagen post")
+        _mark_generation_failed(generation_run_id, generation_step_name, exc, error_code='post_failed')
         return Response({"error": "Error al generar imagen"}, status=500)
 
 @api_view(['POST'])
@@ -6325,6 +6535,8 @@ Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
 @require_active_plan
 def generar_imagen_story(request):
     """Genera imagen Story y la sube a Cloudinary."""
+    generation_run_id = None
+    generation_step_name = 'story'
     try:
         # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # if not puede_generar(request.user, 'image'):
@@ -6335,6 +6547,7 @@ def generar_imagen_story(request):
         #     }, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data
+        generation_run_id, generation_step_name = _mark_generation_running(data, 'story')
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -6419,6 +6632,7 @@ def generar_imagen_story(request):
             public_id = img_url
         except Exception as cloud_err:
             print(f"[Cloudinary] Error crÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­tico subiendo story: {cloud_err}")
+            _mark_generation_failed(generation_run_id, generation_step_name, cloud_err, error_code='story_upload_failed')
             return Response({
                 "error": "error_subida",
                 "mensaje": "No se pudo subir la historia a la nube."
@@ -6448,7 +6662,7 @@ def generar_imagen_story(request):
                 'La story fue generada correctamente y ya la tenés disponible para publicar.',
             )
 
-        return Response({
+        response_payload = {
             "url": img_url,
             "public_id": public_id,
             "caption": caption,
@@ -6456,13 +6670,21 @@ def generar_imagen_story(request):
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
-        }, status=status.HTTP_200_OK)
+        }
+        _mark_generation_done(generation_run_id, generation_step_name, {
+            "url": img_url,
+            "template_id": template_id,
+        })
+        return Response(response_payload, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_imagen_story')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, user=request.user, source='generar_imagen_story')
-    except Exception:
+    except Exception as exc:
         logger.exception("Error generando story")
+        _mark_generation_failed(generation_run_id, generation_step_name, exc, error_code='story_failed')
         return Response({"error": "Error al generar story"}, status=500)
 
 
@@ -6507,10 +6729,13 @@ Requisitos obligatorios:
 - Debe tener: gancho breve, sensacion premium, razon concreta para consultar, CTA a responder la story o escribir por WhatsApp y 8 a 12 hashtags.
 - No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
+        prompt_text = _repair_mojibake_text(prompt_text)
         raw_caption = smart_call(
             prompt_text,
             system_prompt="Sos un experto en marketing inmobiliario para stories. Devolves solo copy final listo para publicar.",
             agente=request.user,
+            task='story_caption',
+            listado_id=listado_id_val,
         )
         caption = _finalize_caption_text(raw_caption, data, formato='story', prefs=content_prefs, max_chars=650)
 
@@ -6551,6 +6776,8 @@ Requisitos obligatorios:
 @permission_classes([IsAuthenticated])
 @require_active_plan
 def generar_email(request):
+    generation_run_id = None
+    generation_step_name = 'email'
     try:
         # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # if not puede_generar(request.user, 'ai'):
@@ -6561,6 +6788,7 @@ def generar_email(request):
         #     }, status=status.HTTP_403_FORBIDDEN)
             
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        generation_run_id, generation_step_name = _mark_generation_running(data, 'email')
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -6618,7 +6846,15 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
 }}
 """
         prompt_text = _repair_mojibake_text(prompt_text)
-        json_str = smart_call(prompt_text, system_prompt="Sos un asistente técnico que solo responde en JSON.", agente=request.user)
+        json_str = smart_call(
+            prompt_text,
+            system_prompt="Sos un asistente técnico que solo responde en JSON.",
+            agente=request.user,
+            task='email',
+            listado_id=listado_id_val,
+            generation_run_id=generation_run_id,
+            generation_step=generation_step_name,
+        )
         
         if json_str is None:
             json_str = '{"asunto": "Propiedad destacada", "html": "<div>Tenemos una excelente oportunidad para vos. ContestÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a este mail para mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s detalles.</div>", "texto_plano": "Tenemos una excelente oportunidad para vos. ContestÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a este mail para mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s detalles."}'
@@ -6746,14 +6982,21 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
         # PERSISTENCIA: Guardar en el listado
         if listado_obj:
             actualizar_resultados_listado(listado_obj, 'email', parsed)
-            
+
+        _mark_generation_done(generation_run_id, generation_step_name, {
+            "asunto": parsed.get("asunto", ""),
+            "template_id": template_id,
+        })
         return Response(parsed, status=status.HTTP_200_OK)
     except APIKeyUnavailableError as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, fallback_status=status.HTTP_503_SERVICE_UNAVAILABLE, user=request.user, source='generar_email')
     except (GeminiQuotaExhaustedError, GeminiRateLimitedError, ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError) as e:
+        _mark_generation_failed(generation_run_id, generation_step_name, e)
         return _quota_error_response(e, user=request.user, source='generar_email')
-    except Exception:
+    except Exception as exc:
         logger.exception("Error generando email")
+        _mark_generation_failed(generation_run_id, generation_step_name, exc, error_code='email_failed')
         return Response({"error": "Error al generar email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
@@ -9087,12 +9330,13 @@ REQUISITOS:
 - El texto es para narraciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n en voz en off, debe sonar natural al hablar
 - No pongas el nombre de la escena, solo el texto a narrar
 - Responde SOLO el texto, sin JSON, sin comillas, sin explicaciones"""
+    prompt = _repair_mojibake_text(prompt)
 
     try:
-        result = smart_call(prompt, retries=1, agente=request.user)
+        result = smart_call(prompt, retries=1, agente=request.user, task='video_scene')
         if not result:
             return Response({"error": "No se pudo generar texto"}, status=503)
-        return Response({"texto": result.strip()})
+        return Response({"texto": _repair_mojibake_text(result).strip()})
     except Exception:
         logger.exception("Error generando texto de escena")
         return Response({"error": "Error al generar texto"}, status=500)
