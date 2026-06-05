@@ -537,7 +537,7 @@ def admin_users_list(request):
 @permission_classes([AllowAny])
 def admin_users_detail(request, pk):
     if not _check_admin(request): return Response({'error': 'Forbidden'}, status=403)
-    try: u = Agent.objects.get(pk=pk)
+    try: u = Agent.objects.all_including_deleted().get(pk=pk)
     except Agent.DoesNotExist: return Response(status=404)
     assignments = UserAPIAssignment.objects.filter(user=u, activo=True).select_related('apikey', 'servicio')
     keys = [{'id': a.apikey.id, 'servicio': a.servicio.nombre, 'status': a.apikey.status,
@@ -555,6 +555,7 @@ def admin_users_detail(request, pk):
                      'telefono': u.telefono, 'agencia': u.agencia, 'nombre_inmobiliaria': u.nombre_inmobiliaria,
                      'nicho': u.nicho, 'pais': u.pais, 'plan': u.plan_nombre,
                      'fecha_registro': u.fecha_registro, 'last_login': u.last_login,
+                     'is_deleted': bool(u.eliminado_en), 'eliminado_en': u.eliminado_en,
                      'is_online': is_online, 'is_active': u.is_active,
                      'keys': keys, 'quotas': quotas, 'recent_logs': logs})
 
