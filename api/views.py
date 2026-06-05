@@ -2907,6 +2907,11 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def request_trial_token(request):
+    return Response({
+        "error": "trial_token_request_disabled",
+        "message": "Los tokens gratis solo pueden ser generados desde el Admin Dashboard.",
+    }, status=status.HTTP_410_GONE)
+
     from django.conf import settings
     from .tasks import send_otp_email_async
     email = str(request.data.get('email') or '').strip().lower()
