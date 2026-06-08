@@ -760,6 +760,13 @@ def _get_nvidia_key():
         return pool_key.api_key
     return settings.NVIDIA_API_KEY
 
+def _get_gemini_key():
+    from api.models import APIKey
+    pool_key = APIKey.objects.filter(servicio__nombre__iexact='gemini', status='available').first()
+    if pool_key:
+        return pool_key.api_key
+    return settings.GEMINI_API_KEY
+
 def _get_groq_key():
     from api.models import APIKey
     pool_key = APIKey.objects.filter(servicio__nombre__iexact='groq', status='available').first()
@@ -860,13 +867,35 @@ class APIKeyUnavailableError(Exception):
         self.retry_after_seconds = retry_after_seconds
 
 def call_gemini_api(prompt: str, agente=None, **kwargs) -> str:
-    """Compatibilidad: Gemini queda almacenado, pero deshabilitado para generacion activa."""
-    raise APIKeyUnavailableError(
-        "Gemini esta deshabilitado para generacion activa. LeadBook esta usando solo Cerebras.",
-        provider='gemini',
-        scope='disabled',
-        quota_state='hard_exhausted',
-    )
+    """Llama a Gemini usando una key activa del pool/admin o la env var."""
+    key = _get_gemini_key()
+    if not key:
+        raise APIKeyUnavailableError(
+            "No hay Gemini API Key disponible.",
+            provider='gemini',
+            scope='pool',
+            quota_state='hard_exhausted',
+        )
+
+    system_prompt = str(kwargs.get('system_prompt') or '').strip()
+    full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+    model = kwargs.get('model') or 'gemini-2.5-flash-lite'
+
+    try:
+        client = genai.Client(api_key=key)
+        response = client.models.generate_content(
+            model=model,
+            contents=full_prompt,
+        )
+        return str(getattr(response, 'text', '') or '').strip()
+    except Exception as exc:
+        message = str(exc)
+        lowered = message.lower()
+        if any(term in lowered for term in ('resource_exhausted', 'quota', 'billing', 'exceeded')):
+            raise GeminiQuotaExhaustedError(message) from exc
+        if any(term in lowered for term in ('rate limit', 'too many requests', '429')):
+            raise GeminiRateLimitedError(message) from exc
+        raise
 
 def call_groq_api(prompt: str, **kwargs) -> str:
     """
@@ -1798,6 +1827,7 @@ def generar_html_gemini(context, agente):
                 listado_id=context.get('listado_id'),
                 generation_run_id=context.get('generation_run_id'),
                 generation_step=context.get('generation_step') or 'pdf',
+                ai_provider=context.get('ai_provider'),
                 system_prompt=(
                     "Sos un maquetador senior de PDFs inmobiliarios. "
                     "Cumplis contratos HTML estrictos y devolves solo HTML."
@@ -1883,6 +1913,7 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
                         listado_id=context.get('listado_id'),
                         generation_run_id=context.get('generation_run_id'),
                         generation_step=context.get('generation_step') or 'pdf',
+                        ai_provider=context.get('ai_provider'),
                     )
                 
                 if design_prompt:
@@ -2043,6 +2074,7 @@ REGLAS DE DISEÑO PREMIUM:
                         listado_id=context.get('listado_id'),
                         generation_run_id=context.get('generation_run_id'),
                         generation_step=context.get('generation_step') or 'pdf',
+                        ai_provider=context.get('ai_provider'),
                     )
                 if html_output:
                     print(f"[HTML] ✅ Paso 2 exitoso con {provider} ({model_id})")

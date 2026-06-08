@@ -84,6 +84,11 @@ from .services.content_generation import (
     start_or_resume_generation_run,
     get_generation_run_for_user,
 )
+from .services.ai_router import (
+    build_public_ai_providers_payload,
+    resolve_available_ai_provider,
+    resolve_requested_ai_provider as resolve_router_ai_provider,
+)
 from .services.template_contracts import (
     BASE_LAYOUT_BY_TEMPLATE,
     REQUIRED_PDF_SECTIONS,
@@ -220,6 +225,12 @@ def _mark_generation_failed(run_id, step_name, exc_or_message, *, error_code='st
     )
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def content_generation_providers(request):
+    return Response(build_public_ai_providers_payload(), status=status.HTTP_200_OK)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
@@ -229,11 +240,20 @@ def start_content_generation_pack(request, pk):
     selected_template = request_payload.get('template_id') or request_payload.get('selectedTemplateId')
     selected_brand_template_id = request_payload.get('brand_template_id') or request_payload.get('brandTemplateId')
     selected_model = _resolve_requested_ai_model(request_payload)
+    selected_provider = _resolve_requested_ai_provider(request_payload)
+    if not selected_provider:
+        return Response({
+            'success': False,
+            'error': 'ai_provider_unavailable',
+            'mensaje': 'No hay marcas de IA disponibles para generar contenido.',
+            **build_public_ai_providers_payload(),
+        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     metadata = {
         'source': 'frontend-new',
         'selected_template': str(selected_template or ''),
         'brand_template_id': selected_brand_template_id or None,
         'selected_model': selected_model or 'auto',
+        'ai_provider': selected_provider,
         'video_included': False,
     }
     run, reservation = start_or_resume_generation_run(request.user, listado, metadata=metadata)
@@ -243,7 +263,7 @@ def start_content_generation_pack(request, pk):
         'retry_after_seconds': reservation.get('retry_after_seconds'),
         'quota_state': getattr(reservation.get('error'), 'quota_state', None),
         'scope': getattr(reservation.get('error'), 'scope', None),
-        'provider': 'cerebras',
+        'provider': selected_provider,
     }
     if reservation.get('error'):
         http_status = (
@@ -275,13 +295,14 @@ def retry_content_generation_run(request, run_id):
         return Response({'error': 'generation_run_not_found'}, status=status.HTTP_404_NOT_FOUND)
     listado = run.listado
     run, reservation = start_or_resume_generation_run(request.user, listado, metadata={'retry_run_id': run_id})
+    selected_provider = _resolve_requested_ai_provider(run.metadata or {})
     if reservation.get('error'):
         return Response({
             'success': False,
             'run': serialize_generation_run(run),
             'error': 'ia_rate_limited',
             'mensaje': str(reservation['error']),
-            'provider': 'cerebras',
+            'provider': selected_provider or 'cerebras',
             'scope': getattr(reservation['error'], 'scope', None),
             'quota_state': getattr(reservation['error'], 'quota_state', None),
             'retry_after_seconds': reservation.get('retry_after_seconds'),
@@ -321,6 +342,11 @@ def _build_generation_run_payload(run, incoming=None, step_name=''):
     selected_template = metadata.get('selected_template')
     selected_brand_template_id = metadata.get('brand_template_id')
     selected_model = _resolve_requested_ai_model(payload) or _resolve_requested_ai_model(metadata)
+    explicit_provider = resolve_router_ai_provider(payload) or resolve_router_ai_provider(metadata)
+    selected_provider = (
+        resolve_available_ai_provider({'ai_provider': explicit_provider})
+        if explicit_provider else _resolve_requested_ai_provider(metadata)
+    )
     if selected_brand_template_id and not payload.get('brand_template_id') and not payload.get('template_id'):
         payload['brand_template_id'] = selected_brand_template_id
         payload['brandTemplateId'] = selected_brand_template_id
@@ -331,6 +357,9 @@ def _build_generation_run_payload(run, incoming=None, step_name=''):
         payload['model'] = selected_model
         payload['ai_model'] = selected_model
         payload['generation_model'] = selected_model
+    if selected_provider:
+        payload['ai_provider'] = selected_provider
+        payload['aiProvider'] = selected_provider
     return payload
 
 
@@ -409,13 +438,14 @@ def advance_content_generation_run(request, run_id):
             run.listado,
             metadata={'advance_run_id': run.id, **(run.metadata or {})},
         )
+        selected_provider = _resolve_requested_ai_provider(run.metadata or {})
         if reservation.get('error'):
             return Response({
                 'success': False,
                 'run': serialize_generation_run(run),
                 'error': 'ia_rate_limited',
                 'mensaje': str(reservation['error']),
-                'provider': 'cerebras',
+                'provider': selected_provider or 'cerebras',
                 'scope': getattr(reservation['error'], 'scope', None),
                 'quota_state': getattr(reservation['error'], 'quota_state', None),
                 'retry_after_seconds': reservation.get('retry_after_seconds'),
@@ -474,6 +504,13 @@ def advance_content_generation_run(request, run_id):
         and refreshed_step
         and refreshed_step.status in {'failed', 'skipped'}
     )
+    return Response({
+        'success': (200 <= response_status < 300) or bool(should_continue_after_failure),
+        'step': next_step.step,
+        'step_response': response_data,
+        'run': serialize_generation_run(refreshed or run),
+        'continued_after_step_failure': bool(should_continue_after_failure),
+    }, status=status.HTTP_200_OK if should_continue_after_failure else response_status)
 
 
 GENERATION_MODEL_ALIASES = {
@@ -508,13 +545,13 @@ def _resolve_requested_ai_model(data):
     if normalized in CEREBRAS_MODELS_CASCADE:
         return normalized
     return GENERATION_MODEL_ALIASES.get(normalized, '')
-    return Response({
-        'success': (200 <= response_status < 300) or bool(should_continue_after_failure),
-        'step': next_step.step,
-        'step_response': response_data,
-        'run': serialize_generation_run(refreshed or run),
-        'continued_after_step_failure': bool(should_continue_after_failure),
-    }, status=status.HTTP_200_OK if should_continue_after_failure else response_status)
+
+
+def _resolve_requested_ai_provider(data):
+    requested = resolve_router_ai_provider(data)
+    if requested:
+        return resolve_available_ai_provider({'ai_provider': requested})
+    return resolve_available_ai_provider(data if isinstance(data, dict) else {})
 
 
 def _safe_persisted_media_url(value):
@@ -5809,6 +5846,7 @@ Requisitos obligatorios:
             system_prompt="Sos un director de marketing inmobiliario digital. Devolves solo copy final listo para publicar.",
             agente=user,
             model=_resolve_requested_ai_model(data),
+            ai_provider=_resolve_requested_ai_provider(data),
             task='carousel_caption',
             listado_id=listado_id_val,
             generation_run_id=generation_run_id,
@@ -6893,6 +6931,7 @@ def generar_pdf(request):
         context['generation_run_id'] = generation_run_id
         context['generation_step'] = generation_step_name
         context['ai_model'] = _resolve_requested_ai_model(data)
+        context['ai_provider'] = _resolve_requested_ai_provider(data)
 
         logger.info(
             "[PDF] generar_pdf listado_id=%s template_id=%s user_id=%s",
@@ -7204,6 +7243,7 @@ Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             system_prompt="Sos un experto en marketing inmobiliario para redes sociales. Devolves solo copy final listo para publicar.",
             agente=request.user,
             model=_resolve_requested_ai_model(data),
+            ai_provider=_resolve_requested_ai_provider(data),
             task='post_caption',
             listado_id=listado_id_val,
             generation_run_id=generation_run_id,
@@ -7498,6 +7538,7 @@ Requisitos obligatorios:
             system_prompt="Sos un experto en marketing inmobiliario para stories. Devolves solo copy final listo para publicar.",
             agente=request.user,
             model=_resolve_requested_ai_model(data),
+            ai_provider=_resolve_requested_ai_provider(data),
             task='story_caption',
             listado_id=listado_id_val,
         )
@@ -7625,6 +7666,7 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
             system_prompt="Sos un asistente técnico que solo responde en JSON.",
             agente=request.user,
             model=_resolve_requested_ai_model(data),
+            ai_provider=_resolve_requested_ai_provider(data),
             task='email',
             listado_id=listado_id_val,
             generation_run_id=generation_run_id,

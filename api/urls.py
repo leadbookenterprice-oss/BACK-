@@ -28,7 +28,7 @@ from .views import (
     brand_template_draft_preview, brand_template_draft_chat, CookieTokenRefreshView,
     cambiar_password, password_change_code, logout_all,
     start_content_generation_pack, content_generation_run_detail, retry_content_generation_run,
-    advance_content_generation_run, video_studio_quick_base,
+    advance_content_generation_run, content_generation_providers, video_studio_quick_base,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -120,6 +120,7 @@ urlpatterns = [
     path('listados/<int:pk>/html/', generar_html, name='generar_html'),
     path('listados/<int:pk>/export-zip/', export_listado_zip, name='export_listado_zip'),
     path('listados/<int:pk>/generar-pack/', start_content_generation_pack, name='start_content_generation_pack'),
+    path('content-generation/providers/', content_generation_providers, name='content_generation_providers'),
     path('generation-runs/<int:run_id>/', content_generation_run_detail, name='content_generation_run_detail'),
     path('generation-runs/<int:run_id>/advance/', advance_content_generation_run, name='advance_content_generation_run'),
     path('generation-runs/<int:run_id>/retry/', retry_content_generation_run, name='retry_content_generation_run'),

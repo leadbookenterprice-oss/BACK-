@@ -273,6 +273,21 @@ def _safe_budget_preflight(user, listado_id, estimated_tokens):
     )
 
 
+def _provider_from_metadata(metadata=None, default='cerebras'):
+    metadata = metadata if isinstance(metadata, dict) else {}
+    raw = (
+        metadata.get('ai_provider')
+        or metadata.get('aiProvider')
+        or metadata.get('provider')
+        or metadata.get('ai_root_provider')
+        or ''
+    )
+    provider = str(raw or '').strip().lower()
+    if provider in {'nvidia_nim', 'nim'}:
+        provider = 'nvidia'
+    return provider or default
+
+
 def release_generation_run_slot(run):
     if not run or not run.api_key_id:
         return
@@ -306,6 +321,7 @@ def release_generation_run_slot(run):
 def start_or_resume_generation_run(user, listado, *, metadata=None):
     metadata = metadata or {}
     now = timezone.now()
+    requested_provider = _provider_from_metadata(metadata)
     run = (
         ContentGenerationRun.objects
         .select_related('api_key', 'listado', 'user')
@@ -327,6 +343,7 @@ def start_or_resume_generation_run(user, listado, *, metadata=None):
                 'estimated_tokens_per_pack': CEREBRAS_PACK_ESTIMATED_TOKENS,
                 'model_primary': 'gpt-oss-120b',
                 'model_fallback': 'zai-glm-4.7',
+                'ai_provider': requested_provider,
                 **metadata,
             },
         )
@@ -334,6 +351,28 @@ def start_or_resume_generation_run(user, listado, *, metadata=None):
         created = True
     else:
         _ensure_steps(run)
+        existing_provider = _provider_from_metadata(run.metadata or {})
+        incoming_provider = _provider_from_metadata(metadata, default='') if metadata else ''
+        requested_provider = incoming_provider or existing_provider
+        run.metadata = {
+            **(run.metadata or {}),
+            **metadata,
+            'ai_provider': requested_provider,
+        }
+
+    if requested_provider != 'cerebras':
+        if run.status in {'pending', 'waiting_slot'}:
+            run.status = 'running'
+            run.current_step = run.current_step or CONTENT_PACK_STEPS[0]
+            run.error_code = ''
+            run.error_message = ''
+        run.save(update_fields=['status', 'current_step', 'error_code', 'error_message', 'metadata', 'updated_at'])
+        return run, {
+            'created': created,
+            'reserved': False,
+            'retry_after_seconds': None,
+            'error': None,
+        }
 
     retry_after_seconds = None
     reserved = False
