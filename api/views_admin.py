@@ -844,12 +844,28 @@ def admin_apikeys_pool_bulk(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 def admin_apikeys_pool_detail(request, pk):
     if not _is_staff_check(request): return Response({'error': 'Forbidden'}, status=403)
-    k = APIKey.objects.get(pk=pk)
+    k = APIKey.objects.filter(pk=pk, servicio__nombre__iexact='uploadpost').select_related('servicio').first()
+    if not k:
+        return Response({'error': 'API key UploadPost no encontrada'}, status=status.HTTP_404_NOT_FOUND)
     if request.method == 'GET':
-        return Response({'id': k.id, 'key': _mask_secret(k.api_key), 'key_masked': _mask_secret(k.api_key), 'status': k.status})
+        return Response({
+            'id': k.id,
+            'service': k.servicio.nombre if k.servicio_id else 'uploadpost',
+            'key': _mask_secret(k.api_key),
+            'key_masked': _mask_secret(k.api_key),
+            'status': k.status,
+            'label': k.label or '',
+        })
     elif request.method == 'PUT':
-        # Update logic...
-        k.save()
+        label = request.data.get('label')
+        if label is not None:
+            k.label = str(label).strip()
+        if 'daily_limit' in request.data:
+            try:
+                k.google_daily_limit = int(request.data.get('daily_limit') or k.google_daily_limit or 999999)
+            except (TypeError, ValueError):
+                return Response({'error': 'daily_limit invalido'}, status=status.HTTP_400_BAD_REQUEST)
+        k.save(update_fields=['label', 'google_daily_limit', 'updated_at'])
         return Response({'ok': True})
     elif request.method == 'DELETE':
         k.delete()

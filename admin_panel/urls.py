@@ -1,23 +1,27 @@
 from django.urls import path
 from . import views
 from . import views_cloudinary
+from api import views_admin as api_admin_views
 
 urlpatterns = [
     # Stats
     path('stats/', views.admin_stats_v2),
 
     # API Keys Pool
-    path('apikeys/pool/', views.admin_api_keys_list),
-    path('apikeys/pool/crear/', views.admin_api_keys_create),
-    path('apikeys/pool/bulk/', views.admin_api_keys_bulk_create),
+    path('apikeys/pool/', api_admin_views.admin_apikeys_pool),
+    path('apikeys/pool/crear/', api_admin_views.admin_apikeys_pool_crear),
+    path('apikeys/pool/bulk/', api_admin_views.admin_apikeys_pool_bulk),
     path('apikeys/pool/auto-repair/', views.admin_apikeys_auto_repair),
-    path('apikeys/pool/<int:pk>/', views.admin_api_keys_detail),
+    path('apikeys/pool/<int:pk>/', api_admin_views.admin_apikeys_pool_detail),
     path('apikeys/pool/<int:pk>/liberar/', views.admin_api_keys_detail),
     path('apikeys/pool/<int:pk>/reactivar/', views.admin_api_keys_detail),
     path('apikeys/pool/<int:pk>/reset/', views.admin_api_keys_detail),
     path('apikeys/pool/<int:pk>/actualizar/', views.admin_pool_key_actualizar),
-    path('apikeys/pool/<int:pk>/eliminar/', views.admin_pool_key_eliminar),
-    path('apikeys/resumen/', views.admin_api_keys_list),
+    path('apikeys/pool/<int:pk>/eliminar/', api_admin_views.admin_apikeys_pool_detail),
+    path('apikeys/resumen/', api_admin_views.admin_apikeys_pool),
+    path('api-usage/summary/', api_admin_views.admin_api_usage_summary),
+    path('api-usage/logs/', api_admin_views.admin_api_usage_logs),
+    path('api-usage/keys/<int:key_id>/', api_admin_views.admin_api_usage_key_detail),
 
     # Global Keys
     path('apikeys/global/', views.admin_global_keys_list),
