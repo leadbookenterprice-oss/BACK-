@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es" data-template-id="{{ template_id }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ asunto }}</title>
+</head>
+<body style="margin:0;padding:0;background:{{ background }};color:{{ text }};font-family:'{{ body_font }}','Helvetica Neue',Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{{ background }};padding:30px 0;">
+    <tr><td align="center">
+      <table role="presentation" width="620" cellpadding="0" cellspacing="0" border="0" style="width:620px;max-width:620px;background:#ffffff;border:1px solid {{ border }};">
+        <tr><td style="padding:30px 36px;border-bottom:1px solid {{ border }};">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+            <td align="left" valign="middle">
+              {% if logo_url %}
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td valign="middle"><img src="{{ logo_url }}" alt="{{ agenciaNombre|default:'Agencia' }}" width="42" height="42" style="display:block;width:42px;height:42px;border-radius:50%;object-fit:contain;background:#fff;padding:4px;"></td><td valign="middle" style="padding-left:12px;font-family:Georgia,serif;font-size:18px;letter-spacing:1px;color:{{ primary }};text-transform:uppercase;font-weight:700;">{{ agenciaNombre|default:'Agencia' }}</td></tr></table>
+              {% else %}
+              <div style="font-family:Georgia,serif;font-size:25px;letter-spacing:3px;color:{{ primary }};text-transform:uppercase;">{{ agenciaNombre|default:'Agencia' }}</div>
+              {% endif %}
+            </td>
+            <td align="right" valign="middle"><span style="display:inline-block;padding:8px 16px;border:1px solid {{ primary }};color:{{ primary }};background:{{ background }};font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;">{{ operacion }}</span></td>
+          </tr></table>
+        </td></tr>
+        <tr><td style="padding:34px 36px 16px 36px;">
+          <div style="font-size:11px;letter-spacing:3px;color:{{ secondary }};text-transform:uppercase;margin-bottom:10px;">Propuesta exclusiva</div>
+          <h1 style="margin:0;font-family:Georgia,serif;font-size:42px;line-height:1.05;font-weight:600;color:{{ text }};">{{ tipoPropiedad }}<br><span style="color:{{ primary }};">{{ ciudad }}</span></h1>
+        </td></tr>
+        {% if portada_url %}<tr><td style="padding:14px 36px 0 36px;"><img src="{{ portada_url }}" alt="Imagen de la propiedad" width="548" style="display:block;width:100%;height:auto;max-height:320px;object-fit:cover;border:1px solid {{ border }};"></td></tr>{% endif %}
+        {% if galeria_urls %}<tr><td style="padding:14px 32px 0 32px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>{% for foto in galeria_urls|slice:":4" %}<td width="50%" style="padding:4px;"><img src="{{ foto }}" alt="Foto de galeria" width="264" style="display:block;width:100%;height:136px;object-fit:cover;border:1px solid {{ border }};"></td>{% if forloop.counter|divisibleby:2 and not forloop.last %}</tr><tr>{% endif %}{% endfor %}</tr></table></td></tr>{% endif %}
+        <tr><td style="padding:30px 36px 24px 36px;"><div style="font-size:15px;line-height:1.85;color:{{ text }};">{{ html_content|safe }}</div></td></tr>
+        <tr><td style="padding:0 36px 28px 36px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid {{ border }};background:{{ background }};"><tr>
+          <td style="padding:18px 20px;border-right:1px solid {{ border }};" width="50%"><div style="font-size:10px;letter-spacing:2px;color:{{ secondary }};text-transform:uppercase;margin-bottom:6px;">Precio</div><div style="font-family:Georgia,serif;font-size:30px;color:{{ primary }};font-weight:700;">{{ moneda }} {{ precio }}</div></td>
+          <td style="padding:18px 20px;" width="50%"><div style="font-size:10px;letter-spacing:2px;color:{{ secondary }};text-transform:uppercase;margin-bottom:6px;">Operacion</div><div style="font-size:18px;color:{{ primary }};font-weight:700;text-transform:uppercase;">{{ operacion }}</div></td>
+        </tr></table></td></tr>
+        <tr><td style="padding:0 36px 34px 36px;"><div style="padding-top:20px;border-top:1px solid {{ border }};color:{{ secondary }};font-size:13px;line-height:1.6;"><strong style="color:{{ primary }};font-size:14px;">{{ agenteNombre|default:'Asesor Comercial' }}</strong><br>{{ agenteRol|default:'Asesor Comercial' }} | {{ agenciaNombre|default:'Agencia' }}<br>{% if agenteTelefono %}WhatsApp: {% if whatsapp_url %}<a href="{{ whatsapp_url }}" style="color:{{ primary }};text-decoration:none;">{{ agenteTelefonoDisplay|default:agenteTelefono }}</a>{% else %}{{ agenteTelefonoDisplay|default:agenteTelefono }}{% endif %}{% endif %}{% if agenteEmail %}<br>Email: <a href="mailto:{{ agenteEmail }}" style="color:{{ primary }};text-decoration:none;">{{ agenteEmail }}</a>{% endif %}</div></td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>

@@ -35,6 +35,8 @@ SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOW_ADMIN_KEY_AUTH = config('ALLOW_ADMIN_KEY_AUTH', default=DEBUG, cast=bool)
 ALLOW_DEBUG_ENDPOINTS = config('ALLOW_DEBUG_ENDPOINTS', default=DEBUG, cast=bool)
+TURNSTILE_SECRET_KEY = config('TURNSTILE_SECRET_KEY', default='')
+TURNSTILE_REQUIRED = config('TURNSTILE_REQUIRED', default=False, cast=bool)
 
 ALLOWED_HOSTS_ENV = config('ALLOWED_HOSTS', default='')
 _env_allowed_hosts = [h.strip() for h in ALLOWED_HOSTS_ENV.split(',') if h.strip()]

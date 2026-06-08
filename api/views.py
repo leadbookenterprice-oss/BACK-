@@ -11,6 +11,8 @@ from django.db import transaction
 import requests
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
+from django.template import TemplateDoesNotExist
+from django.template.loader import get_template
 from decouple import config
 import cloudinary
 import cloudinary.uploader
@@ -46,6 +48,7 @@ from .serializers import (
 from .tasks import run_asset_generation
 from .ai_services import (
     APIKeyUnavailableError,
+    CEREBRAS_MODELS_CASCADE,
     ElevenLabsQuotaExhaustedError,
     ElevenLabsRateLimitedError,
     GeminiQuotaExhaustedError,
@@ -80,6 +83,15 @@ from .services.content_generation import (
     serialize_generation_run,
     start_or_resume_generation_run,
     get_generation_run_for_user,
+)
+from .services.template_contracts import (
+    BASE_LAYOUT_BY_TEMPLATE,
+    REQUIRED_PDF_SECTIONS,
+    TEMPLATE_CONTRACTS,
+    TEMPLATE_IDS as CANONICAL_TEMPLATE_IDS,
+    get_template_contract,
+    normalize_template_id as normalize_contract_template_id,
+    template_catalog_from_contracts,
 )
 
 
@@ -213,16 +225,15 @@ def _mark_generation_failed(run_id, step_name, exc_or_message, *, error_code='st
 @require_active_plan
 def start_content_generation_pack(request, pk):
     listado = get_object_or_404(Listado, pk=pk, agente=request.user)
-    selected_template = (
-        request.data.get('template_id')
-        or request.data.get('brand_template_id')
-        or request.data.get('selectedTemplateId')
-        if isinstance(request.data, dict)
-        else None
-    )
+    request_payload = request.data if isinstance(request.data, dict) else {}
+    selected_template = request_payload.get('template_id') or request_payload.get('selectedTemplateId')
+    selected_brand_template_id = request_payload.get('brand_template_id') or request_payload.get('brandTemplateId')
+    selected_model = _resolve_requested_ai_model(request_payload)
     metadata = {
         'source': 'frontend-new',
         'selected_template': str(selected_template or ''),
+        'brand_template_id': selected_brand_template_id or None,
+        'selected_model': selected_model or 'auto',
         'video_included': False,
     }
     run, reservation = start_or_resume_generation_run(request.user, listado, metadata=metadata)
@@ -306,10 +317,20 @@ def _build_generation_run_payload(run, incoming=None, step_name=''):
     })
     if listado.metros_cuadrados and not payload.get('superficieTotal'):
         payload['superficieTotal'] = listado.metros_cuadrados
-    selected_template = (run.metadata or {}).get('selected_template')
-    if selected_template and not payload.get('template_id'):
+    metadata = run.metadata or {}
+    selected_template = metadata.get('selected_template')
+    selected_brand_template_id = metadata.get('brand_template_id')
+    selected_model = _resolve_requested_ai_model(payload) or _resolve_requested_ai_model(metadata)
+    if selected_brand_template_id and not payload.get('brand_template_id') and not payload.get('template_id'):
+        payload['brand_template_id'] = selected_brand_template_id
+        payload['brandTemplateId'] = selected_brand_template_id
+    elif selected_template and not payload.get('template_id') and not payload.get('brand_template_id'):
         payload['template_id'] = selected_template
         payload['selectedTemplateId'] = selected_template
+    if selected_model:
+        payload['model'] = selected_model
+        payload['ai_model'] = selected_model
+        payload['generation_model'] = selected_model
     return payload
 
 
@@ -319,8 +340,33 @@ def _validate_generated_pdf_html(html_string, context):
     errors = []
     if '<html' not in lower_html or '</html>' not in lower_html:
         errors.append('html_document_missing')
-    web_nav_terms = ('<nav', 'inicio', 'propiedades', 'blog', 'menu')
-    if any(term in lower_html for term in web_nav_terms) and 'leadbook-pdf' not in lower_html:
+    template_id = _normalize_template_id(context.get('template_id')) or 'tech_modern'
+    contract = get_template_contract(template_id)
+    if not contract:
+        errors.append('template_contract_missing')
+    else:
+        expected_markers = (
+            f'data-template-id="{template_id}"',
+            f"data-template-id='{template_id}'",
+        )
+        if not any(marker in lower_html for marker in expected_markers):
+            errors.append('template_marker_missing')
+        if 'data-leadbook-pdf' not in lower_html and 'leadbook-pdf' not in lower_html:
+            errors.append('leadbook_pdf_marker_missing')
+        for section in REQUIRED_PDF_SECTIONS:
+            section_markers = (
+                f'data-section="{section}"',
+                f"data-section='{section}'",
+            )
+            if not any(marker in lower_html for marker in section_markers):
+                errors.append(f'{section}_section_marker_missing')
+        colors = contract.get('colors') or {}
+        required_colors = [colors.get('primary'), colors.get('accent')]
+        missing_colors = [color for color in required_colors if color and color.lower() not in lower_html]
+        if missing_colors:
+            errors.append('template_colors_missing')
+    web_nav_terms = ('<nav', '>inicio<', '>propiedades<', '>blog<', '>menu<', 'class="navbar', "class='navbar", 'id="navbar', "id='navbar")
+    if any(term in lower_html for term in web_nav_terms):
         errors.append('looks_like_web_page')
 
     description = str(context.get('descripcion') or '').strip()
@@ -334,6 +380,15 @@ def _validate_generated_pdf_html(html_string, context):
     gallery = context.get('fotos_recorrido') or []
     if gallery and '<img' not in lower_html:
         errors.append('gallery_images_missing')
+    elif gallery:
+        first_gallery_url = str(gallery[0] or '').strip().lower()
+        first_gallery_url_html = first_gallery_url.replace('&', '&amp;')
+        if first_gallery_url and first_gallery_url not in lower_html and first_gallery_url_html not in lower_html:
+            errors.append('gallery_urls_missing')
+    logo_url = str(context.get('logo_url') or context.get('agencia_logo_url') or '').strip().lower()
+    logo_url_html = logo_url.replace('&', '&amp;')
+    if logo_url and logo_url not in lower_html and logo_url_html not in lower_html:
+        errors.append('agency_logo_missing')
     return errors
 
 
@@ -367,9 +422,15 @@ def advance_content_generation_run(request, run_id):
             }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
     steps = list(run.steps.all().order_by('order', 'id'))
-    next_step = next((step for step in steps if step.status != 'done'), None)
+    next_step = next((step for step in steps if step.status in {'pending', 'waiting_rate_limit'}), None)
     if not next_step:
-        mark_generation_step(run.id, CONTENT_PACK_STEPS[-1], 'done')
+        if all(step.status in {'done', 'failed', 'skipped'} for step in steps):
+            run.status = 'done'
+            run.current_step = ''
+            run.completed_at = run.completed_at or timezone.now()
+            run.error_code = ''
+            run.error_message = ''
+            run.save(update_fields=['status', 'current_step', 'completed_at', 'error_code', 'error_message', 'updated_at'])
         refreshed = get_generation_run_for_user(request.user, run.id)
         return Response({'success': True, 'run': serialize_generation_run(refreshed), 'already_complete': True})
 
@@ -402,12 +463,58 @@ def advance_content_generation_run(request, run_id):
 
     refreshed = get_generation_run_for_user(request.user, run.id)
     response_data = getattr(response, 'data', None)
+    response_status = getattr(response, 'status_code', status.HTTP_500_INTERNAL_SERVER_ERROR)
+    refreshed_step = None
+    if refreshed:
+        refreshed_step = next((step for step in refreshed.steps.all() if step.step == next_step.step), None)
+    should_continue_after_failure = (
+        response_status >= 400
+        and refreshed
+        and refreshed.status in {'running', 'done'}
+        and refreshed_step
+        and refreshed_step.status in {'failed', 'skipped'}
+    )
+
+
+GENERATION_MODEL_ALIASES = {
+    'auto': '',
+    'automatico': '',
+    'leadbook-auto': '',
+    'quality': CEREBRAS_MODELS_CASCADE[0],
+    'calidad': CEREBRAS_MODELS_CASCADE[0],
+    'calidad-alta': CEREBRAS_MODELS_CASCADE[0],
+    'gpt-oss-120b': 'gpt-oss-120b',
+    'speed': CEREBRAS_MODELS_CASCADE[1] if len(CEREBRAS_MODELS_CASCADE) > 1 else CEREBRAS_MODELS_CASCADE[0],
+    'rapido': CEREBRAS_MODELS_CASCADE[1] if len(CEREBRAS_MODELS_CASCADE) > 1 else CEREBRAS_MODELS_CASCADE[0],
+    'zai-glm-4.7': 'zai-glm-4.7',
+}
+
+
+def _resolve_requested_ai_model(data):
+    if not isinstance(data, dict):
+        return ''
+    raw = (
+        data.get('model')
+        or data.get('ai_model')
+        or data.get('aiModel')
+        or data.get('generation_model')
+        or data.get('generationModel')
+        or data.get('selected_model')
+        or data.get('selectedModel')
+    )
+    normalized = str(raw or '').strip().lower()
+    if not normalized:
+        return ''
+    if normalized in CEREBRAS_MODELS_CASCADE:
+        return normalized
+    return GENERATION_MODEL_ALIASES.get(normalized, '')
     return Response({
-        'success': 200 <= getattr(response, 'status_code', 500) < 300,
+        'success': (200 <= response_status < 300) or bool(should_continue_after_failure),
         'step': next_step.step,
         'step_response': response_data,
         'run': serialize_generation_run(refreshed or run),
-    }, status=getattr(response, 'status_code', status.HTTP_500_INTERNAL_SERVER_ERROR))
+        'continued_after_step_failure': bool(should_continue_after_failure),
+    }, status=status.HTTP_200_OK if should_continue_after_failure else response_status)
 
 
 def _safe_persisted_media_url(value):
@@ -639,18 +746,7 @@ def _normalize_user_settings(raw_settings=None, base_settings=None):
     return merged
 
 
-TEMPLATE_IDS = (
-    'costa_serena',
-    'oliva_natural',
-    'terracota_suave',
-    'brisa_calida',
-    'arena_clara',
-    'dubai_night',
-    'beverly_hills',
-    'manhattan',
-    'mediterraneo',
-    'tech_modern',
-)
+TEMPLATE_IDS = CANONICAL_TEMPLATE_IDS
 
 TEMPLATE_CATALOG = {
     'costa_serena': {
@@ -815,31 +911,30 @@ TEMPLATE_CATALOG = {
     },
 }
 
+TEMPLATE_CATALOG = template_catalog_from_contracts()
 TEMPLATE_FILE_BASE = {
-    'costa_serena': 'mediterraneo',
-    'oliva_natural': 'beverly_hills',
-    'terracota_suave': 'dubai_night',
-    'brisa_calida': 'manhattan',
-    'arena_clara': 'tech_modern',
+    template_id: base_layout
+    for template_id, base_layout in BASE_LAYOUT_BY_TEMPLATE.items()
+    if template_id != base_layout
 }
 
 TEMPLATE_POST_MAP = {
-    template_id: f"renders/post_{TEMPLATE_FILE_BASE.get(template_id, template_id)}.html"
+    template_id: f"renders/post_{template_id}.html"
     for template_id in TEMPLATE_IDS
 }
 
 TEMPLATE_STORY_MAP = {
-    template_id: f"renders/story_{TEMPLATE_FILE_BASE.get(template_id, template_id)}.html"
+    template_id: f"renders/story_{template_id}.html"
     for template_id in TEMPLATE_IDS
 }
 
 TEMPLATE_CAROUSEL_MAP = {
-    template_id: f"renders/carousel_{TEMPLATE_FILE_BASE.get(template_id, template_id)}.html"
+    template_id: f"renders/carousel_{template_id}.html"
     for template_id in TEMPLATE_IDS
 }
 
 TEMPLATE_EMAIL_MAP = {
-    template_id: f"emails/marketing_{TEMPLATE_FILE_BASE.get(template_id, template_id)}.html"
+    template_id: f"emails/marketing_{template_id}.html"
     for template_id in TEMPLATE_IDS
 }
 
@@ -970,10 +1065,12 @@ def _template_options_payload():
                 'id': template_id,
                 'label': meta.get('name', template_id.replace('_', ' ').title()),
                 'description': meta.get('description', ''),
-                'colors': meta.get('colors', {}),
-                'fonts': meta.get('fonts', {}),
-                'default_tokens': _default_tokens_for_base_template(template_id),
-            }
+            'colors': meta.get('colors', {}),
+            'fonts': meta.get('fonts', {}),
+            'base_layout': meta.get('base_layout', template_id),
+            'contract_valid': bool(meta.get('contract_valid', False)),
+            'default_tokens': _default_tokens_for_base_template(template_id),
+        }
             for template_id, meta in TEMPLATE_CATALOG.items()
         ],
         'token_options': TEMPLATE_TOKEN_OPTIONS,
@@ -997,6 +1094,8 @@ def _template_catalog_payload(user=None):
             'colors': meta.get('colors', {}),
             'fonts': meta.get('fonts', {}),
             'base_template_id': template_id,
+            'base_layout': meta.get('base_layout', template_id),
+            'contract_valid': bool(meta.get('contract_valid', False)),
             'brand_template_id': None,
         })
 
@@ -1039,22 +1138,7 @@ def brand_templates_options(request):
 
 
 def _normalize_template_id(value):
-    if not value:
-        return None
-    template_id = str(value).strip().lower()
-    template_id = (
-        template_id
-        .replace('template_', '')
-        .replace('post_', '')
-        .replace('story_', '')
-        .replace('carousel_', '')
-        .replace('carrusel_', '')
-        .replace('email_', '')
-        .replace('.html', '')
-    )
-    if template_id in TEMPLATE_IDS:
-        return template_id
-    return None
+    return normalize_contract_template_id(value)
 
 
 def _parse_brand_template_id(value):
@@ -1095,6 +1179,55 @@ def _extract_template_id_from_payload(data):
         data.get('template_id')
         or data.get('templateId')
         or data.get('template')
+    )
+
+
+def _invalid_explicit_template_id(data):
+    if not isinstance(data, dict):
+        return None
+    raw = data.get('template_id') or data.get('templateId') or data.get('template')
+    if raw in (None, ''):
+        return None
+    raw_text = str(raw).strip()
+    if raw_text.startswith(('custom:', 'custom-')) or _parse_brand_template_id(raw_text):
+        return None
+    return None if _normalize_template_id(raw_text) else raw_text
+
+
+def _template_invalid_response(raw_template_id):
+    return Response(
+        {
+            'error': 'template_invalid',
+            'mensaje': f'Template no soportado por backend: {raw_template_id}',
+            'template_id': raw_template_id,
+            'supported_templates': list(TEMPLATE_IDS),
+        },
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _template_file_available(template_path):
+    try:
+        get_template(template_path)
+        return True
+    except TemplateDoesNotExist:
+        return False
+
+
+def _resolve_template_file_or_response(template_id, template_map, format_name):
+    template_file = template_map.get(template_id)
+    if template_file and _template_file_available(template_file):
+        return template_file, None
+    return None, Response(
+        {
+            'error': 'template_invalid',
+            'mensaje': f'El template {template_id} no tiene archivo fisico para {format_name}.',
+            'template_id': template_id,
+            'format': format_name,
+            'template_file': template_file or '',
+            'supported_templates': list(TEMPLATE_IDS),
+        },
+        status=status.HTTP_400_BAD_REQUEST,
     )
 
 
@@ -1412,8 +1545,10 @@ def _persist_template_selection(listado, selection, source=''):
 
 
 def _apply_template_tokens_to_html(html, template_id, template_tokens):
-    if not html or not isinstance(template_tokens, dict):
+    if not html:
         return html
+    if not isinstance(template_tokens, dict):
+        template_tokens = _default_tokens_for_base_template(template_id)
 
     themed = str(html)
     palette = template_tokens.get('palette') or {}
@@ -1422,12 +1557,19 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
     components = template_tokens.get('components') or {}
 
     base_meta = TEMPLATE_CATALOG.get(template_id, {})
-    base_colors = base_meta.get('colors') if isinstance(base_meta.get('colors'), dict) else {}
+    base_layout_id = TEMPLATE_FILE_BASE.get(template_id, template_id)
+    base_layout_meta = TEMPLATE_CATALOG.get(base_layout_id, {})
+    base_color_sets = []
+    for meta in (base_meta, base_layout_meta):
+        colors = meta.get('colors') if isinstance(meta.get('colors'), dict) else {}
+        if colors and colors not in base_color_sets:
+            base_color_sets.append(colors)
     for key in ('primary', 'secondary', 'accent', 'background', 'text'):
-        old_val = base_colors.get(key)
         new_val = palette.get(key)
-        if old_val and new_val and old_val != new_val:
-            themed = themed.replace(str(old_val), str(new_val))
+        for base_colors in base_color_sets:
+            old_val = base_colors.get(key)
+            if old_val and new_val and old_val != new_val:
+                themed = themed.replace(str(old_val), str(new_val))
 
     font_import_url = typography.get('font_import_url') or ''
     display_font = typography.get('display') or 'DM Sans'
@@ -1541,6 +1683,11 @@ def _apply_template_tokens_to_html(html, template_id, template_tokens):
         themed = themed.replace('</head>', f'{injection}</head>', 1)
     else:
         themed = f'{injection}{themed}'
+
+    if '<html' in themed[:500].lower() and 'data-template-id=' not in themed[:500].lower():
+        themed = re.sub(r'<html\b', f'<html data-template-id="{template_id}"', themed, count=1, flags=re.IGNORECASE)
+    elif 'data-template-id=' not in themed[:500].lower():
+        themed = f'<div data-template-id="{template_id}">{themed}</div>'
 
     return themed
 
@@ -1889,7 +2036,7 @@ def _inject_agency_logo_fallback(html, logo_url, agency_name):
 
     css = (
         '<style id="agency-logo-fallback">'
-        '.agency-logo-text{max-width:260px;color:var(--accent,var(--acento,#c9a84c));'
+        '.agency-logo-text{max-width:260px;color:var(--accent,var(--acento,currentColor));'
         'font-family:Inter,DM Sans,Arial,sans-serif;font-size:24px;font-weight:900;'
         'line-height:1.05;letter-spacing:3px;text-transform:uppercase;text-align:right;}'
         '</style>'
@@ -1918,7 +2065,7 @@ def _inject_agency_brand_lockup(html, logo_url, agency_name):
         'max-width:58px!important;max-height:58px!important;border-radius:999px!important;'
         'object-fit:contain!important;padding:6px!important;background:rgba(255,255,255,.92)!important;'
         'filter:none!important;flex:0 0 auto!important;}'
-        '.lb-brand-name{display:block!important;max-width:300px!important;color:var(--accent,var(--acento,#c9a84c))!important;'
+        '.lb-brand-name{display:block!important;max-width:300px!important;color:var(--accent,var(--acento,currentColor))!important;'
         'font-family:Inter,DM Sans,Arial,sans-serif!important;font-size:22px!important;font-weight:900!important;'
         'line-height:1.05!important;letter-spacing:.6px!important;text-transform:uppercase!important;'
         'text-align:left!important;text-shadow:0 2px 14px rgba(0,0,0,.35)!important;}'
@@ -2981,6 +3128,20 @@ def get_client_ip(request):
         ip = request.META.get('REMOTE_ADDR')
     return ip
 
+
+def _turnstile_guard_response(request):
+    from .services.turnstile import TurnstileError, validate_turnstile_token
+
+    token = request.data.get('turnstile_token') or request.data.get('cf-turnstile-response')
+    try:
+        validate_turnstile_token(token, remoteip=get_client_ip(request))
+    except TurnstileError as exc:
+        return Response({
+            'error': exc.code,
+            'message': exc.message,
+        }, status=exc.status_code)
+    return None
+
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from api.models import BannedIP, Agent
 
@@ -3215,6 +3376,10 @@ class RegisterView(APIView):
         if BannedIP.objects.filter(ip_address=ip).exists():
             return Response({'error': 'Tu IP ha sido bloqueada. No podÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s crear cuentas.'}, status=status.HTTP_403_FORBIDDEN)
         
+        turnstile_response = _turnstile_guard_response(request)
+        if turnstile_response is not None:
+            return turnstile_response
+
         # Verificar blacklist de emails baneados permanentemente
         from .models import Agent, BannedEmail
         if BannedEmail.objects.filter(email=email).exists():
@@ -5345,6 +5510,10 @@ def generar_carrusel(request):
 
         data = request.data
         generation_run_id, generation_step_name = _mark_generation_running(data, 'carrusel')
+        invalid_template_id = _invalid_explicit_template_id(data)
+        if invalid_template_id:
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {invalid_template_id}', error_code='template_invalid')
+            return _template_invalid_response(invalid_template_id)
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -5360,7 +5529,13 @@ def generar_carrusel(request):
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
-        template_carousel = TEMPLATE_CAROUSEL_MAP.get(template_id, TEMPLATE_CAROUSEL_MAP['dubai_night'])
+        if not get_template_contract(template_id):
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {template_id}', error_code='template_invalid')
+            return _template_invalid_response(template_id)
+        template_carousel, template_error_response = _resolve_template_file_or_response(template_id, TEMPLATE_CAROUSEL_MAP, 'carrusel')
+        if template_error_response:
+            _mark_generation_failed(generation_run_id, generation_step_name, template_error_response.data.get('mensaje'), error_code='template_invalid')
+            return template_error_response
         branding = _resolve_branding_payload(data, request.user)
         content_prefs = _attach_template_instructions_to_prefs(
             _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
@@ -5633,6 +5808,7 @@ Requisitos obligatorios:
             prompt_text,
             system_prompt="Sos un director de marketing inmobiliario digital. Devolves solo copy final listo para publicar.",
             agente=user,
+            model=_resolve_requested_ai_model(data),
             task='carousel_caption',
             listado_id=listado_id_val,
             generation_run_id=generation_run_id,
@@ -6596,44 +6772,7 @@ def construir_contexto_pdf(data, user, request=None):
     # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ DescripciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n IA (si no viene en el payload) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
     descripcion = data.get('descripcion', '')
     if not descripcion:
-        amenidades_str = ', '.join(amenidades) if amenidades else 'no especificadas'
-        prompt_desc = f"""Genera una descripcion inmobiliaria profesional de 2 parrafos para:
-{tipo_propiedad} en {operacion} en {ciudad}.
-Precio: {moneda} {precio}.
-Recamaras: {recamaras}. Banos: {banos}.
-Superficie construida: {superficie_cubierta}m2.
-Terreno: {superficie_total}m2.
-Amenidades: {amenidades_str}.
-
-Parrafo 1: Descripcion general de la propiedad y ubicacion (3-4 oraciones).
-Parrafo 2: Destacar amenidades y estilo de vida que ofrece (3-4 oraciones).
-Tono elegante y persuasivo. Solo los 2 parrafos, sin titulos ni bullets."""
-        try:
-            descripcion_ia = smart_call(
-                prompt_desc,
-                system_prompt="Sos un copywriter inmobiliario de lujo. Escribis en espanol, con tono sofisticado y persuasivo.",
-                agente=user,
-                task='pdf_description',
-                listado_id=data.get('listado_id') or data.get('listadoId'),
-                generation_run_id=data.get('generation_run_id') or data.get('generationRunId'),
-                generation_step=data.get('generation_step') or data.get('generationStep') or 'pdf',
-            )
-        except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as exc:
-            logger.warning("[PDF] Cerebras no disponible para descripcion (%s).", exc)
-            raise
-        if descripcion_ia:
-            descripcion = descripcion_ia
-            from .plan_utils import registrar_uso
-            registrar_uso(user, 'ai')
-        else:
-            logger.warning("[PDF] Cerebras no devolvio descripcion.")
-            raise APIKeyUnavailableError(
-                'Cerebras no devolvio descripcion para el PDF.',
-                provider='cerebras',
-                scope='provider',
-                quota_state='soft_rate_limited',
-                retry_after_seconds=60,
-            )
+        descripcion = _fallback_descripcion_pdf(data)
 
 
     # QR Code del agente
@@ -6705,6 +6844,10 @@ def generar_pdf(request):
     try:
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
         generation_run_id, generation_step_name = _mark_generation_running(data, 'pdf')
+        invalid_template_id = _invalid_explicit_template_id(data)
+        if invalid_template_id:
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {invalid_template_id}', error_code='template_invalid')
+            return _template_invalid_response(invalid_template_id)
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -6739,6 +6882,9 @@ def generar_pdf(request):
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_hint)
         template_id = selection.get('template_id')
+        if not get_template_contract(template_id):
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {template_id}', error_code='template_invalid')
+            return _template_invalid_response(template_id)
 
         context['listado_id'] = listado_id_hint
         context['template_id'] = template_id
@@ -6746,6 +6892,7 @@ def generar_pdf(request):
         context['template_instructions'] = selection.get('template_instructions')
         context['generation_run_id'] = generation_run_id
         context['generation_step'] = generation_step_name
+        context['ai_model'] = _resolve_requested_ai_model(data)
 
         logger.info(
             "[PDF] generar_pdf listado_id=%s template_id=%s user_id=%s",
@@ -6785,8 +6932,9 @@ def generar_pdf(request):
 
         html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
         html_string = _repair_mojibake_text(html_string)
+        html_string = _apply_template_tokens_to_html(html_string, template_id, selection.get('template_tokens'))
         validation_errors = _validate_generated_pdf_html(html_string, context)
-        if validation_errors:
+        if validation_errors and config('CEREBRAS_PDF_IMMEDIATE_REPAIR', default=False, cast=bool):
             try:
                 repair_context = {
                     **context,
@@ -6799,6 +6947,7 @@ def generar_pdf(request):
                 html_string = generar_html_gemini(repair_context, request.user)
                 html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
                 html_string = _repair_mojibake_text(html_string)
+                html_string = _apply_template_tokens_to_html(html_string, template_id, selection.get('template_tokens'))
                 validation_errors = _validate_generated_pdf_html(html_string, context)
             except Exception:
                 logger.exception('[PDF] Fallo retry de reparacion HTML')
@@ -6811,6 +6960,7 @@ def generar_pdf(request):
                 {
                     "error": "pdf_html_invalid",
                     "detalle": detalle,
+                    "validation_errors": validation_errors,
                     "template_id": template_id,
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -6937,6 +7087,10 @@ def generar_imagen_post(request):
 
         data = request.data
         generation_run_id, generation_step_name = _mark_generation_running(data, 'post')
+        invalid_template_id = _invalid_explicit_template_id(data)
+        if invalid_template_id:
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {invalid_template_id}', error_code='template_invalid')
+            return _template_invalid_response(invalid_template_id)
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -6998,7 +7152,13 @@ def generar_imagen_post(request):
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
-        template_post = TEMPLATE_POST_MAP.get(template_id, TEMPLATE_POST_MAP['dubai_night'])
+        if not get_template_contract(template_id):
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {template_id}', error_code='template_invalid')
+            return _template_invalid_response(template_id)
+        template_post, template_error_response = _resolve_template_file_or_response(template_id, TEMPLATE_POST_MAP, 'post')
+        if template_error_response:
+            _mark_generation_failed(generation_run_id, generation_step_name, template_error_response.data.get('mensaje'), error_code='template_invalid')
+            return template_error_response
         content_prefs = _attach_template_instructions_to_prefs(
             _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
             selection,
@@ -7043,6 +7203,7 @@ Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
             prompt_text,
             system_prompt="Sos un experto en marketing inmobiliario para redes sociales. Devolves solo copy final listo para publicar.",
             agente=request.user,
+            model=_resolve_requested_ai_model(data),
             task='post_caption',
             listado_id=listado_id_val,
             generation_run_id=generation_run_id,
@@ -7140,6 +7301,10 @@ def generar_imagen_story(request):
 
         data = request.data
         generation_run_id, generation_step_name = _mark_generation_running(data, 'story')
+        invalid_template_id = _invalid_explicit_template_id(data)
+        if invalid_template_id:
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {invalid_template_id}', error_code='template_invalid')
+            return _template_invalid_response(invalid_template_id)
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -7155,7 +7320,13 @@ def generar_imagen_story(request):
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
-        template_story = TEMPLATE_STORY_MAP.get(template_id, TEMPLATE_STORY_MAP['dubai_night'])
+        if not get_template_contract(template_id):
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {template_id}', error_code='template_invalid')
+            return _template_invalid_response(template_id)
+        template_story, template_error_response = _resolve_template_file_or_response(template_id, TEMPLATE_STORY_MAP, 'story')
+        if template_error_response:
+            _mark_generation_failed(generation_run_id, generation_step_name, template_error_response.data.get('mensaje'), error_code='template_invalid')
+            return template_error_response
         branding = _resolve_branding_payload(data, request.user)
         content_prefs = _attach_template_instructions_to_prefs(
             _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
@@ -7326,6 +7497,7 @@ Requisitos obligatorios:
             prompt_text,
             system_prompt="Sos un experto en marketing inmobiliario para stories. Devolves solo copy final listo para publicar.",
             agente=request.user,
+            model=_resolve_requested_ai_model(data),
             task='story_caption',
             listado_id=listado_id_val,
         )
@@ -7381,6 +7553,10 @@ def generar_email(request):
             
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
         generation_run_id, generation_step_name = _mark_generation_running(data, 'email')
+        invalid_template_id = _invalid_explicit_template_id(data)
+        if invalid_template_id:
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {invalid_template_id}', error_code='template_invalid')
+            return _template_invalid_response(invalid_template_id)
         blocked_media_response = _reject_blocked_media_data_uri(data, 'payload')
         if blocked_media_response:
             return blocked_media_response
@@ -7396,7 +7572,13 @@ def generar_email(request):
 
         selection = _resolve_template_selection(data, request.user, listado_obj=listado_obj, listado_id_hint=listado_id_val)
         template_id = selection.get('template_id')
-        template_email = TEMPLATE_EMAIL_MAP.get(template_id, TEMPLATE_EMAIL_MAP['dubai_night'])
+        if not get_template_contract(template_id):
+            _mark_generation_failed(generation_run_id, generation_step_name, f'Template invalido: {template_id}', error_code='template_invalid')
+            return _template_invalid_response(template_id)
+        template_email, template_error_response = _resolve_template_file_or_response(template_id, TEMPLATE_EMAIL_MAP, 'email')
+        if template_error_response:
+            _mark_generation_failed(generation_run_id, generation_step_name, template_error_response.data.get('mensaje'), error_code='template_invalid')
+            return template_error_response
         branding = _resolve_branding_payload(data, request.user)
         content_prefs = _attach_template_instructions_to_prefs(
             _resolve_content_preferences(request.user, selection.get('template_tokens'), data),
@@ -7442,6 +7624,7 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
             prompt_text,
             system_prompt="Sos un asistente técnico que solo responde en JSON.",
             agente=request.user,
+            model=_resolve_requested_ai_model(data),
             task='email',
             listado_id=listado_id_val,
             generation_run_id=generation_run_id,
@@ -8145,6 +8328,10 @@ def send_otp(request):
     if not email:
         return Response({"error": "Email requerido"}, status=400)
 
+    turnstile_response = _turnstile_guard_response(request)
+    if turnstile_response is not None:
+        return turnstile_response
+
     recent = OTPCode.objects.filter(
         email=email,
         creado_en__gte=timezone.now() - timedelta(minutes=15)
@@ -8251,6 +8438,10 @@ def recuperar_password(request):
     email = request.data.get('email', '').strip().lower()
     if not email:
         return Response({"error": "Email requerido"}, status=400)
+
+    turnstile_response = _turnstile_guard_response(request)
+    if turnstile_response is not None:
+        return turnstile_response
 
     generic_response = {"mensaje": "Si el email existe, te enviamos un cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo de recuperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n."}
 

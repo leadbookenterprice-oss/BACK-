@@ -18,6 +18,7 @@ from .models import (
 )
 from api.services.pool_service import SERVICE_DEFAULTS
 from api.services.api_usage_monitor import build_api_usage_logs, build_api_usage_summary
+from api.services.ai_router import build_ai_root_payload, save_ai_root_config, test_ai_root
 from admin_panel.auth import is_admin_request
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
@@ -467,6 +468,63 @@ def admin_usuario_detalle(request, user_id):
         })
     except Agent.DoesNotExist:
         return Response({'error': 'Not found'}, status=404)
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([AllowAny])
+def admin_ai_root(request):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == 'GET':
+        return Response(build_ai_root_payload())
+
+    provider = request.data.get('provider')
+    model = request.data.get('model')
+    try:
+        save_ai_root_config(
+            provider,
+            model,
+            updated_by=getattr(request.user, 'email', '') or 'admin',
+        )
+    except ValueError as exc:
+        payload = build_ai_root_payload()
+        payload.update({
+            'error': 'ai_root_unavailable',
+            'message': str(exc),
+        })
+        return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+
+    payload = build_ai_root_payload()
+    payload['saved'] = True
+    return Response(payload)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_ai_root_test(request):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        result = test_ai_root(
+            provider=request.data.get('provider'),
+            model=request.data.get('model'),
+            prompt=request.data.get('prompt'),
+        )
+    except ValueError as exc:
+        return Response(
+            {'error': 'ai_root_unavailable', 'message': str(exc), **build_ai_root_payload()},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except Exception as exc:
+        return Response(
+            {'error': 'ai_root_test_failed', 'message': str(exc), **build_ai_root_payload()},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    return Response(result)
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

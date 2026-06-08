@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from api.models import (
     APIKey,
@@ -36,6 +37,12 @@ TASK_TO_STEP = {
 }
 
 ACTIVE_RUN_STATUSES = ['pending', 'running', 'waiting_slot', 'waiting_rate_limit']
+CEREBRAS_FATAL_ERROR_CODES = {
+    'hard_exhausted',
+    'api_key_unavailable',
+    'quota_exhausted',
+    'cuota_ia_agotada',
+}
 CEREBRAS_SAFE_DAILY_LIMIT = int(getattr(settings, 'CEREBRAS_SAFE_DAILY_TOKEN_LIMIT', 800000) or 800000)
 CEREBRAS_PACK_ESTIMATED_TOKENS = int(getattr(settings, 'CEREBRAS_PACK_ESTIMATED_TOKENS', 25000) or 25000)
 
@@ -86,6 +93,32 @@ def retry_after_from_headers(headers, fallback=None):
     retry_after = _safe_int(raw, None)
     if retry_after is not None and retry_after > 0:
         return retry_after
+    reset_candidates = []
+    now = timezone.now()
+    for key, value in headers.items():
+        normalized = str(key or '').strip().lower()
+        if not normalized.startswith('x-ratelimit-reset'):
+            continue
+        parsed_int = _safe_int(value, None)
+        if parsed_int is not None and parsed_int > 0:
+            if parsed_int > 10_000_000_000:
+                parsed_int = int(parsed_int / 1000)
+            if parsed_int > 1_000_000_000:
+                seconds = parsed_int - int(now.timestamp())
+            else:
+                seconds = parsed_int
+            if seconds > 0:
+                reset_candidates.append(seconds)
+                continue
+        parsed_dt = parse_datetime(str(value or '').strip())
+        if parsed_dt:
+            if timezone.is_naive(parsed_dt):
+                parsed_dt = timezone.make_aware(parsed_dt, timezone.get_current_timezone())
+            seconds = int((parsed_dt - now).total_seconds())
+            if seconds > 0:
+                reset_candidates.append(seconds)
+    if reset_candidates:
+        return min(reset_candidates)
     return fallback
 
 
@@ -369,6 +402,25 @@ def _refresh_run_totals(run):
     run.requests_count = _safe_int(totals.get('requests'), 0)
 
 
+def _is_fatal_generation_error(error_code='', error_message=''):
+    code = str(error_code or '').strip().lower()
+    message = str(error_message or '').strip().lower()
+    if code in CEREBRAS_FATAL_ERROR_CODES:
+        return True
+    return any(term in message for term in (
+        'hard_exhausted',
+        'cuota agotada',
+        'quota exhausted',
+        'insufficient credits',
+        'billing',
+        'payment',
+    ))
+
+
+def _next_actionable_step(steps):
+    return next((item for item in steps if item.status in {'pending', 'waiting_rate_limit'}), None)
+
+
 def mark_generation_step(run_id, step_name, status_value, *, result=None, error_code='', error_message='', rate_limit_headers=None):
     run_id = _safe_int(run_id, None)
     if not run_id or step_name not in CONTENT_PACK_STEPS:
@@ -415,20 +467,36 @@ def mark_generation_step(run_id, step_name, status_value, *, result=None, error_
             if rate_limit_headers:
                 run.last_rate_limit_headers = rate_limit_headers
         elif status_value == 'failed':
-            run.status = 'failed'
-            run.completed_at = run.completed_at or now
-            run.error_code = step.error_code
-            run.error_message = step.error_message
-        elif status_value == 'done':
-            all_steps = list(run.steps.all())
-            if all(item.status == 'done' for item in all_steps):
+            all_steps = list(run.steps.all().order_by('order', 'id'))
+            pending = _next_actionable_step(all_steps)
+            is_fatal = _is_fatal_generation_error(step.error_code, step.error_message)
+            if pending and not is_fatal:
+                run.status = 'running'
+                run.current_step = pending.step
+                run.error_code = ''
+                run.error_message = ''
+                run.completed_at = None
+            elif not is_fatal and all(item.status in {'done', 'failed', 'skipped'} for item in all_steps):
                 run.status = 'done'
                 run.current_step = ''
                 run.completed_at = run.completed_at or now
                 run.error_code = ''
                 run.error_message = ''
             else:
-                pending = next((item.step for item in all_steps if item.status != 'done'), None)
+                run.status = 'failed'
+                run.completed_at = run.completed_at or now
+                run.error_code = step.error_code
+                run.error_message = step.error_message
+        elif status_value == 'done':
+            all_steps = list(run.steps.all())
+            if all(item.status in {'done', 'failed', 'skipped'} for item in all_steps):
+                run.status = 'done'
+                run.current_step = ''
+                run.completed_at = run.completed_at or now
+                run.error_code = ''
+                run.error_message = ''
+            else:
+                pending = next((item.step for item in all_steps if item.status not in {'done', 'failed', 'skipped'}), None)
                 run.status = 'running'
                 run.current_step = pending or step_name
 

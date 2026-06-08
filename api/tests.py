@@ -51,6 +51,17 @@ class _FakeStreamResponse:
         yield self.content
 
 
+class _FakeTurnstileResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
 class GeminiPoolSelectionTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
@@ -1015,6 +1026,62 @@ class PasswordRecoveryCodeTests(TestCase):
             nombre='Password Code Tester',
         )
         self.client = APIClient()
+
+    @override_settings(TURNSTILE_REQUIRED=True, TURNSTILE_SECRET_KEY='test-secret')
+    def test_send_otp_requires_turnstile_when_enabled(self):
+        response = self.client.post(
+            '/api/auth/send-otp/',
+            {'email': 'new-user@leadbook.local'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json().get('error'), 'turnstile_required')
+
+    @override_settings(TURNSTILE_REQUIRED=True, TURNSTILE_SECRET_KEY='test-secret')
+    def test_register_requires_turnstile_when_enabled(self):
+        response = self.client.post(
+            '/api/auth/register/',
+            {
+                'email': 'new-user@leadbook.local',
+                'password': 'NewPass123!',
+                'nombre': 'New User',
+                'signup_type': 'paid',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json().get('error'), 'turnstile_required')
+
+    @override_settings(TURNSTILE_REQUIRED=True, TURNSTILE_SECRET_KEY='test-secret')
+    @patch('api.services.turnstile.requests.post', return_value=_FakeTurnstileResponse({'success': True}))
+    @patch('api.tasks.send_otp_email_async', return_value='sent:test')
+    def test_public_recovery_accepts_valid_turnstile(self, send_otp, siteverify):
+        response = self.client.post(
+            '/api/auth/recuperar-password/',
+            {'email': self.user.email, 'turnstile_token': 'valid-token'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(send_otp.called)
+        self.assertTrue(siteverify.called)
+
+    @override_settings(TURNSTILE_REQUIRED=True, TURNSTILE_SECRET_KEY='test-secret')
+    @patch('api.services.turnstile.requests.post', return_value=_FakeTurnstileResponse({'success': False, 'error-codes': ['invalid-input-response']}))
+    @patch('api.tasks.send_otp_email_async', return_value='sent:test')
+    def test_public_recovery_rejects_invalid_turnstile(self, send_otp, siteverify):
+        response = self.client.post(
+            '/api/auth/recuperar-password/',
+            {'email': self.user.email, 'turnstile_token': 'bad-token'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json().get('error'), 'turnstile_invalid')
+        self.assertFalse(send_otp.called)
+        self.assertTrue(siteverify.called)
 
     @patch('api.tasks.send_otp_email_async', return_value='sent:test')
     def test_public_recovery_allows_password_reset_with_code(self, send_otp):

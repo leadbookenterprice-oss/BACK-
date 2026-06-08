@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es" data-template-id="{{ template_id }}">
+<head>
+<meta charset="UTF-8">
+{% if font_import_url %}<link href="{{ font_import_url }}" rel="stylesheet">{% endif %}
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--primary:{{ primary }};--secondary:{{ secondary }};--accent:{{ accent }};--bg:{{ background }};--text:{{ text }};--surface:{{ surface }}}
+body{width:1080px;height:1920px;background:var(--bg);font-family:'{{ body_font }}',Arial,sans-serif;color:var(--text);overflow:hidden;position:relative}
+.bg-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;filter:{{ image_filter|default:"none" }}}
+.overlay{position:absolute;inset:0;background:linear-gradient(0deg,var(--bg) 0%,{{ overlay_mid }} 44%,rgba(255,255,255,.12) 100%);z-index:2}
+.content{position:absolute;inset:0;z-index:3;padding:82px 66px 104px;display:flex;flex-direction:column;justify-content:space-between}
+.top-section{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+.logo{max-width:230px;max-height:92px;object-fit:contain;filter:{{ logo_filter|default:"none" }}}
+.badge{border:1px solid var(--primary);color:var(--primary);background:{{ badge_bg }};font-size:20px;font-weight:700;letter-spacing:3px;padding:10px 20px;text-transform:uppercase;border-radius:999px}
+.bottom-section{display:flex;flex-direction:column;gap:22px}
+.title{font-family:'{{ display_font }}',Georgia,serif;font-size:112px;font-weight:600;line-height:.9;color:var(--text)}
+.title span{color:var(--primary)}
+.price-box{display:inline-block;align-self:flex-start;border-bottom:3px solid var(--accent);padding:7px 2px;font-family:'{{ display_font }}',Georgia,serif;font-size:46px;font-weight:700;color:var(--primary)}
+.stats-grid{display:flex;gap:10px;margin-top:16px}
+.stat-item{flex:1;border:1px solid {{ border }};border-radius:14px;padding:20px 12px;background:var(--surface);text-align:center}
+.stat-value{font-family:'{{ display_font }}',Georgia,serif;font-size:42px;color:var(--primary);line-height:1}
+.stat-label{font-size:13px;letter-spacing:2px;color:var(--secondary);text-transform:uppercase;margin-bottom:4px}
+.contact-strip{margin-top:14px;display:flex;justify-content:space-between;align-items:flex-end;gap:18px;border:1px solid {{ border }};border-radius:14px;padding:14px 16px;background:var(--surface)}
+.agent-box{display:flex;flex-direction:column;gap:3px;max-width:70%}
+.agent-name{font-family:'{{ display_font }}',Georgia,serif;font-size:39px;color:var(--primary);line-height:1}
+.agent-role{font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--secondary)}
+.agent-meta{font-size:20px;color:var(--text)}
+.qr-box{display:flex;flex-direction:column;align-items:center;gap:6px}
+.qr-box img{width:118px;height:118px;padding:6px;background:#fff;border:1px solid {{ border }};border-radius:8px}
+.qr-box span{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--secondary)}
+</style>
+</head>
+<body>
+  {% if portada_url %}<img src="{{ portada_url }}" class="bg-image" alt="Propiedad">{% endif %}
+  <div class="overlay"></div>
+  <div class="content">
+    <div class="top-section">
+      <div class="badge">{{ operacion }}</div>
+      {% if logo_url %}<div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo" alt="{{ agencia_nombre }}"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% else %}<div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% endif %}
+    </div>
+    <div class="bottom-section">
+      <div class="title">{{ tipoPropiedad }}<br><span>{{ ciudad }}</span></div>
+      <div class="price-box">{{ moneda }} {{ precio }}</div>
+      {% if caracteristicas %}
+      <div class="stats-grid">
+        {% for stat in caracteristicas|slice:":3" %}
+        <div class="stat-item"><div class="stat-label">{{ stat.label }}</div><div class="stat-value">{{ stat.valor }}</div></div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="contact-strip">
+        <div class="agent-box">
+          <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+          <div class="agent-role">{{ agente_rol|default:"Asesor Comercial" }} | {{ agencia_nombre }}</div>
+          <div class="agent-meta">{{ agente_telefono }}</div>
+        </div>
+        {% if qr_url %}<div class="qr-box"><img src="{{ qr_url }}" alt="QR"><span>Contactar</span></div>{% endif %}
+      </div>
+    </div>
+  </div>
+</body>
+</html>

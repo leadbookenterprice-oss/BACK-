@@ -8,6 +8,7 @@ import os
 import random
 import re
 import unicodedata
+import json
 from api.tracking import track_api_call
 from api.services.cerebras_slots import (
     CerebrasSlotUnavailable,
@@ -23,6 +24,12 @@ from api.services.content_generation import (
     record_cerebras_usage,
     retry_after_from_headers,
 )
+from api.services.template_contracts import (
+    build_pdf_contract_text,
+    get_template_contract,
+    normalize_template_id as normalize_contract_template_id,
+)
+from api.services.ai_router import call_configured_ai
 
 logger = logging.getLogger(__name__)
 LIMIT_REACHED_MESSAGE = "Límite de generación alcanzado. Podés comprar más créditos o actualizar tu plan."
@@ -77,6 +84,44 @@ def _mark_cerebras_exhausted(key_value):
         key_obj.save(update_fields=['status', 'requests_today', 'updated_at'])
     except Exception:
         pass
+
+
+def _is_hard_cerebras_429(response_text):
+    normalized = str(response_text or '').lower()
+    if not normalized:
+        return False
+
+    soft_terms = (
+        'rate limit',
+        'too many requests',
+        'requests per minute',
+        'tokens per minute',
+        'rpm',
+        'tpm',
+        'try again',
+        'retry after',
+        'temporar',
+    )
+    if any(term in normalized for term in soft_terms):
+        return False
+
+    hard_terms = (
+        'insufficient credits',
+        'credit exhausted',
+        'credits exhausted',
+        'balance',
+        'billing',
+        'payment',
+        'monthly quota',
+        'daily quota',
+        'quota exhausted',
+        'quota limit',
+        'project quota',
+        'organization quota',
+        'usage limit reached',
+        'subscription',
+    )
+    return any(term in normalized for term in hard_terms)
 
 
 def _record_cerebras_request_log(slot_id, user, *, success, status_code, elapsed_ms, tokens_used, error_message=''):
@@ -295,7 +340,16 @@ def _resolve_theme_from_context(context, template_file):
     # 2. Buscar en TEMPLATE_COLORES usando el id o el nombre del archivo
     base = {}
     if template_id:
-        base = TEMPLATE_COLORES.get(template_id, {})
+        contract = get_template_contract(template_id)
+        if contract:
+            colors = contract.get('colors') or {}
+            base = {
+                'primario': colors.get('primary'),
+                'secundario': colors.get('secondary'),
+                'acento': colors.get('accent'),
+            }
+        else:
+            base = TEMPLATE_COLORES.get(template_id, {})
     if not base and template_file:
         base = TEMPLATE_COLORES.get(template_file, {})
         
@@ -507,7 +561,7 @@ def generar_html_desde_template(context, agente):
     if not template_elegido:
         template_elegido = random.choice(list(TEMPLATE_COLORES.keys()))
 
-    template_id = template_elegido.replace('template_', '').replace('.html', '')
+    template_id = _normalize_template_id(context.get('template_id')) or template_elegido.replace('template_', '').replace('.html', '')
     context['template_id'] = template_id
 
     if listado:
@@ -826,9 +880,10 @@ def call_groq_api(prompt: str, **kwargs) -> str:
     client = Groq(api_key=key)
     system_prompt = kwargs.get('system_prompt', '')
     model = kwargs.get('model') or 'llama-3.1-8b-instant'
+    allow_model_fallback = kwargs.get('allow_model_fallback', True)
 
     # Lista de fallback para robustez ante deprecaciones
-    modelos_fallback = [
+    modelos_fallback = [model] if not allow_model_fallback else [
         model,
         'llama-3.3-70b-versatile',
         'llama-3.1-8b-instant',
@@ -875,6 +930,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
         task,
         kwargs.get('max_completion_tokens'),
     )
+    extra_metadata = kwargs.get('metadata') if isinstance(kwargs.get('metadata'), dict) else {}
     estimated_tokens = estimate_cerebras_tokens(
         prompt,
         system_prompt=system_prompt,
@@ -911,7 +967,8 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
 
     full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
     requested_model = kwargs.get('model') or CEREBRAS_MODELS_CASCADE[0]
-    models_fallback = [requested_model] + [m for m in CEREBRAS_MODELS_CASCADE if m != requested_model]
+    allow_model_fallback = kwargs.get('allow_model_fallback', True)
+    models_fallback = [requested_model] if not allow_model_fallback else [requested_model] + [m for m in CEREBRAS_MODELS_CASCADE if m != requested_model]
     headers = {
         'Authorization': f'Bearer {key}',
         'Content-Type': 'application/json',
@@ -946,11 +1003,8 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                 data = response.json() if response.content else {}
                 content = ((data.get('choices') or [{}])[0].get('message') or {}).get('content')
                 usage = data.get('usage') or {}
-                actual_tokens = usage.get('total_tokens') or usage.get('total_tokens_used')
-                try:
-                    actual_tokens_value = int(actual_tokens) if actual_tokens is not None else None
-                except (TypeError, ValueError):
-                    actual_tokens_value = None
+                actual_tokens_value, usage_metadata = _extract_cerebras_usage_tokens(usage)
+                usage_extra_metadata = {**extra_metadata, **usage_metadata}
                 if content:
                     if slot:
                         record_cerebras_slot_result(
@@ -965,7 +1019,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                             success=True,
                             status_code=response.status_code,
                             elapsed_ms=elapsed_ms,
-                            tokens_used=max(actual_tokens_value or 0, estimated_tokens),
+                            tokens_used=actual_tokens_value if actual_tokens_value is not None else estimated_tokens,
                         )
                     _record_cerebras_usage_log(
                         slot.key_id if slot else None,
@@ -981,7 +1035,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                         estimated_tokens=estimated_tokens,
                         actual_tokens=actual_tokens_value,
                         rate_limit_headers=rate_limit_headers,
-                        metadata={'max_completion_tokens': max_completion_tokens},
+                        metadata={'max_completion_tokens': max_completion_tokens, **usage_extra_metadata},
                     )
                     attempt_recorded = True
                     return content
@@ -1018,7 +1072,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                     actual_tokens=actual_tokens_value,
                     rate_limit_headers=rate_limit_headers,
                     error_message=last_err,
-                    metadata={'max_completion_tokens': max_completion_tokens, 'empty_response': True},
+                    metadata={'max_completion_tokens': max_completion_tokens, 'empty_response': True, **usage_extra_metadata},
                 )
                 attempt_recorded = True
                 continue
@@ -1056,7 +1110,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                     estimated_tokens=estimated_tokens,
                     rate_limit_headers=rate_limit_headers,
                     error_message=response_text or 'Cerebras auth failed',
-                    metadata={'max_completion_tokens': max_completion_tokens},
+                    metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
                 )
                 attempt_recorded = True
                 if slot:
@@ -1100,11 +1154,10 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                     rate_limit_headers=rate_limit_headers,
                     retry_after_seconds=retry_after_seconds,
                     error_message=response_text or 'Cerebras rate limited',
-                    metadata={'max_completion_tokens': max_completion_tokens},
+                    metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
                 )
                 attempt_recorded = True
-                hard_terms = ('quota', 'credits', 'insufficient', 'exceeded', 'monthly', 'payment', 'balance', 'limit')
-                if any(term in normalized for term in hard_terms):
+                if _is_hard_cerebras_429(normalized):
                     if slot:
                         mark_cerebras_slot_exhausted(slot.key_id, response_text or 'Cerebras quota exhausted')
                     else:
@@ -1155,7 +1208,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                 estimated_tokens=estimated_tokens,
                 rate_limit_headers=rate_limit_headers,
                 error_message=error_obj,
-                metadata={'max_completion_tokens': max_completion_tokens},
+                metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
             )
             attempt_recorded = True
             if any(term in normalized for term in model_terms):
@@ -1193,7 +1246,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                     elapsed_ms=int((time.time() - attempt_started_at) * 1000),
                     estimated_tokens=estimated_tokens,
                     error_message=exc,
-                    metadata={'max_completion_tokens': max_completion_tokens},
+                    metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
                 )
             raise
         except Exception as exc:
@@ -1227,7 +1280,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                     elapsed_ms=int((time.time() - attempt_started_at) * 1000),
                     estimated_tokens=estimated_tokens,
                     error_message=last_err,
-                    metadata={'max_completion_tokens': max_completion_tokens},
+                    metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
                 )
 
     if last_err:
@@ -1312,16 +1365,145 @@ def smart_call(prompt: str, retries=3, agente=None, **kwargs) -> str:
     import time
     for attempt in range(retries):
         try:
-            result = call_cerebras_api(prompt, agente=agente, **kwargs)
+            result = call_configured_ai(prompt, agente=agente, **kwargs)
             if result:
                 return result
         except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError):
             raise
         except Exception as e:
-            print(f"Cerebras attempt {attempt+1}/{retries} failed: {str(e)}")
+            print(f"AI root attempt {attempt+1}/{retries} failed: {str(e)}")
             if attempt < retries - 1:
                 time.sleep(1)
     return None
+
+
+def _clip_text(value, max_chars=900):
+    text = str(value or '').strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + '...'
+
+
+def _as_clean_list(value, limit=8):
+    if not isinstance(value, (list, tuple)):
+        return []
+    result = []
+    for item in value:
+        text = str(item or '').strip()
+        if text:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _build_controlled_pdf_html_prompt(context):
+    template_id = normalize_contract_template_id(context.get('template_id')) or 'tech_modern'
+    contract = get_template_contract(template_id)
+    if not contract:
+        return None, None
+
+    gallery = _as_clean_list(context.get('fotos_recorrido_raw') or context.get('fotos_recorrido'), limit=6)
+    amenities = _as_clean_list(context.get('amenidades'), limit=12)
+    payload = {
+        'template_contract': build_pdf_contract_text(template_id),
+        'property': {
+            'title': f"{context.get('tipo_propiedad') or 'Propiedad'} en {context.get('ciudad') or ''}".strip(),
+            'type': context.get('tipo_propiedad') or 'Propiedad',
+            'operation': context.get('operacion') or 'Venta',
+            'city': context.get('ciudad') or '',
+            'price': f"{context.get('moneda') or 'USD'} {context.get('precio') or ''}".strip(),
+            'bedrooms': context.get('recamaras') or 'N/A',
+            'bathrooms': context.get('banos') or 'N/A',
+            'covered_area': context.get('superficie_cubierta') or 'N/A',
+            'total_area': context.get('superficie_total') or 'N/A',
+            'parking': context.get('estacionamientos') or 'N/A',
+            'description': _clip_text(context.get('descripcion'), 1100),
+            'amenities': amenities,
+        },
+        'media': {
+            'cover_url': context.get('portada_url') or '',
+            'gallery_urls': gallery,
+            'agency_logo_url': context.get('logo_url') or context.get('agencia_logo_url') or '',
+            'agent_photo_url': context.get('agente_foto_url') or '',
+            'qr_url': context.get('qr_code') or '',
+        },
+        'agent': {
+            'name': context.get('agente_nombre') or '',
+            'role': context.get('agente_rol') or 'Asesor Comercial',
+            'phone': context.get('agente_telefono') or '',
+            'email': context.get('agente_email') or '',
+            'agency': context.get('agencia_nombre') or '',
+            'contact_html': context.get('agente_contacto_html') or '',
+        },
+    }
+
+    colors = contract['colors']
+    fonts = contract['fonts']
+    prompt = f"""
+Genera UN HTML completo para PDF A4 inmobiliario de LeadBook.
+No generes una web navegable. No uses nav, menu, Inicio, Propiedades, Contacto superior ni links de landing.
+Devolve solo HTML puro completo, sin markdown ni explicaciones.
+
+Contrato visual obligatorio:
+- El tag raiz debe ser: <html lang="es" data-leadbook-pdf="true" data-template-id="{template_id}">
+- Usar CSS dentro de <style> en <head>.
+- Definir :root con estos colores exactos:
+  --brand-primary:{colors['primary']}; --brand-secondary:{colors['secondary']}; --brand-accent:{colors['accent']}; --brand-bg:{colors['background']}; --brand-text:{colors['text']};
+- Tipografias: display "{fonts['display']}", body "{fonts['body']}", mono "{fonts['mono']}".
+- Incluir en el HTML visible o CSS los colores primary y accent exactos.
+- Secciones obligatorias con data-section exacto: hero, price, stats, description, amenities, gallery, contact.
+- Las secciones description, amenities y cada item de galeria deben tener break-inside: avoid; page-break-inside: avoid.
+- Hero usa cover_url. Galeria usa gallery_urls reales. Si falta una imagen, no inventes URL.
+- Amenidades deben tener chips con iconos SVG inline simples.
+- Contacto debe incluir agente, agencia, telefono/email si existen, logo si existe y QR si existe.
+- Si un dato falta, mostrar "No informado" dentro de la seccion correspondiente; no omitir secciones.
+
+Datos compactos:
+{json.dumps(payload, ensure_ascii=False)}
+"""
+    return prompt.strip(), contract
+
+
+def _clean_ai_html_output(html_output):
+    html_output = str(html_output or '').strip()
+    if html_output.startswith('```html'):
+        html_output = html_output[7:].strip()
+    if html_output.startswith('```'):
+        html_output = html_output[3:].strip()
+    if html_output.endswith('```'):
+        html_output = html_output[:-3].strip()
+    return html_output.strip()
+
+
+def _extract_cerebras_usage_tokens(usage):
+    if not isinstance(usage, dict):
+        return None, {}
+
+    def _safe_int_token(value):
+        try:
+            if value is None:
+                return None
+            parsed = int(value)
+            return parsed if parsed >= 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    prompt_tokens = _safe_int_token(usage.get('prompt_tokens') or usage.get('input_tokens'))
+    completion_tokens = _safe_int_token(usage.get('completion_tokens') or usage.get('output_tokens'))
+    total_tokens = _safe_int_token(usage.get('total_tokens') or usage.get('total_tokens_used'))
+    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+        total_tokens = prompt_tokens + completion_tokens
+
+    metadata = {
+        'usage': usage,
+        'usage_prompt_tokens': prompt_tokens,
+        'usage_completion_tokens': completion_tokens,
+        'usage_total_tokens': total_tokens,
+        'token_count_source': 'cerebras_usage' if total_tokens is not None else 'estimated_fallback',
+    }
+    return total_tokens, metadata
+
 
 @track_api_call(service='elevenlabs')
 def call_elevenlabs_api(text: str, agente=None, voz='femenina', voice_id=None, voice_settings=None) -> bytes:
@@ -1601,6 +1783,45 @@ def generar_html_gemini(context, agente):
 
         # ─── PASO 1: Generar prompt creativo de diseño ───────────────────────────
         # Variantes de estilo para que cada ficha sea visualmente distinta
+        if getattr(settings, 'CEREBRAS_PDF_LEGACY_TWO_STEP', False):
+            logger.warning("[HTML Gen] CEREBRAS_PDF_LEGACY_TWO_STEP ignorado: PDF_MODE=controlled_single_call")
+        if True:
+            prompt_step2, contract = _build_controlled_pdf_html_prompt(context)
+            if not prompt_step2 or not contract:
+                logger.error("[HTML] Template invalido para PDF controlado: %s", context.get('template_id'))
+                return None
+            logger.info("[HTML Gen] PDF_MODE=controlled_single_call template=%s", contract.get('id'))
+            html_output = call_configured_ai(
+                prompt_step2,
+                agente=agente,
+                task='html_full',
+                listado_id=context.get('listado_id'),
+                generation_run_id=context.get('generation_run_id'),
+                generation_step=context.get('generation_step') or 'pdf',
+                system_prompt=(
+                    "Sos un maquetador senior de PDFs inmobiliarios. "
+                    "Cumplis contratos HTML estrictos y devolves solo HTML."
+                ),
+                temperature=0.35,
+                top_p=0.9,
+                max_completion_tokens=3400,
+                metadata={
+                    'pdf_controlled_prompt': True,
+                    'template_id': contract.get('id'),
+                    'base_layout': contract.get('base_layout'),
+                },
+            )
+            html_output = _clean_ai_html_output(html_output)
+            if not html_output:
+                return None
+            html_output = _replace_fontawesome_icons(html_output)
+            logger.info(
+                "[HTML Gen] PDF controlado template=%s chars=%s",
+                contract.get('id'),
+                len(html_output),
+            )
+            return html_output
+
         style_seeds = [
             "Elegante y minimalista de la Quinta Avenida: tipografía serif editorial para títulos (Playfair Display), mucho espacio negativo, paleta de blancos rotos y carbón, acentos en oro champán.",
             "Modernismo radical de Beverly Hills: tipografía sans-serif geométrica (Montserrat 900), contrastes de alto impacto, secciones con bordes nítidos, paleta monocromática con un color de acento vibrante.",
@@ -1655,10 +1876,9 @@ Devolvé SOLO el prompt de diseño técnico (texto plano, sin markdown, sin intr
             try:
                 print(f"[HTML] ▶ Paso 1 - Intentando con {provider} ({model_id})...")
                 if provider == 'cerebras':
-                    design_prompt = call_cerebras_api(
+                    design_prompt = call_configured_ai(
                         prompt_step1,
                         agente=agente,
-                        model=model_id,
                         task='html_design',
                         listado_id=context.get('listado_id'),
                         generation_run_id=context.get('generation_run_id'),
@@ -1816,10 +2036,9 @@ REGLAS DE DISEÑO PREMIUM:
             print(f"[HTML] ▶ Paso 2 - Intentando con {provider} ({model_id})...")
             try:
                 if provider == 'cerebras':
-                    html_output = call_cerebras_api(
+                    html_output = call_configured_ai(
                         prompt_step2_nim,
                         agente=agente,
-                        model=model_id,
                         task='html_full',
                         listado_id=context.get('listado_id'),
                         generation_run_id=context.get('generation_run_id'),

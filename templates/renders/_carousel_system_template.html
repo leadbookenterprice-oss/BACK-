@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es" data-template-id="{{ template_id }}">
+<head>
+<meta charset="UTF-8">
+{% if font_import_url %}<link href="{{ font_import_url }}" rel="stylesheet">{% endif %}
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--primary:{{ primary }};--secondary:{{ secondary }};--accent:{{ accent }};--bg:{{ background }};--text:{{ text }};--surface:{{ surface }}}
+body{width:1080px;height:1350px;background:var(--bg);font-family:'{{ body_font }}',Arial,sans-serif;color:var(--text);overflow:hidden;position:relative}
+.bg-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;filter:{{ image_filter|default:"none" }}}
+.overlay{position:absolute;inset:0;background:linear-gradient(0deg,var(--bg) 0%,{{ overlay_mid }} 45%,rgba(255,255,255,.1) 100%);z-index:2}
+.content{position:absolute;inset:0;z-index:3;padding:74px;display:flex;flex-direction:column;justify-content:space-between}
+.top{display:flex;justify-content:space-between;align-items:flex-start}
+.logo{max-width:230px;max-height:92px;object-fit:contain;filter:{{ logo_filter|default:"none" }}}
+.badge{border:1px solid var(--primary);color:var(--primary);background:{{ badge_bg }};font-size:17px;letter-spacing:3px;padding:9px 16px;text-transform:uppercase;border-radius:999px}
+.middle{display:flex;flex-direction:column;gap:22px;margin-bottom:22px}
+.headline{font-family:'{{ display_font }}',Georgia,serif;font-size:116px;line-height:.9;color:var(--text)}
+.subheadline{font-size:39px;line-height:1.28;color:var(--secondary);max-width:900px}
+.footer{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;border:1px solid {{ border }};border-radius:12px;padding:13px 15px;background:var(--surface)}
+.agent-name{font-family:'{{ display_font }}',Georgia,serif;font-size:34px;color:var(--primary);line-height:1}
+.agent-meta{font-size:18px;color:var(--text);margin-top:3px}
+.footer-text{font-size:12px;color:var(--secondary);letter-spacing:2px;text-transform:uppercase;margin-top:6px}
+.qr-box{display:flex;flex-direction:column;align-items:center;gap:5px}
+.qr-box img{width:90px;height:90px;padding:5px;background:#fff;border:1px solid {{ border }};border-radius:7px}
+.qr-box span{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--secondary)}
+</style>
+</head>
+<body>
+  {% if portada_url %}<img src="{{ portada_url }}" class="bg-image" alt="Propiedad">{% endif %}
+  <div class="overlay"></div>
+  <div class="content">
+    <div class="top">
+      {% if logo_url %}<div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo" alt="{{ agencia_nombre }}"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% else %}<div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% endif %}
+      <div class="badge">{{ operacion }}</div>
+    </div>
+    <div class="middle">
+      <div class="headline">{{ headline }}</div>
+      <div class="subheadline">{{ subheadline }}</div>
+    </div>
+    <div class="footer">
+      <div class="agent-box">
+        <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+        <div class="agent-meta">{{ agente_telefono }}</div>
+        {% if slide_number < total_slides %}<div class="footer-text">Desliza para conocer mas</div>{% else %}<div class="footer-text">Guardalo y agenda visita</div>{% endif %}
+      </div>
+      {% if qr_url %}<div class="qr-box"><img src="{{ qr_url }}" alt="QR"><span>Contactar</span></div>{% endif %}
+    </div>
+  </div>
+</body>
+</html>

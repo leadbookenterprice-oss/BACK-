@@ -215,7 +215,17 @@ def record_cerebras_slot_result(slot_id, *, estimated_tokens=1, actual_tokens=No
     if not slot_id:
         return
     now = timezone.now()
-    charged_tokens = max(int(actual_tokens or estimated_tokens or 1), int(estimated_tokens or 1), 1) if success else 0
+    if success:
+        try:
+            actual_tokens_value = int(actual_tokens) if actual_tokens is not None else None
+        except (TypeError, ValueError):
+            actual_tokens_value = None
+        if actual_tokens_value is not None and actual_tokens_value >= 0:
+            charged_tokens = actual_tokens_value
+        else:
+            charged_tokens = max(int(estimated_tokens or 1), 1)
+    else:
+        charged_tokens = 0
     with transaction.atomic():
         key = APIKey.objects.select_for_update().filter(pk=slot_id, servicio__nombre__iexact='cerebras').first()
         if not key:

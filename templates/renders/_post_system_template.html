@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es" data-template-id="{{ template_id }}">
+<head>
+<meta charset="UTF-8">
+{% if font_import_url %}<link href="{{ font_import_url }}" rel="stylesheet">{% endif %}
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--primary:{{ primary }};--secondary:{{ secondary }};--accent:{{ accent }};--bg:{{ background }};--text:{{ text }};--surface:{{ surface }}}
+body{width:1080px;height:1350px;background:var(--bg);font-family:'{{ body_font }}',Arial,sans-serif;color:var(--text);overflow:hidden;position:relative}
+.bg{position:absolute;inset:0;width:100%;height:63%;object-fit:cover;z-index:1;filter:{{ image_filter|default:"none" }}}
+.overlay{position:absolute;top:0;left:0;right:0;height:68%;background:linear-gradient(0deg,var(--bg) 0%,{{ overlay_mid }} 48%,rgba(255,255,255,0.08) 100%);z-index:2}
+.content{position:absolute;inset:0 0 46px;z-index:3;display:flex;flex-direction:column;justify-content:space-between;padding:54px 64px 34px}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+.badge{border:1px solid var(--primary);color:var(--primary);background:{{ badge_bg }};font-size:17px;font-weight:700;letter-spacing:3px;padding:10px 20px;text-transform:uppercase;border-radius:999px}
+.logo{max-width:190px;max-height:74px;object-fit:contain;filter:{{ logo_filter|default:"none" }}}
+.bottom{display:flex;flex-direction:column;gap:22px}
+.ciudad{font-size:13px;letter-spacing:4px;text-transform:uppercase;color:var(--secondary);font-weight:700}
+.titulo{font-family:'{{ display_font }}',Georgia,serif;font-size:88px;font-weight:600;line-height:.94;color:var(--text);max-width:880px}
+.precio-box{display:inline-block;align-self:flex-start;border-bottom:3px solid var(--accent);padding:5px 2px;font-family:'{{ display_font }}',Georgia,serif;font-size:48px;font-weight:700;color:var(--primary)}
+.stats{display:flex;gap:8px}
+.stat{flex:1;padding:18px 14px;text-align:center;background:var(--surface);border:1px solid {{ border }};border-radius:14px}
+.stat-val{font-family:'{{ display_font }}',Georgia,serif;font-size:36px;font-weight:700;color:var(--primary);line-height:1}
+.stat-lbl{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--secondary);margin-top:5px}
+.agent-row{display:flex;justify-content:space-between;align-items:center;padding-top:18px;border-top:1px solid {{ border }}}
+.agent-name{font-family:'{{ display_font }}',Georgia,serif;font-size:30px;color:var(--primary);line-height:1}
+.agent-sub{font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--secondary);margin-top:5px}
+.agent-phone{font-size:18px;color:var(--text);margin-top:4px}
+.qr-block{display:flex;flex-direction:column;align-items:center;gap:7px}
+.qr-block img{width:190px;height:190px;border:2px solid var(--accent);padding:8px;background:#fff;border-radius:10px}
+.qr-lbl{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--secondary)}
+.watermark-strip{position:absolute;bottom:0;left:0;right:0;height:46px;background:var(--primary);z-index:4;display:flex;align-items:center;justify-content:center;gap:10px}
+.watermark-strip img{height:21px;opacity:.55;filter:brightness(0) invert(1)}
+.watermark-strip span{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:rgba(255,255,255,.55)}
+</style>
+</head>
+<body>
+{% if portada_url %}<img src="{{ portada_url }}" class="bg" alt="Propiedad">{% endif %}
+<div class="overlay"></div>
+<div class="content">
+  <div class="top">
+    <div class="badge">{{ operacion }}</div>
+    {% if logo_url %}<div class="lb-brand-lockup"><img src="{{ logo_url }}" class="logo lb-brand-logo" alt="{{ agencia_nombre }}"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% else %}<div class="lb-brand-lockup"><span class="lb-brand-name">{{ agencia_nombre }}</span></div>{% endif %}
+  </div>
+  <div class="bottom">
+    <div class="ciudad">{{ ciudad }}</div>
+    <div class="titulo">{{ titulo }}</div>
+    <div class="precio-box">{{ moneda }} {{ precio }}</div>
+    {% if caracteristicas %}
+    <div class="stats">
+      {% for s in caracteristicas|slice:":4" %}
+      <div class="stat"><div class="stat-val">{{ s.valor }}</div><div class="stat-lbl">{{ s.label }}</div></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="agent-row">
+      <div class="agent-info">
+        <div class="agent-name">{{ agente_nombre|default:"Asesor" }}</div>
+        <div class="agent-sub">{{ agencia_nombre }}</div>
+        <div class="agent-phone">{{ agente_telefono }}</div>
+      </div>
+      {% if qr_url %}<div class="qr-block"><img src="{{ qr_url }}" alt="WhatsApp"><div class="qr-lbl">Contactar</div></div>{% endif %}
+    </div>
+  </div>
+</div>
+<div class="watermark-strip">
+  {% if leadbook_logo_url %}<img src="{{ leadbook_logo_url }}" alt="LeadBook">{% else %}<img src="https://res.cloudinary.com/df1vldrhb/image/upload/leadbook/sistema/watermark" alt="LeadBook">{% endif %}
+  <span>Generado con LeadBook</span>
+</div>
+</body>
+</html>
