@@ -77,11 +77,11 @@ def _masked_key_label(key):
 
 def _assigned_user_payload(key):
     service = str(getattr(getattr(key, 'servicio', None), 'nombre', '') or '').strip().lower()
-    if service != 'uploadpost':
+    if service not in {'uploadpost', 'elevenlabs'}:
         return None
     assignment = (
         UserAPIAssignment.objects
-        .filter(apikey=key, activo=True, servicio__nombre__iexact='uploadpost')
+        .filter(apikey=key, activo=True, servicio__nombre__iexact=service)
         .select_related('user')
         .order_by('-is_primary', 'assigned_at')
         .first()

@@ -11,6 +11,7 @@ from django.utils.timezone import now
 from datetime import timedelta
 from django.db.models import Count, Sum, Q
 import cloudinary.uploader
+import requests
 from .models import (
     Agent, Listado, Plan, APIKey, AdminAlert, Servicio, 
     UserAPIAssignment, UserAPIQuota, VideoMusic, VideoSFX, ConfiguracionSistema,
@@ -22,6 +23,25 @@ from api.services.ai_router import build_ai_root_payload, save_ai_root_config, t
 from admin_panel.auth import is_admin_request
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
+
+ROOT_LLM_SERVICES = {
+    'gemini',
+    'cerebras',
+    'groq',
+    'nvidia',
+    'nim',
+    'openrouter',
+    'huggingface',
+    'mistral',
+    'cohere',
+    'sambanova',
+    'deepseek',
+    'cloudflare_workers_ai',
+    'github_models',
+}
+ASSIGNABLE_SERVICES = {'uploadpost', 'elevenlabs'}
+ENVIRONMENT_SERVICES = {'cloudinary'}
+ADMIN_POOL_SERVICES = ROOT_LLM_SERVICES | ASSIGNABLE_SERVICES
 
 def _is_staff_check(request):
     return is_admin_request(request)
@@ -41,7 +61,34 @@ def _normalize_api_key_value(value):
 
 
 def _normalize_service_name(value):
-    return str(value or '').strip().lower()
+    normalized = str(value or '').strip().lower()
+    if normalized in {'nvidia_nim', 'nim'}:
+        return 'nvidia'
+    return normalized
+
+
+def _service_category(service_name):
+    normalized = _normalize_service_name(service_name)
+    if normalized in ROOT_LLM_SERVICES:
+        return 'root_llm'
+    if normalized in ASSIGNABLE_SERVICES:
+        return 'assignable'
+    if normalized in ENVIRONMENT_SERVICES:
+        return 'environment'
+    return 'other'
+
+
+def _pool_service_allowed(service_name):
+    return _normalize_service_name(service_name) in ADMIN_POOL_SERVICES
+
+
+def _allowed_pool_services_for_category(category):
+    normalized = str(category or '').strip().lower()
+    if normalized in {'root_llm', 'root', 'llm'}:
+        return ROOT_LLM_SERVICES
+    if normalized in {'assignable', 'assignment', 'asignacion', 'asignables'}:
+        return ASSIGNABLE_SERVICES
+    return ADMIN_POOL_SERVICES
 
 
 def _service_defaults(nombre):
@@ -129,14 +176,18 @@ def _api_key_has_history(key):
 
 def _key_assignment_stats(key):
     service_name = _normalize_service_name(getattr(getattr(key, 'servicio', None), 'nombre', ''))
-    if service_name == 'uploadpost':
-        assignments = UserAPIAssignment.objects.filter(apikey=key, activo=True).select_related('user')
+    if service_name in ASSIGNABLE_SERVICES:
+        assignments = UserAPIAssignment.objects.filter(
+            apikey=key,
+            activo=True,
+            servicio__nombre__iexact=service_name,
+        ).select_related('user')
         users = [a.user for a in assignments if a.user_id]
         return {
             'assigned_count': len(users),
             'shared_capacity': 1,
             'shared_available_slots': max(0, 1 - len(users)),
-            'sharing_mode': 'uploadpost_per_user',
+            'sharing_mode': f'{service_name}_per_user',
             'assigned_users': [
                 {'id': user.id, 'email': user.email, 'plan': getattr(user, 'plan_nombre', '')}
                 for user in users[:12]
@@ -531,43 +582,52 @@ def admin_ai_root_test(request):
 def admin_apikeys_pool(request):
     """
     Lista el pool de llaves agrupado por servicio.
-    v2: usa la relación con Servicio.
+    v2: usa la relación con Servicio y permite root LLM + asignables.
     """
     if not _is_staff_check(request):
         return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
     
-    from api.models import APIKey
-    
-    servicio_filter = _normalize_service_name(request.query_params.get('servicio') or request.query_params.get('service') or 'uploadpost')
-    if servicio_filter != 'uploadpost':
-        return Response({'keys': []})
+    servicio_filter = _normalize_service_name(request.query_params.get('servicio') or request.query_params.get('service'))
+    category_filter = request.query_params.get('category') or request.query_params.get('categoria')
     keys = APIKey.objects.all().select_related('servicio', 'slot_locked_by', 'slot_locked_listado').order_by('servicio__nombre', '-total_requests', '-requests_today', '-slot_tokens_today', '-creado_en')
-    keys = keys.filter(servicio__nombre__iexact='uploadpost')
+    if servicio_filter:
+        if servicio_filter in ENVIRONMENT_SERVICES:
+            return Response({
+                'error': 'cloudinary_uses_dedicated_endpoints',
+                'message': 'Cloudinary se administra desde /api/admin/cloudinary/...',
+                'keys': [],
+            }, status=status.HTTP_400_BAD_REQUEST)
+        if not _pool_service_allowed(servicio_filter):
+            return Response({'keys': []})
+        keys = keys.filter(servicio__nombre__iexact=servicio_filter)
+    else:
+        keys = keys.filter(servicio__nombre__in=_allowed_pool_services_for_category(category_filter))
     
     data = []
     for k in keys:
+        service_name = _normalize_service_name(k.servicio.nombre if k.servicio_id else '')
         usage = _key_window_usage(k)
         limite = usage['limit']
         consumo = usage['usage']
         porcentaje = min(100, int((consumo / limite) * 100)) if limite else 0
         
-        # Encontrar quién la tiene asignada. Cerebras Starter puede ser compartida.
+        # Encontrar quién la tiene asignada cuando el servicio es por usuario.
         assignment_stats = _key_assignment_stats(k)
         asig_primaria = None
-        if _normalize_service_name(k.servicio.nombre) == 'uploadpost':
+        if service_name in ASSIGNABLE_SERVICES:
             asig_primaria = (
                 UserAPIAssignment.objects
-                .filter(apikey=k, activo=True, servicio__nombre__iexact='uploadpost')
+                .filter(apikey=k, activo=True, servicio__nombre__iexact=service_name)
                 .select_related('user')
                 .order_by('-is_primary', 'assigned_at')
                 .first()
             )
         status_value = k.status
-        if k.status == 'assigned' and _normalize_service_name(k.servicio.nombre) != 'uploadpost':
+        if k.status == 'assigned' and service_name not in ASSIGNABLE_SERVICES:
             status_value = 'in_use'
         active_generation_run = None
         recent_cerebras_log = None
-        if str(k.servicio.nombre or '').lower() == 'cerebras':
+        if service_name == 'cerebras':
             active_generation_run = (
                 ContentGenerationRun.objects
                 .filter(api_key=k, status__in=['pending', 'running', 'waiting_slot', 'waiting_rate_limit'])
@@ -584,8 +644,12 @@ def admin_apikeys_pool(request):
 
         data.append({
             'id': k.id,
-            'servicio': k.servicio.nombre,
-            'label': k.label or f"{k.api_key[:10]}...",
+            'servicio': service_name,
+            'service': service_name,
+            'category': _service_category(service_name),
+            'label': k.label or _mask_secret(k.api_key),
+            'api_key_masked': _mask_secret(k.api_key),
+            'key_masked': _mask_secret(k.api_key),
             'status': status_value,
             'consumo_hoy': consumo,
             'limite_hoy': limite,
@@ -765,8 +829,13 @@ def admin_apikeys_pool_crear(request):
     key_val = _normalize_api_key_value(request.data.get('api_key') or request.data.get('key'))
     if not svc_name or not key_val:
         return Response({'error': 'Faltan servicio/api_key'}, status=400)
-    if svc_name != 'uploadpost':
-        return Response({'error': 'Desde este dashboard solo se administran keys UploadPost'}, status=400)
+    if svc_name in ENVIRONMENT_SERVICES:
+        return Response({
+            'error': 'cloudinary_uses_dedicated_endpoints',
+            'message': 'Cloudinary se administra desde /api/admin/cloudinary/...',
+        }, status=400)
+    if not _pool_service_allowed(svc_name):
+        return Response({'error': 'Servicio no soportado en pool admin'}, status=400)
 
     svc = _get_or_create_service(svc_name)
     if not svc:
@@ -804,7 +873,7 @@ def admin_apikeys_pool_crear(request):
             google_monthly_limit=monthly_limit,
             status='available',
         )
-    return Response({'id': k.id, 'status': 'created', **cleanup}, status=201)
+    return Response({'id': k.id, 'service': service_name, 'category': _service_category(service_name), 'status': 'created', **cleanup}, status=201)
 
 @api_view(['POST'])
 def admin_apikeys_pool_bulk(request):
@@ -835,8 +904,11 @@ def admin_apikeys_pool_bulk(request):
             if not service_name or not api_key_str:
                 errors.append({'index': index, 'error': 'Faltan service o api_key'})
                 continue
-            if service_name != 'uploadpost':
-                errors.append({'index': index, 'service': service_name, 'error': 'Solo se aceptan keys UploadPost'})
+            if service_name in ENVIRONMENT_SERVICES:
+                errors.append({'index': index, 'service': service_name, 'error': 'Cloudinary usa endpoints dedicados'})
+                continue
+            if not _pool_service_allowed(service_name):
+                errors.append({'index': index, 'service': service_name, 'error': 'Servicio no soportado en pool admin'})
                 continue
 
             servicio = _get_or_create_service(service_name)
@@ -902,17 +974,29 @@ def admin_apikeys_pool_bulk(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 def admin_apikeys_pool_detail(request, pk):
     if not _is_staff_check(request): return Response({'error': 'Forbidden'}, status=403)
-    k = APIKey.objects.filter(pk=pk, servicio__nombre__iexact='uploadpost').select_related('servicio').first()
+    k = (
+        APIKey.objects
+        .filter(pk=pk)
+        .exclude(servicio__nombre__iexact='cloudinary')
+        .select_related('servicio')
+        .first()
+    )
     if not k:
-        return Response({'error': 'API key UploadPost no encontrada'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'API key no encontrada en pool admin'}, status=status.HTTP_404_NOT_FOUND)
+    service_name = _normalize_service_name(k.servicio.nombre if k.servicio_id else '')
     if request.method == 'GET':
         return Response({
             'id': k.id,
-            'service': k.servicio.nombre if k.servicio_id else 'uploadpost',
+            'service': service_name,
+            'servicio': service_name,
+            'category': _service_category(service_name),
             'key': _mask_secret(k.api_key),
             'key_masked': _mask_secret(k.api_key),
+            'api_key_masked': _mask_secret(k.api_key),
             'status': k.status,
             'label': k.label or '',
+            'daily_limit': k.google_daily_limit,
+            'monthly_limit': k.google_monthly_limit,
         })
     elif request.method == 'PUT':
         label = request.data.get('label')
@@ -923,11 +1007,182 @@ def admin_apikeys_pool_detail(request, pk):
                 k.google_daily_limit = int(request.data.get('daily_limit') or k.google_daily_limit or 999999)
             except (TypeError, ValueError):
                 return Response({'error': 'daily_limit invalido'}, status=status.HTTP_400_BAD_REQUEST)
-        k.save(update_fields=['label', 'google_daily_limit', 'updated_at'])
+        if 'monthly_limit' in request.data:
+            raw_monthly = request.data.get('monthly_limit')
+            try:
+                k.google_monthly_limit = int(raw_monthly) if raw_monthly not in {None, ''} else None
+            except (TypeError, ValueError):
+                return Response({'error': 'monthly_limit invalido'}, status=status.HTTP_400_BAD_REQUEST)
+        k.save(update_fields=['label', 'google_daily_limit', 'google_monthly_limit', 'updated_at'])
         return Response({'ok': True})
     elif request.method == 'DELETE':
         k.delete()
         return Response({'ok': True})
+
+
+def _admin_key_test_request(service_name, api_key):
+    service_name = _normalize_service_name(service_name)
+    timeout = 12
+    if service_name == 'elevenlabs':
+        return requests.get(
+            'https://api.elevenlabs.io/v1/user/subscription',
+            headers={'xi-api-key': api_key},
+            timeout=timeout,
+        )
+    if service_name == 'uploadpost':
+        return requests.get(
+            'https://api.upload-post.com/api/uploadposts/users',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'gemini':
+        return requests.get(
+            'https://generativelanguage.googleapis.com/v1beta/models',
+            params={'key': api_key},
+            timeout=timeout,
+        )
+    if service_name == 'cerebras':
+        return requests.get(
+            'https://api.cerebras.ai/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'groq':
+        return requests.get(
+            'https://api.groq.com/openai/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'nvidia':
+        return requests.get(
+            'https://integrate.api.nvidia.com/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'openrouter':
+        return requests.get(
+            'https://openrouter.ai/api/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'huggingface':
+        return requests.get(
+            'https://huggingface.co/api/whoami-v2',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'mistral':
+        return requests.get(
+            'https://api.mistral.ai/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'cohere':
+        return requests.get(
+            'https://api.cohere.ai/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'sambanova':
+        return requests.get(
+            'https://api.sambanova.ai/v1/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'deepseek':
+        return requests.get(
+            'https://api.deepseek.com/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    if service_name == 'github_models':
+        return requests.get(
+            'https://models.inference.ai.azure.com/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=timeout,
+        )
+    raise ValueError('test_not_supported')
+
+
+@api_view(['POST'])
+def admin_apikeys_pool_test(request, pk):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=403)
+
+    key = (
+        APIKey.objects
+        .filter(pk=pk)
+        .exclude(servicio__nombre__iexact='cloudinary')
+        .select_related('servicio')
+        .first()
+    )
+    if not key:
+        return Response({'error': 'API key no encontrada en pool admin'}, status=status.HTTP_404_NOT_FOUND)
+
+    service_name = _normalize_service_name(key.servicio.nombre if key.servicio_id else '')
+    if service_name in ENVIRONMENT_SERVICES:
+        return Response({'error': 'cloudinary_uses_dedicated_endpoints'}, status=status.HTTP_400_BAD_REQUEST)
+    if not _pool_service_allowed(service_name):
+        return Response({'error': 'test_not_supported'}, status=status.HTTP_400_BAD_REQUEST)
+
+    started = now()
+    try:
+        response = _admin_key_test_request(service_name, key.api_key)
+        elapsed_ms = int((now() - started).total_seconds() * 1000)
+        ok = 200 <= response.status_code < 300
+        if ok:
+            technical_status = 'OK'
+            if key.status in {'dead', 'exhausted'}:
+                key.status = 'available'
+            key.last_health_status = True
+            key.slot_last_error = ''
+        elif response.status_code in {401, 403}:
+            technical_status = 'INVALIDA'
+            key.status = 'dead'
+            key.error_count = (key.error_count or 0) + 1
+            key.last_health_status = False
+            key.slot_last_error = f'Test {service_name} invalido: HTTP {response.status_code}'
+        elif response.status_code == 429:
+            technical_status = 'RATE_LIMITED'
+            key.status = 'exhausted'
+            key.error_count = (key.error_count or 0) + 1
+            key.last_health_status = False
+            key.slot_last_error = 'Rate limit temporal o cuota agotada durante test'
+        else:
+            technical_status = 'ERROR_TEMPORAL'
+            key.error_count = (key.error_count or 0) + 1
+            key.last_health_status = False
+            key.slot_last_error = f'Test {service_name} fallo: HTTP {response.status_code}'
+        key.last_health_check = now()
+        key.save(update_fields=['status', 'error_count', 'last_health_check', 'last_health_status', 'slot_last_error', 'updated_at'])
+        return Response({
+            'id': key.id,
+            'service': service_name,
+            'category': _service_category(service_name),
+            'status': technical_status,
+            'health_ok': ok,
+            'status_code': response.status_code,
+            'response_time_ms': elapsed_ms,
+            'error': None if ok else (response.text or '')[:500],
+            'message': 'Key operativa' if ok else 'El test no pudo validar la key',
+        }, status=200 if ok else status.HTTP_502_BAD_GATEWAY)
+    except ValueError as exc:
+        return Response({'error': str(exc), 'service': service_name}, status=status.HTTP_400_BAD_REQUEST)
+    except requests.RequestException as exc:
+        key.error_count = (key.error_count or 0) + 1
+        key.last_health_check = now()
+        key.last_health_status = False
+        key.slot_last_error = str(exc)[:1000]
+        key.save(update_fields=['error_count', 'last_health_check', 'last_health_status', 'slot_last_error', 'updated_at'])
+        return Response({
+            'id': key.id,
+            'service': service_name,
+            'category': _service_category(service_name),
+            'status': 'ERROR_TEMPORAL',
+            'health_ok': False,
+            'error': str(exc),
+        }, status=status.HTTP_502_BAD_GATEWAY)
+
 
 @api_view(['GET'])
 def admin_apikeys_global(request):

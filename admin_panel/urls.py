@@ -12,6 +12,7 @@ urlpatterns = [
     path('apikeys/pool/crear/', api_admin_views.admin_apikeys_pool_crear),
     path('apikeys/pool/bulk/', api_admin_views.admin_apikeys_pool_bulk),
     path('apikeys/pool/auto-repair/', views.admin_apikeys_auto_repair),
+    path('apikeys/pool/<int:pk>/test/', api_admin_views.admin_apikeys_pool_test),
     path('apikeys/pool/<int:pk>/', api_admin_views.admin_apikeys_pool_detail),
     path('apikeys/pool/<int:pk>/liberar/', views.admin_api_keys_detail),
     path('apikeys/pool/<int:pk>/reactivar/', views.admin_api_keys_detail),
