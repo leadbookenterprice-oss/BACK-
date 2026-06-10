@@ -11,6 +11,7 @@ from api.models import (
     ContentGenerationStep,
     Listado,
 )
+from api.plan_utils import registrar_uso_listado_si_completo
 from api.services.cerebras_slots import (
     CEREBRAS_DAILY_TOKEN_LIMIT,
     CerebrasSlotUnavailable,
@@ -551,6 +552,9 @@ def mark_generation_step(run_id, step_name, status_value, *, result=None, error_
             'completed_at',
             'updated_at',
         ])
+
+    if run.status == 'done':
+        registrar_uso_listado_si_completo(run.listado, generation_run_id=run.id)
 
     if run.status in {'done', 'failed', 'cancelled'}:
         release_generation_run_slot(run)

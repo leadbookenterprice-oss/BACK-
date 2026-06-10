@@ -63,6 +63,7 @@ from .plan_utils import (
     puede_generar,
     incrementar_uso,
     registrar_uso,
+    registrar_uso_listado_si_completo,
     get_free_trial_status,
     get_plan_block_payload,
     get_pro_feature_block_payload,
@@ -706,14 +707,22 @@ def actualizar_resultados_listado(listado, tipo, resultado):
     Esto permite persistencia entre sesiones.
     """
     if not listado: return
-    if not isinstance(listado.datos_extra, dict):
-        listado.datos_extra = {}
-    
-    if 'resultados' not in listado.datos_extra:
-        listado.datos_extra['resultados'] = {}
-    
-    listado.datos_extra['resultados'][tipo] = _sanitize_listing_storage_value(resultado)
+    persisted_extra = {}
+    if getattr(listado, 'pk', None):
+        persisted_extra = Listado.objects.filter(pk=listado.pk).values_list('datos_extra', flat=True).first() or {}
+    if not isinstance(persisted_extra, dict):
+        persisted_extra = {}
+    current_extra = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    datos_extra = {**persisted_extra, **current_extra}
+
+    persisted_results = persisted_extra.get('resultados') if isinstance(persisted_extra.get('resultados'), dict) else {}
+    current_results = current_extra.get('resultados') if isinstance(current_extra.get('resultados'), dict) else {}
+    datos_extra['resultados'] = {**persisted_results, **current_results}
+    datos_extra['resultados'][tipo] = _sanitize_listing_storage_value(resultado)
+
+    listado.datos_extra = datos_extra
     listado.save(update_fields=['datos_extra'])
+    registrar_uso_listado_si_completo(listado)
 
 
 DEFAULT_USER_SETTINGS = {
@@ -6256,18 +6265,13 @@ class ListadosView(APIView):
             moneda=moneda,
             datos_extra=payload
         )
-        
-        registrar_uso(user, 'property')
-        
+
         return Response({
             "mensaje": "Listado guardado", 
             "id": listado.id,
             "titulo": listado.titulo,
-            "daily_listing_quota": {
-                **daily_listing_quota,
-                "used": daily_listing_quota["used"] + 1 if daily_listing_quota.get("limit") is not None else daily_listing_quota.get("used", 0),
-                "remaining": max(0, daily_listing_quota["remaining"] - 1) if daily_listing_quota.get("remaining") is not None else None,
-            }
+            "daily_listing_quota": daily_listing_quota,
+            "listing_counts_when_ready": True,
         }, status=status.HTTP_201_CREATED)
 
 
@@ -7042,6 +7046,7 @@ def generar_pdf(request):
                         listado_obj.datos_extra['dashboard_image_url'] = pdf_cover_url
                         listado_obj.datos_extra['cover_frame_url'] = pdf_cover_url
                     listado_obj.save(update_fields=['datos_extra'])
+                    registrar_uso_listado_si_completo(listado_obj, generation_run_id=generation_run_id)
                     print(f"[PDF] URL guardada en DB: {pdf_url}")
             else:
                 print("[PDF] Error: Playwright devolviÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ bytes vacÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­os.")

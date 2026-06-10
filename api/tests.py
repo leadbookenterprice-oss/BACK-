@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from unittest.mock import patch
 
 from api.ai_services import APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError
-from api.models import APIKey, AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion, OTPCode, Servicio, UserAPIAssignment
+from api.models import APIKey, AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion, OTPCode, Servicio, UsageLog, UserAPIAssignment
 from api.pool_manager import get_next_available_api
 from api.services.listing_extractor import ExtractorError, extract_listing_from_url
 
@@ -552,6 +552,58 @@ class ListingResultPersistenceTests(TestCase):
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
+
+    def test_creating_listing_does_not_register_property_usage_until_content_ready(self):
+        response = self.client.post(
+            reverse('listados'),
+            {
+                'formData': {
+                    'titulo': 'Casa sin contenidos',
+                    'tipoPropiedad': 'Casa',
+                    'operacion': 'venta',
+                    'ciudad': 'Palermo',
+                    'precio': '250000',
+                    'moneda': 'USD',
+                }
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 0)
+        quota = response.json()['daily_listing_quota']
+        self.assertEqual(quota['used'], 0)
+        self.assertEqual(quota['remaining'], 30)
+
+    def test_property_usage_counts_once_after_full_content_pack_is_persisted(self):
+        from api.views import actualizar_resultados_listado
+
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa pack completo',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={'resultados': {}},
+        )
+
+        actualizar_resultados_listado(listado, 'pdf', {'url': 'https://res.cloudinary.com/demo/raw/upload/ficha.pdf'})
+        actualizar_resultados_listado(listado, 'post', {'url': 'https://res.cloudinary.com/demo/image/upload/post.jpg'})
+        actualizar_resultados_listado(listado, 'story', {'url': 'https://res.cloudinary.com/demo/image/upload/story.jpg'})
+        actualizar_resultados_listado(listado, 'carrusel', {'slides': ['https://res.cloudinary.com/demo/image/upload/slide.jpg']})
+        stale_listado = Listado.objects.get(pk=listado.pk)
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 0)
+
+        actualizar_resultados_listado(listado, 'email', {'html': '<p>Mail listo</p>'})
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 1)
+
+        listado.refresh_from_db()
+        self.assertIn('property_usage_counted_at', listado.datos_extra)
+
+        actualizar_resultados_listado(stale_listado, 'email', {'html': '<p>Mail regenerado</p>'})
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 1)
 
     def test_upload_fotos_replace_returns_only_current_batch(self):
         listado = Listado.objects.create(
