@@ -8,6 +8,7 @@ urlpatterns = [
     path('stats/', views.admin_stats_v2),
 
     # API Keys Pool
+    path('apikeys/export/', views.admin_api_keys_export),
     path('apikeys/pool/', api_admin_views.admin_apikeys_pool),
     path('apikeys/pool/crear/', api_admin_views.admin_apikeys_pool_crear),
     path('apikeys/pool/bulk/', api_admin_views.admin_apikeys_pool_bulk),

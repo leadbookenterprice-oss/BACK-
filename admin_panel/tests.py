@@ -1,4 +1,5 @@
 import os
+import csv
 from io import StringIO
 from unittest.mock import patch
 
@@ -47,6 +48,69 @@ class AdminSessionAuthTests(TestCase):
 
             self.assertEqual(response.status_code, 401)
             self.assertFalse(response.data.get('access'))
+
+
+class AdminApiKeysExportTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = Agent.objects.create_user(
+            email='staff@leadbook.local',
+            password='secret',
+            nombre='Staff',
+            is_staff=True,
+        )
+        self.gemini, _ = Servicio.objects.get_or_create(nombre='gemini', defaults={'activo': True})
+        self.cloudinary, _ = Servicio.objects.get_or_create(nombre='cloudinary', defaults={'activo': True})
+
+    def _read_csv(self, response):
+        content = response.content.decode('utf-8-sig')
+        return list(csv.DictReader(StringIO(content)))
+
+    def test_export_requires_admin_session_or_staff_auth(self):
+        response = self.client.get('/api/admin/apikeys/export/?include_secrets=1')
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_export_returns_real_api_key_in_csv(self):
+        self.client.force_authenticate(user=self.admin)
+        APIKey.objects.create(
+            servicio=self.gemini,
+            api_key='gemini-real-secret-key',
+            label='Gemini backup',
+            status='available',
+            google_daily_limit=1500,
+        )
+
+        response = self.client.get('/api/admin/apikeys/export/?include_secrets=1')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('text/csv', response['Content-Type'])
+        self.assertEqual(response['Cache-Control'], 'no-store')
+        self.assertTrue(response.content.startswith('\ufeff'.encode('utf-8')))
+        rows = self._read_csv(response)
+        gemini_row = next(row for row in rows if row['api_key'] == 'gemini-real-secret-key')
+        self.assertEqual(gemini_row['service'], 'gemini')
+        self.assertEqual(gemini_row['label'], 'Gemini backup')
+
+    def test_export_includes_cloudinary_key(self):
+        self.client.force_authenticate(user=self.admin)
+        APIKey.objects.create(
+            servicio=self.cloudinary,
+            api_key='cloudinary://cloud-key:cloud-secret@leadbook-cloud',
+            label='leadbook-cloud',
+            status='available',
+            cloudinary_status='OK',
+            cloudinary_usage_percent=42.5,
+        )
+
+        response = self.client.get('/api/admin/apikeys/export/?include_secrets=1')
+
+        self.assertEqual(response.status_code, 200)
+        rows = self._read_csv(response)
+        cloudinary_rows = [row for row in rows if row['service'] == 'cloudinary']
+        self.assertEqual(len(cloudinary_rows), 1)
+        self.assertEqual(cloudinary_rows[0]['api_key'], 'cloudinary://cloud-key:cloud-secret@leadbook-cloud')
+        self.assertEqual(cloudinary_rows[0]['cloudinary_status'], 'OK')
 
 
 class AdminBootstrapCleanupTests(TestCase):

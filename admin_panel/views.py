@@ -5,16 +5,21 @@
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
+from django.http import HttpResponse
 from django.utils import timezone
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Prefetch
 from datetime import timedelta
+import csv
+import logging
 from api.models import (
     Agent, APIKey, APIRequestLog, AdminAlert, UserBanRecord,
     Listado, Servicio, UserAPIAssignment, UserAPIQuota
 )
 from api.services.pool_service import APIPoolService, SERVICE_DEFAULTS
-from admin_panel.auth import is_admin_request
+from admin_panel.auth import current_admin_identity, is_admin_request
+
+logger = logging.getLogger(__name__)
 
 
 def _service_defaults(nombre):
@@ -183,6 +188,110 @@ def admin_api_keys_list(request):
             'creado_en': k.creado_en.isoformat() if k.creado_en else None,
         })
     return Response(data)
+
+
+def _csv_cell(value):
+    if value is None:
+        return ''
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    return value
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_api_keys_export(request):
+    if not _check_admin(request):
+        return Response({'error': 'Forbidden'}, status=403)
+
+    include_secrets = str(request.query_params.get('include_secrets', '')).strip().lower()
+    if include_secrets not in {'1', 'true', 'yes'}:
+        return Response({
+            'error': 'include_secrets_required',
+            'message': 'Use include_secrets=1 para exportar claves reales.',
+        }, status=400)
+
+    active_assignments = (
+        UserAPIAssignment.objects
+        .filter(activo=True)
+        .select_related('user')
+        .order_by('user__email', 'id')
+    )
+    keys = list(
+        APIKey.objects
+        .select_related('servicio')
+        .prefetch_related(Prefetch('assignments', queryset=active_assignments, to_attr='active_assignments_for_export'))
+        .order_by('servicio__nombre', 'id')
+    )
+
+    filename = f'leadbook_api_keys_{timezone.now().date().isoformat()}.csv'
+    response = HttpResponse(content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    response['Cache-Control'] = 'no-store'
+    response['Pragma'] = 'no-cache'
+    response['X-Content-Type-Options'] = 'nosniff'
+
+    response.write('\ufeff')
+    writer = csv.writer(response, lineterminator='\n')
+    writer.writerow([
+        'id',
+        'service',
+        'label',
+        'api_key',
+        'status',
+        'assigned_users',
+        'daily_limit',
+        'monthly_limit',
+        'requests_today',
+        'requests_this_month',
+        'total_requests',
+        'error_count',
+        'last_used_at',
+        'last_health_check',
+        'last_health_status',
+        'cloudinary_status',
+        'cloudinary_usage_percent',
+        'created_at',
+        'updated_at',
+        'notes',
+    ])
+
+    for key in keys:
+        assigned_users = '; '.join(
+            assignment.user.email
+            for assignment in getattr(key, 'active_assignments_for_export', [])
+            if getattr(assignment, 'user', None)
+        )
+        writer.writerow([
+            key.id,
+            key.servicio.nombre if key.servicio_id and key.servicio else '',
+            key.label or '',
+            key.api_key or '',
+            key.status or '',
+            assigned_users,
+            key.google_daily_limit,
+            key.google_monthly_limit,
+            key.requests_today,
+            key.requests_this_month,
+            key.total_requests,
+            key.error_count,
+            _csv_cell(key.last_used_at),
+            _csv_cell(key.last_health_check),
+            key.last_health_status,
+            key.cloudinary_status or '',
+            key.cloudinary_usage_percent,
+            _csv_cell(key.creado_en),
+            _csv_cell(key.updated_at),
+            key.notes or '',
+        ])
+
+    identity = current_admin_identity(request) or {}
+    logger.warning(
+        'Admin API keys CSV export completed count=%s admin=%s',
+        len(keys),
+        identity.get('email') or getattr(getattr(request, 'user', None), 'email', 'unknown'),
+    )
+    return response
 
 
 @api_view(['POST'])
