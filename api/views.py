@@ -422,6 +422,73 @@ def _validate_generated_pdf_html(html_string, context):
     return errors
 
 
+def _ensure_pdf_contract_markers(html_string, context):
+    html_text = str(html_string or '').strip()
+    if not html_text:
+        return html_text
+
+    template_id = _normalize_template_id(context.get('template_id')) or 'tech_modern'
+    contract = get_template_contract(template_id)
+    colors = (contract or {}).get('colors') or {}
+
+    if '<html' not in html_text.lower():
+        html_text = (
+            f'<!DOCTYPE html><html lang="es" data-leadbook-pdf="true" data-template-id="{template_id}">'
+            '<head><meta charset="UTF-8"></head><body>'
+            f'{html_text}'
+            '</body></html>'
+        )
+
+    def patch_html_tag(match):
+        tag = match.group(0)
+        lower_tag = tag.lower()
+        insert = ''
+        if 'data-leadbook-pdf' not in lower_tag:
+            insert += ' data-leadbook-pdf="true"'
+        if 'data-template-id' not in lower_tag:
+            insert += f' data-template-id="{template_id}"'
+        if not insert:
+            return tag
+        return tag[:-1] + insert + tag[-1]
+
+    html_text = re.sub(r'<html\b[^>]*>', patch_html_tag, html_text, count=1, flags=re.IGNORECASE)
+
+    section_classes = {
+        'hero': ('hero',),
+        'price': ('precio-bar', 'price', 'precio'),
+        'stats': ('stats', 'stat-grid'),
+        'description': ('descripcion', 'description'),
+        'amenities': ('amenidades', 'amenities'),
+        'gallery': ('galeria', 'gallery'),
+        'contact': ('footer', 'contact', 'contacto'),
+    }
+
+    for section, class_names in section_classes.items():
+        if f'data-section="{section}"' in html_text.lower() or f"data-section='{section}'" in html_text.lower():
+            continue
+
+        for class_name in class_names:
+            pattern = re.compile(
+                rf'(<(?:section|div)\b(?=[^>]*\bclass\s*=\s*["\'][^"\']*\b{re.escape(class_name)}\b[^"\']*["\'])(?![^>]*\bdata-section\s*=)[^>]*)(>)',
+                flags=re.IGNORECASE,
+            )
+            html_text, replacements = pattern.subn(rf'\1 data-section="{section}"\2', html_text, count=1)
+            if replacements:
+                break
+
+    contract_comment = (
+        f'<!-- LeadBook PDF contract template={template_id} '
+        f'primary={colors.get("primary", "")} accent={colors.get("accent", "")} -->'
+    )
+    if colors and contract_comment not in html_text:
+        if '</head>' in html_text.lower():
+            html_text = re.sub(r'</head>', f'{contract_comment}</head>', html_text, count=1, flags=re.IGNORECASE)
+        else:
+            html_text = contract_comment + html_text
+
+    return html_text
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
@@ -6916,7 +6983,7 @@ def generar_pdf(request):
         from django.http import HttpResponse
         from api.services.render_engine import render_html_to_pdf
         from api.services.almacenamiento import AlmacenamientoCloudinary
-        from api.ai_services import generar_html_gemini
+        from api.ai_services import generar_html_desde_template, generar_html_gemini
 
         listado_obj = None
         if listado_id_hint:
@@ -6947,6 +7014,16 @@ def generar_pdf(request):
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='pdf')
 
+        pdf_fallback_applied = False
+        pdf_fallback_reason = ''
+
+        def prepare_pdf_html_candidate(candidate_html):
+            prepared = _inject_agency_brand_lockup(candidate_html, context.get('logo_url', ''), context.get('agencia_nombre', ''))
+            prepared = _repair_mojibake_text(prepared)
+            prepared = _apply_template_tokens_to_html(prepared, template_id, selection.get('template_tokens'))
+            prepared = _ensure_pdf_contract_markers(prepared, context)
+            return prepared
+
         try:
             html_string = generar_html_gemini(context, request.user)
         except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as e:
@@ -6973,11 +7050,9 @@ def generar_pdf(request):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
-        html_string = _repair_mojibake_text(html_string)
-        html_string = _apply_template_tokens_to_html(html_string, template_id, selection.get('template_tokens'))
+        html_string = prepare_pdf_html_candidate(html_string)
         validation_errors = _validate_generated_pdf_html(html_string, context)
-        if validation_errors and config('CEREBRAS_PDF_IMMEDIATE_REPAIR', default=False, cast=bool):
+        if validation_errors and config('CEREBRAS_PDF_IMMEDIATE_REPAIR', default=True, cast=bool):
             try:
                 repair_context = {
                     **context,
@@ -6988,12 +7063,42 @@ def generar_pdf(request):
                     ),
                 }
                 html_string = generar_html_gemini(repair_context, request.user)
-                html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
-                html_string = _repair_mojibake_text(html_string)
-                html_string = _apply_template_tokens_to_html(html_string, template_id, selection.get('template_tokens'))
+                html_string = prepare_pdf_html_candidate(html_string)
                 validation_errors = _validate_generated_pdf_html(html_string, context)
             except Exception:
                 logger.exception('[PDF] Fallo retry de reparacion HTML')
+
+        if validation_errors:
+            original_validation_errors = list(validation_errors)
+            try:
+                fallback_context = {
+                    **context,
+                    'template_id': template_id,
+                    'pdf_fallback_reason': ', '.join(original_validation_errors),
+                }
+                fallback_html = generar_html_desde_template(fallback_context, request.user)
+                fallback_html = prepare_pdf_html_candidate(fallback_html)
+                fallback_validation_errors = _validate_generated_pdf_html(fallback_html, context)
+                if not fallback_validation_errors:
+                    logger.warning(
+                        "[PDF] Usando fallback local de template listado_id=%s template=%s errores_originales=%s",
+                        listado_id_hint,
+                        template_id,
+                        original_validation_errors,
+                    )
+                    html_string = fallback_html
+                    validation_errors = []
+                    pdf_fallback_applied = True
+                    pdf_fallback_reason = ', '.join(original_validation_errors)
+                else:
+                    logger.error(
+                        "[PDF] Fallback local invalido listado_id=%s template=%s errores=%s",
+                        listado_id_hint,
+                        template_id,
+                        fallback_validation_errors,
+                    )
+            except Exception as fallback_exc:
+                logger.exception('[PDF] Fallo fallback local de template: %s', fallback_exc)
 
         if validation_errors:
             detalle = f"Cerebras devolvio HTML incompleto para PDF: {', '.join(validation_errors)}"
@@ -7041,6 +7146,8 @@ def generar_pdf(request):
                         "template_id": template_id,
                         "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
                         "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
+                        "fallback_applied": pdf_fallback_applied,
+                        "fallback_reason": pdf_fallback_reason,
                     }
                     if pdf_cover_url:
                         listado_obj.datos_extra['dashboard_image_url'] = pdf_cover_url
@@ -7092,11 +7199,14 @@ def generar_pdf(request):
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
+            "fallback_applied": pdf_fallback_applied,
+            "fallback_reason": pdf_fallback_reason,
         }
         _mark_generation_done(generation_run_id, generation_step_name, {
             "url": pdf_url,
             "cover_url": pdf_cover_url,
             "template_id": template_id,
+            "fallback_applied": pdf_fallback_applied,
         })
         return Response(response_payload, status=status.HTTP_200_OK)
 

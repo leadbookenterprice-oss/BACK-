@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from api.ai_services import call_cerebras_api, GeminiQuotaExhaustedError, GeminiRateLimitedError
 from api.models import APIKey, APIRequestLog, CerebrasUsageLog, Servicio
-from api.views import _apply_template_tokens_to_html, _validate_generated_pdf_html
+from api.views import _apply_template_tokens_to_html, _ensure_pdf_contract_markers, _validate_generated_pdf_html
 
 
 class _FakeCerebrasResponse:
@@ -161,4 +161,36 @@ class TemplateContractTests(TestCase):
             },
         )
 
+        self.assertEqual(errors, [])
+
+    def test_pdf_contract_marker_repair_accepts_local_template_shape(self):
+        gallery_url = 'https://res.cloudinary.com/demo/image/upload/gallery.jpg'
+        logo_url = 'https://res.cloudinary.com/demo/image/upload/logo.png'
+        html = f'''
+        <html lang="es">
+        <head><style>:root{{--primario:#0d47a1;--acento:#00e5ff;}}</style></head>
+        <body>
+          <div class="hero"><img src="https://res.cloudinary.com/demo/image/upload/cover.jpg"></div>
+          <div class="precio-bar">USD 100000</div>
+          <div class="stats">2 banos</div>
+          <div class="descripcion">Descripcion real</div>
+          <div class="amenidades">Amenidad pileta</div>
+          <div class="galeria"><img src="{gallery_url}"></div>
+          <div class="footer"><img src="{logo_url}">Contacto</div>
+        </body></html>
+        '''
+
+        context = {
+            'template_id': 'tech_modern',
+            'descripcion': 'Descripcion real',
+            'amenidades': ['Pileta'],
+            'fotos_recorrido': [gallery_url],
+            'logo_url': logo_url,
+        }
+
+        repaired = _ensure_pdf_contract_markers(html, context)
+        errors = _validate_generated_pdf_html(repaired, context)
+
+        self.assertIn('data-leadbook-pdf="true"', repaired)
+        self.assertIn('data-template-id="tech_modern"', repaired)
         self.assertEqual(errors, [])
