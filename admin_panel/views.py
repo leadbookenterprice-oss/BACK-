@@ -232,7 +232,8 @@ def admin_api_keys_export(request):
     response['X-Content-Type-Options'] = 'nosniff'
 
     response.write('\ufeff')
-    writer = csv.writer(response, lineterminator='\n')
+    response.write('sep=;\n')
+    writer = csv.writer(response, delimiter=';', lineterminator='\n')
     writer.writerow([
         'id',
         'service',
@@ -257,7 +258,7 @@ def admin_api_keys_export(request):
     ])
 
     for key in keys:
-        assigned_users = '; '.join(
+        assigned_users = ' | '.join(
             assignment.user.email
             for assignment in getattr(key, 'active_assignments_for_export', [])
             if getattr(assignment, 'user', None)

@@ -64,7 +64,10 @@ class AdminApiKeysExportTests(TestCase):
 
     def _read_csv(self, response):
         content = response.content.decode('utf-8-sig')
-        return list(csv.DictReader(StringIO(content)))
+        lines = content.splitlines()
+        if lines and lines[0].strip().lower() == 'sep=;':
+            content = '\n'.join(lines[1:])
+        return list(csv.DictReader(StringIO(content), delimiter=';'))
 
     def test_export_requires_admin_session_or_staff_auth(self):
         response = self.client.get('/api/admin/apikeys/export/?include_secrets=1')
@@ -87,6 +90,7 @@ class AdminApiKeysExportTests(TestCase):
         self.assertIn('text/csv', response['Content-Type'])
         self.assertEqual(response['Cache-Control'], 'no-store')
         self.assertTrue(response.content.startswith('\ufeff'.encode('utf-8')))
+        self.assertIn('sep=;', response.content.decode('utf-8-sig').splitlines()[0])
         rows = self._read_csv(response)
         gemini_row = next(row for row in rows if row['api_key'] == 'gemini-real-secret-key')
         self.assertEqual(gemini_row['service'], 'gemini')
