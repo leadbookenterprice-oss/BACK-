@@ -24,6 +24,7 @@ from api.models import (
     UserAPIAssignment,
 )
 from api.pool_manager import get_next_available_api
+from api.services.api_usage_monitor import build_api_usage_summary
 from api.services.listing_extractor import ExtractorError, extract_listing_from_url
 from api.services.cerebras_models import sync_cerebras_key_models
 
@@ -141,6 +142,49 @@ class GeminiPoolSelectionTests(TestCase):
         self.assertEqual(selected, 'AIza-replacement')
         replacement_key.refresh_from_db()
         self.assertEqual(replacement_key.status, 'available')
+
+
+class APIUsageSummaryServiceNormalizationTests(TestCase):
+    def test_nvidia_keys_are_reported_with_dashboard_service_name(self):
+        APIKey.objects.filter(servicio__nombre__in=['nvidia', 'nim']).delete()
+        service, _ = Servicio.objects.get_or_create(
+            nombre='nvidia',
+            defaults={'descripcion': 'NVIDIA NIM'},
+        )
+        key = APIKey.objects.create(
+            servicio=service,
+            api_key='nvapi-dashboard-visible',
+            label='NVIDIA visible',
+            status='available',
+        )
+
+        summary = build_api_usage_summary(service='nvidia', create_alerts=False)
+
+        self.assertEqual(len(summary['keys']), 1)
+        self.assertEqual(summary['keys'][0]['id'], key.id)
+        self.assertEqual(summary['keys'][0]['service'], 'nvidia')
+        self.assertEqual(summary['services'][0]['service'], 'nvidia')
+        self.assertEqual(summary['services'][0]['keys_count'], 1)
+
+    def test_legacy_nim_keys_are_reported_as_nvidia(self):
+        APIKey.objects.filter(servicio__nombre__in=['nvidia', 'nim']).delete()
+        service, _ = Servicio.objects.get_or_create(
+            nombre='nim',
+            defaults={'descripcion': 'NVIDIA NIM legacy'},
+        )
+        key = APIKey.objects.create(
+            servicio=service,
+            api_key='nvapi-legacy-nim-visible',
+            label='Legacy NIM',
+            status='available',
+        )
+
+        summary = build_api_usage_summary(service='nvidia', create_alerts=False)
+
+        self.assertEqual(len(summary['keys']), 1)
+        self.assertEqual(summary['keys'][0]['id'], key.id)
+        self.assertEqual(summary['keys'][0]['service'], 'nvidia')
+        self.assertEqual(summary['services'][0]['service'], 'nvidia')
 
 
 class CerebrasModelCascadeTests(TestCase):
