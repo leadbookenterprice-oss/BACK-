@@ -3358,7 +3358,7 @@ def request_trial_token(request):
 
     response_data = {
         "sent": sent,
-        "message": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo enviado por email." if channel == 'email' else "No se pudo enviar el cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo por email.",
+        "message": "Codigo enviado por email." if channel == 'email' else "No se pudo enviar el codigo por email.",
         "trial_days": trial_days,
         "email": email or None,
         "channel": channel,
@@ -3384,7 +3384,7 @@ def validate_access_code(request):
         return Response({
             "valid": False,
             "error": "access_code_required",
-            "message": "IngresÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ un codigo promocional valido de 6 caracteres.",
+            "message": "Ingresa un codigo promocional valido de 6 caracteres.",
         }, status=status.HTTP_400_BAD_REQUEST)
 
     access_code = AccessCode.objects.filter(code=code).first()
@@ -8384,7 +8384,7 @@ def send_otp(request):
         creado_en__gte=timezone.now() - timedelta(minutes=15)
     ).count()
     if recent >= 3:
-        return Response({"error": "Demasiados intentos. EsperÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ 15 minutos."}, status=429)
+        return Response({"error": "Demasiados intentos. Espera 15 minutos."}, status=429)
 
     code = str(secrets.randbelow(900000) + 100000)
     code_hash = hashlib.sha256(code.encode()).hexdigest()
@@ -8429,12 +8429,12 @@ def send_otp(request):
     if not str(sent_mode or '').startswith('sent:'):
         return Response({
             "error": "email_send_failed",
-            "message": "No se pudo enviar el codigo por email. IntentÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ de nuevo en unos minutos.",
+            "message": "No se pudo enviar el codigo por email. Intenta de nuevo en unos minutos.",
             "email": email,
             "_mode": sent_mode,
         }, status=502)
 
-    return Response({"mensaje": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo enviado", "email": email, "_mode": sent_mode})
+    return Response({"mensaje": "Codigo enviado", "email": email, "_mode": sent_mode})
 
 
 @api_view(['POST'])
@@ -8444,7 +8444,7 @@ def verify_otp(request):
     code = request.data.get('code', '').strip()
 
     if not email or not code:
-        return Response({"error": "Email y cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo requeridos"}, status=400)
+        return Response({"error": "Email y codigo requeridos"}, status=400)
 
     otp = OTPCode.objects.filter(
         email=email,
@@ -8452,13 +8452,13 @@ def verify_otp(request):
     ).order_by('-creado_en').first()
 
     if not otp:
-        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido o ya utilizado"}, status=400)
+        return Response({"error": "Codigo invalido o ya utilizado"}, status=400)
 
     if otp.is_expired():
-        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo expirado. PedÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ uno nuevo."}, status=400)
+        return Response({"error": "Codigo expirado. Pedi uno nuevo."}, status=400)
 
     if otp.attempts >= 5:
-        return Response({"error": "Demasiados intentos. PedÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­ un nuevo cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo."}, status=429)
+        return Response({"error": "Demasiados intentos. Pedi un nuevo codigo."}, status=429)
 
     # Verificar hash ANTES de incrementar attempts para no penalizar el intento correcto
     code_hash = OTPCode.hash_code(code)
@@ -8466,7 +8466,7 @@ def verify_otp(request):
         otp.attempts += 1
         otp.save()
         intentos_restantes = 5 - otp.attempts
-        return Response({"error": f"CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo incorrecto. {intentos_restantes} intentos restantes."}, status=400)
+        return Response({"error": f"Codigo incorrecto. {intentos_restantes} intentos restantes."}, status=400)
 
     # CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo correcto
     otp.verified = True
@@ -8490,7 +8490,7 @@ def recuperar_password(request):
     if turnstile_response is not None:
         return turnstile_response
 
-    generic_response = {"mensaje": "Si el email existe, te enviamos un cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo de recuperaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n."}
+    generic_response = {"mensaje": "Si el email existe, te enviamos un codigo de recuperacion."}
 
     recent = OTPCode.objects.filter(
         email=email,
@@ -8498,7 +8498,7 @@ def recuperar_password(request):
         creado_en__gte=timezone.now() - timedelta(minutes=15)
     ).count()
     if recent >= 3:
-        return Response({"error": "Demasiados intentos. EsperÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ 15 minutos."}, status=429)
+        return Response({"error": "Demasiados intentos. Espera 15 minutos."}, status=429)
     
     user = Agent.objects.filter(email=email).first()
     if not user:
@@ -8533,7 +8533,7 @@ def recuperar_password(request):
     if not str(sent_mode or '').startswith('sent:'):
         return Response({
             "error": "email_send_failed",
-            "message": "No se pudo enviar el codigo por email. IntentÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ de nuevo en unos minutos.",
+            "message": "No se pudo enviar el codigo por email. Intenta de nuevo en unos minutos.",
             "email": email if settings.DEBUG else None,
             "_mode": sent_mode if settings.DEBUG else None,
         }, status=502)
@@ -8559,17 +8559,17 @@ def confirmar_recuperacion(request):
     ).order_by('-creado_en').first()
     
     if not otp:
-        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido"}, status=400)
+        return Response({"error": "Codigo invalido"}, status=400)
     if otp.is_expired():
-        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo expirado"}, status=400)
+        return Response({"error": "Codigo expirado"}, status=400)
     if not otp.is_valid(code):
         otp.attempts += 1
         otp.save(update_fields=['attempts'])
-        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo incorrecto"}, status=400)
+        return Response({"error": "Codigo incorrecto"}, status=400)
 
     user = Agent.objects.filter(email=email).first()
     if not user:
-        return Response({"error": "CÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo invÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡lido"}, status=400)
+        return Response({"error": "Codigo invalido"}, status=400)
 
     try:
         from django.contrib.auth.password_validation import validate_password

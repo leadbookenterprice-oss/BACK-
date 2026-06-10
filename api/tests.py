@@ -1,9 +1,11 @@
 import json
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 from unittest.mock import patch
 
@@ -1105,6 +1107,25 @@ class PasswordRecoveryCodeTests(TestCase):
 
         self.assertEqual(response.status_code, 400, response.content)
         self.assertEqual(response.json().get('error'), 'turnstile_required')
+
+    def test_verify_otp_expired_message_is_clean(self):
+        email = 'expired-otp@leadbook.local'
+        code = '123456'
+        OTPCode.objects.create(
+            email=email,
+            code_hash=OTPCode.hash_code(code),
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        response = self.client.post(
+            '/api/auth/verify-otp/',
+            {'email': email, 'code': code},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json().get('error'), 'Codigo expirado. Pedi uno nuevo.')
+        self.assertNotIn('Ã', response.json().get('error', ''))
 
     @override_settings(TURNSTILE_REQUIRED=True, TURNSTILE_SECRET_KEY='test-secret')
     @patch('api.services.turnstile.requests.post', return_value=_FakeTurnstileResponse({'success': True}))
