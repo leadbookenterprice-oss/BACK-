@@ -4,7 +4,12 @@ from unittest.mock import patch
 
 from api.ai_services import call_cerebras_api, GeminiQuotaExhaustedError, GeminiRateLimitedError
 from api.models import APIKey, APIRequestLog, CerebrasUsageLog, Servicio
-from api.views import _apply_template_tokens_to_html, _ensure_pdf_contract_markers, _validate_generated_pdf_html
+from api.views import (
+    _apply_template_tokens_to_html,
+    _build_guaranteed_pdf_html,
+    _ensure_pdf_contract_markers,
+    _validate_generated_pdf_html,
+)
 
 
 class _FakeCerebrasResponse:
@@ -194,3 +199,36 @@ class TemplateContractTests(TestCase):
         self.assertIn('data-leadbook-pdf="true"', repaired)
         self.assertIn('data-template-id="tech_modern"', repaired)
         self.assertEqual(errors, [])
+
+    def test_guaranteed_pdf_fallback_accepts_listing_context(self):
+        gallery_url = 'https://res.cloudinary.com/demo/image/upload/gallery.jpg'
+        logo_url = 'https://res.cloudinary.com/demo/image/upload/logo.png'
+        context = {
+            'template_id': 'arena_clara',
+            'tipo_propiedad': 'Casa',
+            'ciudad': 'Cairo',
+            'operacion': 'Venta',
+            'precio': '1500000',
+            'moneda': 'USD',
+            'recamaras': '4',
+            'banos': '3',
+            'superficie_total': '450 m2',
+            'descripcion': 'Descripcion real de la propiedad.',
+            'amenidades': ['Pileta', 'Terraza'],
+            'portada_url': 'https://res.cloudinary.com/demo/image/upload/cover.jpg',
+            'fotos_recorrido': [gallery_url],
+            'logo_url': logo_url,
+            'agencia_nombre': 'LeadBook Realty',
+            'agente_nombre': 'Carlos Santos',
+            'agente_telefono': '+5491100000000',
+            'agente_email': 'carlos@example.com',
+        }
+
+        html = _build_guaranteed_pdf_html(context, 'arena_clara')
+        errors = _validate_generated_pdf_html(html, context)
+
+        self.assertEqual(errors, [])
+        self.assertIn('data-leadbook-pdf="true"', html)
+        self.assertIn('data-template-id="arena_clara"', html)
+        self.assertIn(gallery_url, html)
+        self.assertIn(logo_url, html)
