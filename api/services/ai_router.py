@@ -76,9 +76,22 @@ def _catalog_item(provider):
     return next((item for item in AI_ROOT_CATALOG if item['provider'] == provider), None)
 
 
+def _catalog_models(item):
+    if not item:
+        return []
+    if item.get('provider') == 'cerebras':
+        try:
+            from api.services.cerebras_models import get_active_cerebras_model_entries
+
+            return get_active_cerebras_model_entries()
+        except Exception:
+            pass
+    return item.get('models') or []
+
+
 def _catalog_model(item, model):
     model = str(model or '').strip()
-    return next((entry for entry in item.get('models', []) if entry.get('model') == model), None)
+    return next((entry for entry in _catalog_models(item) if entry.get('model') == model), None)
 
 
 def _active_key_queryset(provider):
@@ -113,7 +126,15 @@ def get_ai_root_config():
     model = str(data.get('model') or (cfg.valor.split(':', 1)[1] if cfg and cfg.valor and ':' in cfg.valor else '')).strip()
 
     item = _catalog_item(provider)
-    if not item or not _catalog_model(item, model):
+    if not item:
+        return dict(DEFAULT_AI_ROOT)
+    if not _catalog_model(item, model):
+        models = _catalog_models(item)
+        default_model = item.get('default_model')
+        if default_model and any(entry.get('model') == default_model for entry in models):
+            return {'provider': provider, 'model': default_model}
+        if models:
+            return {'provider': provider, 'model': str((models[0] or {}).get('model') or '').strip()}
         return dict(DEFAULT_AI_ROOT)
     return {'provider': provider, 'model': model}
 
@@ -147,7 +168,7 @@ def build_ai_root_payload():
     providers = []
     for item in AI_ROOT_CATALOG:
         active_keys = _active_key_count(item['provider'])
-        models = [_model_payload(item, model, active_keys) for model in item.get('models', [])]
+        models = [_model_payload(item, model, active_keys) for model in _catalog_models(item)]
         selectable = any(model.get('selectable') for model in models)
         if not item.get('enabled'):
             status = 'Adapter no disponible'
@@ -230,9 +251,9 @@ def get_provider_default_model(provider):
     if not item:
         return ''
     default_model = item.get('default_model')
-    if default_model:
+    models = _catalog_models(item)
+    if default_model and any(model.get('model') == default_model for model in models):
         return default_model
-    models = item.get('models') or []
     return str((models[0] or {}).get('model') or '').strip() if models else ''
 
 

@@ -15,8 +15,13 @@ from api.services.cerebras_slots import (
     estimate_cerebras_tokens,
     mark_cerebras_slot_exhausted,
     record_cerebras_slot_result,
+    release_cerebras_slot,
     reserve_cerebras_slot,
     resolve_cerebras_max_completion_tokens,
+)
+from api.services.cerebras_models import (
+    CEREBRAS_DEFAULT_MODELS_CASCADE,
+    get_cerebras_key_model_cascade,
 )
 from api.services.content_generation import (
     extract_rate_limit_headers,
@@ -52,10 +57,7 @@ def _allow_global_api_fallback():
 
 
 CEREBRAS_CHAT_COMPLETIONS_URL = 'https://api.cerebras.ai/v1/chat/completions'
-CEREBRAS_MODELS_CASCADE = [
-    'gpt-oss-120b',
-    'zai-glm-4.7',
-]
+CEREBRAS_MODELS_CASCADE = list(CEREBRAS_DEFAULT_MODELS_CASCADE)
 
 
 def _get_cerebras_key(agente=None):
@@ -944,7 +946,92 @@ def call_groq_api(prompt: str, **kwargs) -> str:
     raise RuntimeError(f"Groq sin modelos disponibles: {last_err}")
 
 
-def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
+def _build_cerebras_model_order(requested_model, allow_model_fallback=True):
+    requested_model = str(requested_model or '').strip() or CEREBRAS_MODELS_CASCADE[0]
+    models = [requested_model]
+    if allow_model_fallback:
+        models.extend(model for model in CEREBRAS_MODELS_CASCADE if model != requested_model)
+    seen = set()
+    ordered = []
+    for model in models:
+        if model and model not in seen:
+            ordered.append(model)
+            seen.add(model)
+    return ordered
+
+
+def _record_cerebras_attempt(
+    slot_id,
+    user,
+    *,
+    listado_id=None,
+    run_id=None,
+    step_name=None,
+    model='',
+    task='',
+    success=False,
+    status_code=None,
+    elapsed_ms=0,
+    estimated_tokens=0,
+    actual_tokens=None,
+    rate_limit_headers=None,
+    retry_after_seconds=None,
+    error_message='',
+    metadata=None,
+):
+    if slot_id:
+        record_cerebras_slot_result(
+            slot_id,
+            estimated_tokens=estimated_tokens,
+            actual_tokens=actual_tokens,
+            success=success,
+            error_message=error_message,
+        )
+        _record_cerebras_request_log(
+            slot_id,
+            user,
+            success=success,
+            status_code=status_code,
+            elapsed_ms=elapsed_ms,
+            tokens_used=(
+                actual_tokens
+                if success and actual_tokens is not None
+                else (estimated_tokens if success else 0)
+            ),
+            error_message=error_message,
+        )
+    _record_cerebras_usage_log(
+        slot_id,
+        user,
+        listado_id=listado_id,
+        run_id=run_id,
+        step_name=step_name,
+        model=model,
+        task=task,
+        success=success,
+        status_code=status_code,
+        elapsed_ms=elapsed_ms,
+        estimated_tokens=estimated_tokens,
+        actual_tokens=actual_tokens,
+        rate_limit_headers=rate_limit_headers,
+        retry_after_seconds=retry_after_seconds,
+        error_message=error_message,
+        metadata=metadata or {},
+    )
+
+
+def _update_generation_run_api_key(run_id, slot_id):
+    if not run_id or not slot_id:
+        return
+    try:
+        from api.models import ContentGenerationRun
+
+        ContentGenerationRun.objects.filter(pk=run_id).update(api_key_id=slot_id)
+    except Exception:
+        logger.exception("[CEREBRAS] No se pudo actualizar api_key_id del generation run")
+
+
+def _call_cerebras_api_legacy(prompt: str, agente=None, **kwargs) -> str:
     """Llama a Cerebras usando un slot backend temporal, no una key asignada al usuario."""
     system_prompt = kwargs.get('system_prompt', '')
     task = kwargs.get('task') or 'general'
@@ -1315,6 +1402,285 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
     if last_err:
         raise last_err
     return None
+
+
+def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
+    """Llama a Cerebras rotando primero keys por modelo y luego modelos fallback."""
+    system_prompt = kwargs.get('system_prompt', '')
+    task = kwargs.get('task') or 'general'
+    listado_id = kwargs.get('listado_id') or kwargs.get('listadoId')
+    generation_run_id = kwargs.get('generation_run_id') or kwargs.get('generationRunId')
+    generation_step = (
+        kwargs.get('generation_step')
+        or kwargs.get('generationStep')
+        or infer_step_from_task(task)
+    )
+    max_completion_tokens = resolve_cerebras_max_completion_tokens(
+        task,
+        kwargs.get('max_completion_tokens'),
+    )
+    extra_metadata = kwargs.get('metadata') if isinstance(kwargs.get('metadata'), dict) else {}
+    estimated_tokens = estimate_cerebras_tokens(
+        prompt,
+        system_prompt=system_prompt,
+        max_completion_tokens=max_completion_tokens,
+    )
+    full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+    requested_model = kwargs.get('model') or CEREBRAS_MODELS_CASCADE[0]
+    allow_model_fallback = kwargs.get('allow_model_fallback', True)
+    models_fallback = _build_cerebras_model_order(requested_model, allow_model_fallback)
+
+    payload_base = {
+        'messages': [{'role': 'user', 'content': full_prompt}],
+        'stream': False,
+        'temperature': kwargs.get('temperature', 0.7),
+        'top_p': kwargs.get('top_p', 1),
+        'max_completion_tokens': max_completion_tokens,
+    }
+    if system_prompt:
+        payload_base['messages'] = [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': prompt},
+        ]
+
+    last_err = None
+    model_terms = ('model', 'not found', 'invalid model', 'unsupported model', 'deprecated')
+
+    def attempt(slot_id, key_value, model_id):
+        nonlocal last_err
+        headers = {
+            'Authorization': f'Bearer {key_value}',
+            'Content-Type': 'application/json',
+        }
+        payload = dict(payload_base)
+        payload['model'] = model_id
+        attempt_started_at = time.time()
+        try:
+            response = requests.post(CEREBRAS_CHAT_COMPLETIONS_URL, json=payload, headers=headers, timeout=60)
+            elapsed_ms = int((time.time() - attempt_started_at) * 1000)
+            rate_limit_headers = extract_rate_limit_headers(response.headers)
+            if response.status_code == 200:
+                data = response.json() if response.content else {}
+                content = ((data.get('choices') or [{}])[0].get('message') or {}).get('content')
+                usage = data.get('usage') or {}
+                actual_tokens_value, usage_metadata = _extract_cerebras_usage_tokens(usage)
+                usage_extra_metadata = {**extra_metadata, **usage_metadata}
+                if content:
+                    _record_cerebras_attempt(
+                        slot_id,
+                        agente,
+                        listado_id=listado_id,
+                        run_id=generation_run_id,
+                        step_name=generation_step,
+                        model=model_id,
+                        task=task,
+                        success=True,
+                        status_code=response.status_code,
+                        elapsed_ms=elapsed_ms,
+                        estimated_tokens=estimated_tokens,
+                        actual_tokens=actual_tokens_value,
+                        rate_limit_headers=rate_limit_headers,
+                        metadata={'max_completion_tokens': max_completion_tokens, **usage_extra_metadata},
+                    )
+                    return True, content, None, 'keep'
+
+                last_err = RuntimeError('Cerebras devolvio una respuesta vacia')
+                _record_cerebras_attempt(
+                    slot_id,
+                    agente,
+                    listado_id=listado_id,
+                    run_id=generation_run_id,
+                    step_name=generation_step,
+                    model=model_id,
+                    task=task,
+                    success=False,
+                    status_code=response.status_code,
+                    elapsed_ms=elapsed_ms,
+                    estimated_tokens=estimated_tokens,
+                    actual_tokens=actual_tokens_value,
+                    rate_limit_headers=rate_limit_headers,
+                    error_message=last_err,
+                    metadata={'max_completion_tokens': max_completion_tokens, 'empty_response': True, **usage_extra_metadata},
+                )
+                return False, None, last_err, 'release'
+
+            response_text = str(getattr(response, 'text', '') or '')
+            normalized = response_text.lower()
+            if response.status_code in (401, 403):
+                last_err = APIKeyUnavailableError(API_KEY_UNAVAILABLE_MESSAGE, provider='cerebras', scope='pool')
+                _record_cerebras_attempt(
+                    slot_id,
+                    agente,
+                    listado_id=listado_id,
+                    run_id=generation_run_id,
+                    step_name=generation_step,
+                    model=model_id,
+                    task=task,
+                    success=False,
+                    status_code=response.status_code,
+                    elapsed_ms=elapsed_ms,
+                    estimated_tokens=estimated_tokens,
+                    rate_limit_headers=rate_limit_headers,
+                    error_message=response_text or 'Cerebras auth failed',
+                    metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
+                )
+                return False, None, last_err, 'exhausted'
+
+            if response.status_code == 429:
+                retry_after_seconds = retry_after_from_headers(rate_limit_headers, 600)
+                hard_limit = _is_hard_cerebras_429(normalized)
+                if hard_limit:
+                    last_err = GeminiQuotaExhaustedError(
+                        LIMIT_REACHED_MESSAGE,
+                        provider='cerebras',
+                        scope='provider',
+                        quota_state='hard_exhausted',
+                    )
+                else:
+                    last_err = GeminiRateLimitedError(
+                        "Cerebras esta temporalmente saturado. Reintenta en 10 minutos.",
+                        provider='cerebras',
+                        scope='provider',
+                        quota_state='soft_rate_limited',
+                        retry_after_seconds=retry_after_seconds,
+                    )
+                _record_cerebras_attempt(
+                    slot_id,
+                    agente,
+                    listado_id=listado_id,
+                    run_id=generation_run_id,
+                    step_name=generation_step,
+                    model=model_id,
+                    task=task,
+                    success=False,
+                    status_code=response.status_code,
+                    elapsed_ms=elapsed_ms,
+                    estimated_tokens=estimated_tokens,
+                    rate_limit_headers=rate_limit_headers,
+                    retry_after_seconds=retry_after_seconds,
+                    error_message=response_text or 'Cerebras rate limited',
+                    metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
+                )
+                return False, None, last_err, 'exhausted' if hard_limit else 'release'
+
+            error_obj = RuntimeError(response_text or f'Error Cerebras ({response.status_code})')
+            _record_cerebras_attempt(
+                slot_id,
+                agente,
+                listado_id=listado_id,
+                run_id=generation_run_id,
+                step_name=generation_step,
+                model=model_id,
+                task=task,
+                success=False,
+                status_code=response.status_code,
+                elapsed_ms=elapsed_ms,
+                estimated_tokens=estimated_tokens,
+                rate_limit_headers=rate_limit_headers,
+                error_message=error_obj,
+                metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
+            )
+            if any(term in normalized for term in model_terms):
+                last_err = RuntimeError(response_text or f'Modelo Cerebras no soportado: {model_id}')
+                return False, None, last_err, 'release'
+            last_err = error_obj
+            return False, None, last_err, 'release'
+        except Exception as exc:
+            last_err = exc
+            _record_cerebras_attempt(
+                slot_id,
+                agente,
+                listado_id=listado_id,
+                run_id=generation_run_id,
+                step_name=generation_step,
+                model=model_id,
+                task=task,
+                success=False,
+                status_code=500,
+                elapsed_ms=int((time.time() - attempt_started_at) * 1000),
+                estimated_tokens=estimated_tokens,
+                error_message=last_err,
+                metadata={'max_completion_tokens': max_completion_tokens, **extra_metadata},
+            )
+            return False, None, last_err, 'release'
+
+    if agente is None:
+        key = _get_cerebras_key(agente=None)
+        if not key:
+            raise APIKeyUnavailableError(
+                'No hay slot Cerebras disponible para esta generacion.',
+                provider='cerebras',
+                scope='pool',
+            )
+        for model_id in models_fallback:
+            ok, content, err, action = attempt(None, key, model_id)
+            if ok:
+                return content
+            last_err = err
+            if action == 'exhausted':
+                _mark_cerebras_exhausted(key)
+        if last_err:
+            raise last_err
+        return None
+
+    from api.models import APIKey
+
+    for model_id in models_fallback:
+        excluded_key_ids = set()
+        while True:
+            try:
+                slot = reserve_cerebras_slot(
+                    agente,
+                    listado_id=listado_id,
+                    estimated_tokens=estimated_tokens,
+                    model_id=model_id,
+                    exclude_key_ids=excluded_key_ids,
+                )
+            except CerebrasSlotUnavailable as exc:
+                if not last_err:
+                    last_err = APIKeyUnavailableError(
+                        str(exc),
+                        provider='cerebras',
+                        scope=getattr(exc, 'scope', 'slot'),
+                        quota_state=getattr(exc, 'quota_state', 'soft_rate_limited'),
+                        retry_after_seconds=getattr(exc, 'retry_after_seconds', None),
+                    )
+                break
+
+            key_obj = APIKey.objects.filter(pk=slot.key_id, servicio__nombre__iexact='cerebras').first()
+            if not key_obj:
+                release_cerebras_slot(slot.key_id, user=agente, listado_id=listado_id)
+                excluded_key_ids.add(slot.key_id)
+                last_err = APIKeyUnavailableError(
+                    'No hay slot Cerebras disponible para esta generacion.',
+                    provider='cerebras',
+                    scope='pool',
+                )
+                continue
+
+            key_models = get_cerebras_key_model_cascade(key_obj, sync_if_missing=True)
+            if model_id not in key_models:
+                release_cerebras_slot(slot.key_id, user=agente, listado_id=listado_id)
+                excluded_key_ids.add(slot.key_id)
+                last_err = RuntimeError(f'Modelo Cerebras no soportado por key_id={slot.key_id}: {model_id}')
+                continue
+
+            ok, content, err, action = attempt(slot.key_id, slot.api_key, model_id)
+            if ok:
+                _update_generation_run_api_key(generation_run_id, slot.key_id)
+                return content
+
+            last_err = err
+            excluded_key_ids.add(slot.key_id)
+            if action == 'exhausted':
+                mark_cerebras_slot_exhausted(slot.key_id, err or 'Cerebras key exhausted')
+            else:
+                release_cerebras_slot(slot.key_id, user=agente, listado_id=listado_id)
+
+    if last_err:
+        raise last_err
+    return None
+
 
 @track_api_call(service='groq')
 def call_groq_html(prompt: str, system_prompt: str = "") -> str:

@@ -21,6 +21,7 @@ from .models import (
 from api.services.pool_service import SERVICE_DEFAULTS
 from api.services.api_usage_monitor import build_api_usage_logs, build_api_usage_summary
 from api.services.ai_router import build_ai_root_payload, save_ai_root_config, test_ai_root
+from api.services.cerebras_models import normalize_cerebras_models, store_cerebras_key_models
 from admin_panel.auth import is_admin_request
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
@@ -704,6 +705,9 @@ def admin_apikeys_pool(request):
             'slot_last_error': k.slot_last_error or '',
             'slot_last_rate_limit_headers': k.slot_last_rate_limit_headers or {},
             'slot_last_rate_limit_at': k.slot_last_rate_limit_at,
+            'supported_models': k.supported_models if isinstance(k.supported_models, list) else [],
+            'models_last_synced_at': k.models_last_synced_at,
+            'models_last_error': k.models_last_error or '',
             'active_generation_run_id': active_generation_run.id if active_generation_run else None,
             'active_generation_run_status': active_generation_run.status if active_generation_run else None,
             'active_generation_run_step': active_generation_run.current_step if active_generation_run else None,
@@ -1022,6 +1026,9 @@ def admin_apikeys_pool_detail(request, pk):
             'label': k.label or '',
             'daily_limit': k.google_daily_limit,
             'monthly_limit': k.google_monthly_limit,
+            'supported_models': k.supported_models if isinstance(k.supported_models, list) else [],
+            'models_last_synced_at': k.models_last_synced_at,
+            'models_last_error': k.models_last_error or '',
         })
     elif request.method == 'PUT':
         label = request.data.get('label')
@@ -1162,12 +1169,24 @@ def admin_apikeys_pool_test(request, pk):
         response = _admin_key_test_request(service_name, key.api_key)
         elapsed_ms = int((now() - started).total_seconds() * 1000)
         ok = 200 <= response.status_code < 300
+        synced_models = []
+        models_sync_error = ''
+        if ok and service_name == 'cerebras':
+            try:
+                synced_models = store_cerebras_key_models(
+                    key,
+                    normalize_cerebras_models(response.json()),
+                )
+            except Exception as exc:
+                models_sync_error = str(exc)[:1000]
+                key.models_last_error = models_sync_error
+
         if ok:
             technical_status = 'OK'
             if key.status in {'dead', 'exhausted'}:
                 key.status = 'available'
             key.last_health_status = True
-            key.slot_last_error = ''
+            key.slot_last_error = models_sync_error
         elif response.status_code in {401, 403}:
             technical_status = 'INVALIDA'
             key.status = 'dead'
@@ -1186,7 +1205,10 @@ def admin_apikeys_pool_test(request, pk):
             key.last_health_status = False
             key.slot_last_error = f'Test {service_name} fallo: HTTP {response.status_code}'
         key.last_health_check = now()
-        key.save(update_fields=['status', 'error_count', 'last_health_check', 'last_health_status', 'slot_last_error', 'updated_at'])
+        update_fields = ['status', 'error_count', 'last_health_check', 'last_health_status', 'slot_last_error', 'updated_at']
+        if models_sync_error:
+            update_fields.append('models_last_error')
+        key.save(update_fields=update_fields)
         return Response({
             'id': key.id,
             'service': service_name,
@@ -1195,6 +1217,9 @@ def admin_apikeys_pool_test(request, pk):
             'health_ok': ok,
             'status_code': response.status_code,
             'response_time_ms': elapsed_ms,
+            'supported_models': synced_models or (key.supported_models if isinstance(key.supported_models, list) else []),
+            'models_last_synced_at': key.models_last_synced_at,
+            'models_last_error': models_sync_error or key.models_last_error or '',
             'error': None if ok else (response.text or '')[:500],
             'message': 'Key operativa' if ok else 'El test no pudo validar la key',
         }, status=200 if ok else status.HTTP_502_BAD_GATEWAY)

@@ -9,10 +9,23 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from unittest.mock import patch
 
-from api.ai_services import APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError
-from api.models import APIKey, AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion, OTPCode, Servicio, UsageLog, UserAPIAssignment
+from api.ai_services import APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError, call_cerebras_api
+from api.models import (
+    APIKey,
+    AgentMediaAsset,
+    CerebrasUsageLog,
+    ComercialAgentProfile,
+    ContentGenerationRun,
+    Listado,
+    Notificacion,
+    OTPCode,
+    Servicio,
+    UsageLog,
+    UserAPIAssignment,
+)
 from api.pool_manager import get_next_available_api
 from api.services.listing_extractor import ExtractorError, extract_listing_from_url
+from api.services.cerebras_models import sync_cerebras_key_models
 
 
 class _FakeRawResponse:
@@ -64,6 +77,28 @@ class _FakeTurnstileResponse:
         return self.payload
 
 
+class _FakeCerebrasModelsResponse:
+    def __init__(self, payload, status_code=200, text=''):
+        self.payload = payload
+        self.status_code = status_code
+        self.text = text
+
+    def json(self):
+        return self.payload
+
+
+class _FakeCerebrasChatResponse:
+    def __init__(self, status_code, payload=None, text='', headers=None):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = text
+        self.headers = headers or {}
+        self.content = b'{}' if payload is not None else b''
+
+    def json(self):
+        return self._payload
+
+
 class GeminiPoolSelectionTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
@@ -106,6 +141,130 @@ class GeminiPoolSelectionTests(TestCase):
         self.assertEqual(selected, 'AIza-replacement')
         replacement_key.refresh_from_db()
         self.assertEqual(replacement_key.status, 'available')
+
+
+class CerebrasModelCascadeTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            email='cerebras-cascade@leadbook.local',
+            password='test-pass',
+            nombre='Cerebras Cascade',
+            plan_nombre='starter',
+        )
+        self.admin = get_user_model().objects.create_user(
+            email='cerebras-admin@leadbook.local',
+            password='test-pass',
+            nombre='Cerebras Admin',
+            is_staff=True,
+        )
+        self.service, _ = Servicio.objects.update_or_create(
+            nombre='cerebras',
+            defaults={'descripcion': 'Cerebras', 'default_daily_limit': 1000000},
+        )
+        APIKey.objects.filter(servicio=self.service).delete()
+
+    def _create_key(self, api_key, **kwargs):
+        defaults = {
+            'servicio': self.service,
+            'api_key': api_key,
+            'status': 'available',
+            'google_daily_limit': 1000000,
+            'supported_models': ['gpt-oss-120b', 'zai-glm-4.7'],
+        }
+        defaults.update(kwargs)
+        return APIKey.objects.create(**defaults)
+
+    def _create_listing(self):
+        return Listado.objects.create(
+            agente=self.user,
+            titulo='Casa Cerebras',
+            tipo_propiedad='Casa',
+            operacion='venta',
+            ciudad='Buenos Aires',
+            precio='100000',
+        )
+
+    @patch('api.services.cerebras_models.requests.get')
+    def test_sync_cerebras_key_models_orders_known_models_first(self, mock_get):
+        key = self._create_key('cerebras-sync-key', supported_models=[])
+        mock_get.return_value = _FakeCerebrasModelsResponse({
+            'data': [
+                {'id': 'zai-glm-4.7'},
+                {'id': 'future-model'},
+                {'id': 'gpt-oss-120b'},
+            ],
+        })
+
+        models = sync_cerebras_key_models(key)
+
+        self.assertEqual(models, ['gpt-oss-120b', 'zai-glm-4.7', 'future-model'])
+        key.refresh_from_db()
+        self.assertEqual(key.supported_models, ['gpt-oss-120b', 'zai-glm-4.7', 'future-model'])
+        self.assertIsNotNone(key.models_last_synced_at)
+        self.assertEqual(key.models_last_error, '')
+
+    @patch('api.views_admin.requests.get')
+    def test_admin_pool_test_syncs_cerebras_supported_models(self, mock_get):
+        self.client.force_authenticate(user=self.admin)
+        key = self._create_key('cerebras-admin-key', supported_models=[])
+        mock_get.return_value = _FakeCerebrasModelsResponse({
+            'data': [
+                {'id': 'zai-glm-4.7'},
+                {'id': 'gpt-oss-120b'},
+            ],
+        })
+
+        response = self.client.post(f'/api/admin/apikeys/pool/{key.id}/test/', {}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['supported_models'], ['gpt-oss-120b', 'zai-glm-4.7'])
+        key.refresh_from_db()
+        self.assertEqual(key.supported_models, ['gpt-oss-120b', 'zai-glm-4.7'])
+        self.assertIsNotNone(key.models_last_synced_at)
+
+    @patch('api.ai_services.requests.post')
+    def test_cerebras_generation_rotates_key_before_model_fallback(self, mock_post):
+        key_a = self._create_key('cerebras-key-a')
+        key_b = self._create_key('cerebras-key-b')
+        listing = self._create_listing()
+        run = ContentGenerationRun.objects.create(
+            user=self.user,
+            listado=listing,
+            api_key=key_a,
+            status='running',
+            current_step='pdf',
+        )
+        mock_post.side_effect = [
+            _FakeCerebrasChatResponse(500, text='temporary failure'),
+            _FakeCerebrasChatResponse(200, {
+                'choices': [{'message': {'content': 'contenido ok'}}],
+                'usage': {'total_tokens': 321},
+            }),
+        ]
+
+        result = call_cerebras_api(
+            'Genera copy',
+            agente=self.user,
+            listado_id=listing.id,
+            generation_run_id=run.id,
+            generation_step='pdf',
+            model='gpt-oss-120b',
+            allow_model_fallback=True,
+        )
+
+        self.assertEqual(result, 'contenido ok')
+        first_call = mock_post.call_args_list[0].kwargs
+        second_call = mock_post.call_args_list[1].kwargs
+        self.assertEqual(first_call['headers']['Authorization'], 'Bearer cerebras-key-a')
+        self.assertEqual(second_call['headers']['Authorization'], 'Bearer cerebras-key-b')
+        self.assertEqual(first_call['json']['model'], 'gpt-oss-120b')
+        self.assertEqual(second_call['json']['model'], 'gpt-oss-120b')
+        run.refresh_from_db()
+        self.assertEqual(run.api_key_id, key_b.id)
+        success_log = CerebrasUsageLog.objects.filter(success=True).latest('id')
+        self.assertEqual(success_log.api_key_id, key_b.id)
+        self.assertEqual(success_log.model, 'gpt-oss-120b')
 
 
 class UploadPostAssignmentTests(TestCase):

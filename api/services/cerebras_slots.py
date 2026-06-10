@@ -109,7 +109,7 @@ def release_expired_cerebras_slots(now=None):
     )
 
 
-def reserve_cerebras_slot(user=None, *, listado_id=None, estimated_tokens=1):
+def reserve_cerebras_slot(user=None, *, listado_id=None, estimated_tokens=1, model_id=None, exclude_key_ids=None):
     now = timezone.now()
     release_expired_cerebras_slots(now)
     user_id = getattr(user, 'id', None)
@@ -119,14 +119,19 @@ def reserve_cerebras_slot(user=None, *, listado_id=None, estimated_tokens=1):
         listado_id = None
     estimated_tokens = max(int(estimated_tokens or 1), 1)
     lock_until = now + timedelta(seconds=CEREBRAS_SLOT_TTL_SECONDS)
+    model_id = str(model_id or '').strip()
+    exclude_key_ids = {int(item) for item in (exclude_key_ids or []) if str(item).isdigit()}
 
     with transaction.atomic():
-        keys = list(
+        queryset = (
             APIKey.objects.select_for_update()
             .filter(servicio__nombre__iexact='cerebras')
             .exclude(status__in=['dead', 'disabled'])
             .order_by('slot_tokens_today', 'requests_today', 'id')
         )
+        if exclude_key_ids:
+            queryset = queryset.exclude(pk__in=exclude_key_ids)
+        keys = list(queryset)
 
         if not keys:
             raise CerebrasSlotUnavailable(
@@ -139,8 +144,13 @@ def reserve_cerebras_slot(user=None, *, listado_id=None, estimated_tokens=1):
         available = []
         locked_retry_after = None
         any_budget_remaining = False
+        saw_model_candidate = False
 
         for key in keys:
+            supported_models = key.supported_models if isinstance(key.supported_models, list) else []
+            if model_id and supported_models and model_id not in supported_models:
+                continue
+            saw_model_candidate = True
             changed = _reset_key_budget_if_needed(key, now)
             is_locked = bool(key.slot_locked_until and key.slot_locked_until > now)
             budget = _budget_for_key(key)
@@ -196,6 +206,13 @@ def reserve_cerebras_slot(user=None, *, listado_id=None, estimated_tokens=1):
                     locked_until=lock_until,
                 )
 
+        if model_id and not saw_model_candidate:
+            raise CerebrasSlotUnavailable(
+                f'No hay slots Cerebras con soporte para el modelo {model_id}.',
+                quota_state='hard_exhausted',
+                scope='model',
+            )
+
         if any_budget_remaining and locked_retry_after:
             raise CerebrasSlotUnavailable(
                 'Todos los slots Cerebras están ocupados. Esperá a que termine la generación en curso.',
@@ -209,6 +226,33 @@ def reserve_cerebras_slot(user=None, *, listado_id=None, estimated_tokens=1):
             quota_state='hard_exhausted',
             scope='provider',
         )
+
+
+def release_cerebras_slot(slot_id, *, user=None, listado_id=None):
+    if not slot_id:
+        return
+    user_id = getattr(user, 'id', None)
+    try:
+        listado_id = int(listado_id) if listado_id else None
+    except (TypeError, ValueError):
+        listado_id = None
+    with transaction.atomic():
+        key = APIKey.objects.select_for_update().filter(pk=slot_id, servicio__nombre__iexact='cerebras').first()
+        if not key:
+            return
+        if user_id and key.slot_locked_by_id and key.slot_locked_by_id != user_id:
+            return
+        if listado_id and key.slot_locked_listado_id and key.slot_locked_listado_id != listado_id:
+            return
+        _clear_slot_lock(key)
+        key.save(update_fields=[
+            'status',
+            'slot_locked_by',
+            'slot_locked_listado',
+            'slot_locked_at',
+            'slot_locked_until',
+            'updated_at',
+        ])
 
 
 def record_cerebras_slot_result(slot_id, *, estimated_tokens=1, actual_tokens=None, success=True, error_message=''):
