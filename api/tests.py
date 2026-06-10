@@ -177,6 +177,53 @@ class UploadPostAssignmentTests(TestCase):
         )
 
 
+class AdminAPIKeyPoolDeleteTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = get_user_model().objects.create_user(
+            email='admin-delete-key@leadbook.local',
+            password='test-pass',
+            nombre='Admin Delete Key',
+            is_staff=True,
+        )
+        self.user = get_user_model().objects.create_user(
+            email='assigned-key-user@leadbook.local',
+            password='test-pass',
+            nombre='Assigned Key User',
+            plan_nombre='starter',
+        )
+        self.service, _ = Servicio.objects.update_or_create(
+            nombre='cerebras',
+            defaults={
+                'descripcion': 'Cerebras',
+                'default_daily_limit': 1000000,
+            },
+        )
+        self.client.force_authenticate(self.admin)
+
+    def test_admin_can_delete_key_with_historical_assignment(self):
+        key = APIKey.objects.create(
+            servicio=self.service,
+            api_key='csk-protected-delete-test',
+            label='Cerebras protected delete test',
+            status='exhausted',
+            google_daily_limit=1000000,
+        )
+        UserAPIAssignment.objects.create(
+            user=self.user,
+            apikey=key,
+            servicio=self.service,
+            is_primary=True,
+            activo=False,
+        )
+
+        response = self.client.delete(f'/api/admin/apikeys/pool/{key.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(APIKey.objects.filter(id=key.id).exists())
+        self.assertFalse(UserAPIAssignment.objects.filter(apikey_id=key.id).exists())
+
+
 class ListingExtractorTests(TestCase):
     def test_structured_extraction_success(self):
         html = '''

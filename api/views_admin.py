@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from decouple import config
 from django.conf import settings
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.utils.crypto import constant_time_compare
 from django.utils.timezone import now
 from datetime import timedelta
@@ -172,6 +173,30 @@ def _api_key_has_history(key):
         return True
     counters = [key.requests_today, key.requests_this_month, key.total_requests, key.error_count]
     return bool(key.last_used_at or any(int(value or 0) > 0 for value in counters))
+
+
+def _delete_pool_api_key(key):
+    """
+    Hard-delete an admin pool key after intentionally clearing assignment rows.
+
+    UserAPIAssignment protects APIKey rows so assignment history cannot vanish
+    accidentally through cascades. When an admin deletes a key from the pool,
+    those assignment links must be removed first or Django raises ProtectedError.
+    """
+    service_name = _normalize_service_name(key.servicio.nombre if key.servicio_id else '')
+    key_id = key.id
+    label = key.label or _mask_secret(key.api_key)
+    with transaction.atomic():
+        assignments_deleted, _ = UserAPIAssignment.objects.filter(apikey=key).delete()
+        deleted_count, _ = key.delete()
+    return {
+        'ok': True,
+        'deleted': deleted_count,
+        'assignments_deleted': assignments_deleted,
+        'id': key_id,
+        'service': service_name,
+        'label': label,
+    }
 
 
 def _key_assignment_stats(key):
@@ -1016,8 +1041,15 @@ def admin_apikeys_pool_detail(request, pk):
         k.save(update_fields=['label', 'google_daily_limit', 'google_monthly_limit', 'updated_at'])
         return Response({'ok': True})
     elif request.method == 'DELETE':
-        k.delete()
-        return Response({'ok': True})
+        try:
+            return Response(_delete_pool_api_key(k))
+        except ProtectedError as exc:
+            protected = [obj.__class__.__name__ for obj in exc.protected_objects]
+            return Response({
+                'error': 'api_key_delete_blocked',
+                'message': 'No se pudo borrar la key porque todavia tiene datos protegidos relacionados.',
+                'protected_objects': sorted(set(protected)),
+            }, status=status.HTTP_409_CONFLICT)
 
 
 def _admin_key_test_request(service_name, api_key):
