@@ -823,6 +823,52 @@ class ListingResultPersistenceTests(TestCase):
         self.assertEqual(response['Content-Type'], 'application/pdf')
         self.assertIn('inline;', response['Content-Disposition'])
 
+    def test_generar_pdf_uses_local_fallback_when_ai_returns_incomplete_html(self):
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa fallback PDF',
+            tipo_propiedad='Casa',
+            operacion='venta',
+            ciudad='Cairo',
+            precio='1500000',
+            moneda='USD',
+            datos_extra={},
+        )
+
+        foto_url = 'https://res.cloudinary.com/demo/image/upload/listado/foto_1.jpg'
+        payload = {
+            'listado_id': listado.id,
+            'template_id': 'arena_clara',
+            'tipoPropiedad': 'Casa',
+            'operacion': 'venta',
+            'ciudad': 'Cairo',
+            'precio': '1500000',
+            'moneda': 'USD',
+            'descripcion': 'Casa luminosa con vista panoramica y excelente distribucion.',
+            'amenidades': ['Terraza', 'Vista abierta'],
+            'portadaUrl': foto_url,
+            'fotosRecorrido': [foto_url],
+        }
+
+        with patch('api.ai_services.generar_html_gemini', return_value='<section>PDF sin documento completo</section>'), \
+             patch('api.services.render_engine.render_html_to_pdf', return_value=b'%PDF-1.4 FALLBACK'), \
+             patch('api.services.almacenamiento.AlmacenamientoCloudinary.guardar_pdf', return_value='https://res.cloudinary.com/demo/raw/upload/ficha.pdf'), \
+             patch('api.views._render_and_store_pdf_cover', return_value='https://res.cloudinary.com/demo/image/upload/cover.jpg'):
+            response = self.client.post(reverse('generar_pdf'), payload, format='json')
+
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()
+        self.assertEqual(data['generation_source'], 'fallback_local')
+        self.assertIn('html_document_missing', data['fallback_reason'])
+        self.assertIn('data-leadbook-pdf="true"', data['html'])
+        self.assertIn('data-template-id="arena_clara"', data['html'])
+
+        listado.refresh_from_db()
+        pdf_data = listado.datos_extra['resultados']['pdf']
+        self.assertEqual(pdf_data['generation_source'], 'fallback_local')
+        self.assertEqual(pdf_data['url'], 'https://res.cloudinary.com/demo/raw/upload/ficha.pdf')
+        self.assertIn('data-section="gallery"', pdf_data['html'])
+
     def test_descargar_pdf_returns_404_without_url_or_html(self):
         listado = Listado.objects.create(
             agente=self.user,

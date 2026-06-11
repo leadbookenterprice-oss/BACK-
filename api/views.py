@@ -473,6 +473,137 @@ def _validate_generated_pdf_html(html_string, context):
     return errors
 
 
+def _build_guaranteed_pdf_html(context, template_id, fallback_reason=''):
+    template_id = _normalize_template_id(template_id) or 'tech_modern'
+    contract = get_template_contract(template_id) or get_template_contract('tech_modern')
+    colors = dict((contract or {}).get('colors') or {})
+    tokens = context.get('template_tokens') if isinstance(context.get('template_tokens'), dict) else {}
+    token_palette = tokens.get('palette') if isinstance(tokens.get('palette'), dict) else {}
+    for key, value in token_palette.items():
+        if value:
+            colors[key] = value
+
+    primary = colors.get('primary') or '#0d47a1'
+    secondary = colors.get('secondary') or '#1565c0'
+    accent = colors.get('accent') or '#00e5ff'
+    background = colors.get('background') or '#f8fafc'
+    text_color = colors.get('text') or '#111827'
+
+    def esc(value, fallback=''):
+        value = fallback if value in (None, '') else value
+        return html_lib.escape(str(value or '').strip())
+
+    tipo = esc(context.get('tipo_propiedad'), 'Propiedad')
+    ciudad = esc(context.get('ciudad'), 'Ubicacion destacada')
+    operacion = esc(context.get('operacion'), 'Venta')
+    moneda = esc(context.get('moneda'), 'USD')
+    precio = esc(context.get('precio'), 'Consultar')
+    descripcion = esc(context.get('descripcion'), 'Propiedad disponible con excelente potencial comercial.')
+    portada_url = str(context.get('portada_url') or '').strip()
+    gallery = [str(item or '').strip() for item in (context.get('fotos_recorrido') or []) if str(item or '').strip()]
+    hero_url = portada_url or (gallery[0] if gallery else '')
+    logo_url = str(context.get('logo_url') or context.get('agencia_logo_url') or '').strip()
+    agent_photo = str(context.get('agente_foto_url') or '').strip()
+    amenities = context.get('amenidades') or []
+    if isinstance(amenities, str):
+        amenities = [item.strip() for item in amenities.split(',') if item.strip()]
+    if not isinstance(amenities, (list, tuple)) or not amenities:
+        amenities = ['Ubicacion estrategica', 'Ambientes funcionales', 'Buena iluminacion']
+
+    stats = [
+        ('Recamaras', context.get('recamaras')),
+        ('Banos', context.get('banos')),
+        ('Cubierta', context.get('superficie_cubierta')),
+        ('Total', context.get('superficie_total')),
+        ('Estacionamientos', context.get('estacionamientos')),
+    ]
+    stat_cards = ''.join(
+        f'<div class="stat"><span>{esc(label)}</span><strong>{esc(value)}</strong></div>'
+        for label, value in stats
+        if value not in (None, '')
+    ) or '<div class="stat"><span>Tipo</span><strong>Ficha comercial</strong></div>'
+
+    amenity_cards = ''.join(f'<li>{esc(item)}</li>' for item in amenities[:10])
+    gallery_images = ''.join(
+        f'<img src="{html_lib.escape(url)}" alt="Foto recorrido {idx + 1}">'
+        for idx, url in enumerate(gallery[:8])
+    )
+    if not gallery_images and hero_url:
+        gallery_images = f'<img src="{html_lib.escape(hero_url)}" alt="Foto principal">'
+    logo_html = f'<img class="logo" src="{html_lib.escape(logo_url)}" alt="Logo agencia">' if logo_url else ''
+    agent_photo_html = f'<img class="agent-photo" src="{html_lib.escape(agent_photo)}" alt="Foto agente">' if agent_photo else ''
+    fallback_note = esc(fallback_reason)
+
+    return f"""<!doctype html>
+<html lang="es" data-leadbook-pdf="true" data-template-id="{template_id}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ficha LeadBook - {tipo} en {ciudad}</title>
+  <style>
+    :root {{
+      --primary: {primary};
+      --secondary: {secondary};
+      --accent: {accent};
+      --background: {background};
+      --text: {text_color};
+    }}
+    @page {{ size: A4; margin: 0; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: var(--background); color: var(--text); font-family: Arial, Helvetica, sans-serif; line-height: 1.45; }}
+    .leadbook-pdf {{ width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff; }}
+    section {{ padding: 28px 34px; }}
+    .hero {{ min-height: 310px; display: flex; align-items: flex-end; color: #fff; background: linear-gradient(135deg, var(--primary), var(--secondary)); position: relative; overflow: hidden; }}
+    .hero img.cover {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .64; }}
+    .hero::after {{ content: ""; position: absolute; inset: 0; background: linear-gradient(0deg, rgba(0,0,0,.72), rgba(0,0,0,.12)); }}
+    .hero-content {{ position: relative; z-index: 1; max-width: 680px; }}
+    .eyebrow {{ display: inline-block; margin-bottom: 12px; padding: 7px 12px; border-radius: 999px; background: var(--accent); color: #111; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }}
+    h1 {{ margin: 0; font-size: 42px; line-height: 1.05; }}
+    h2 {{ margin: 0 0 14px; font-size: 20px; color: var(--primary); }}
+    .price-row {{ display: grid; grid-template-columns: 1.2fr .8fr; border-top: 2px solid var(--primary); border-bottom: 1px solid rgba(0,0,0,.12); gap: 18px; }}
+    .price-box strong {{ display: block; font-size: 31px; color: var(--primary); }}
+    .price-box span {{ font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: var(--secondary); }}
+    .stats-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
+    .stat {{ border: 1px solid rgba(0,0,0,.12); border-radius: 12px; padding: 14px; }}
+    .stat span {{ display: block; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--secondary); }}
+    .stat strong {{ display: block; margin-top: 6px; font-size: 20px; }}
+    .description p {{ margin: 0; font-size: 15px; }}
+    .amenities ul {{ margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; list-style: none; }}
+    .amenities li {{ padding: 10px 12px; border-left: 4px solid var(--accent); background: rgba(0,0,0,.035); }}
+    .gallery-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }}
+    .gallery-grid img {{ width: 100%; height: 155px; object-fit: cover; border-radius: 12px; }}
+    .contact-card {{ display: grid; grid-template-columns: 90px 1fr 90px; gap: 18px; align-items: center; border-top: 2px solid var(--accent); background: rgba(0,0,0,.035); }}
+    .logo, .agent-photo {{ width: 78px; height: 78px; object-fit: contain; border-radius: 999px; background: #fff; padding: 8px; }}
+    .agent-photo {{ object-fit: cover; padding: 0; }}
+    .contact-card p {{ margin: 2px 0; }}
+    .fallback-note {{ display: none; }}
+  </style>
+</head>
+<body>
+  <main class="leadbook-pdf">
+    <section class="hero" data-section="hero">
+      {f'<img class="cover" src="{html_lib.escape(hero_url)}" alt="Foto principal">' if hero_url else ''}
+      <div class="hero-content"><span class="eyebrow">{operacion}</span><h1>{tipo} en {ciudad}</h1></div>
+    </section>
+    <section class="price-row" data-section="price">
+      <div class="price-box"><span>Precio</span><strong>{moneda} {precio}</strong></div>
+      <div class="price-box"><span>Operacion</span><strong>{operacion}</strong></div>
+    </section>
+    <section data-section="stats"><h2>Datos clave</h2><div class="stats-grid">{stat_cards}</div></section>
+    <section class="description" data-section="description"><h2>Descripcion</h2><p>{descripcion}</p></section>
+    <section class="amenities" data-section="amenities"><h2>Amenidades</h2><ul>{amenity_cards}</ul></section>
+    <section data-section="gallery"><h2>Galeria</h2><div class="gallery-grid">{gallery_images}</div></section>
+    <section class="contact-card" data-section="contact">
+      <div>{logo_html}</div>
+      <div><h2>Contacto</h2><p><strong>{esc(context.get('agente_nombre'), 'Asesor LeadBook')}</strong></p><p>{esc(context.get('agente_rol'), 'Asesor Comercial')}</p><p>{esc(context.get('agente_telefono'))}</p><p>{esc(context.get('agente_email'))}</p><p>{esc(context.get('agencia_nombre'))}</p></div>
+      <div>{agent_photo_html}</div>
+    </section>
+    <p class="fallback-note">fallback_pdf_html {fallback_note}</p>
+  </main>
+</body>
+</html>"""
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
@@ -6897,6 +7028,8 @@ def generar_pdf(request):
         context['ai_model'] = _resolve_requested_ai_model(data)
         context['ai_provider'] = _resolve_requested_ai_provider(data)
         context['generation_protocol'] = data.get('generation_protocol') or data.get('generationProtocol') or {}
+        pdf_generation_source = 'ai'
+        pdf_fallback_reason = ''
 
         logger.info(
             "[PDF] generar_pdf listado_id=%s template_id=%s user_id=%s",
@@ -6925,14 +7058,10 @@ def generar_pdf(request):
             )
             
         if not html_string:
-            _mark_generation_failed(generation_run_id, generation_step_name, "Cerebras no devolvio HTML para el PDF.", error_code='pdf_ia_empty')
-            return Response(
-                {
-                    "error": "pdf_ia_empty",
-                    "detalle": "Cerebras no devolvio HTML para el PDF.",
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            pdf_generation_source = 'fallback_local'
+            pdf_fallback_reason = "Cerebras no devolvio HTML para el PDF."
+            logger.warning("[PDF] IA sin HTML listado_id=%s. Usando fallback local.", listado_id_hint)
+            html_string = _build_guaranteed_pdf_html(context, template_id, pdf_fallback_reason)
 
         html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
         html_string = _repair_mojibake_text(html_string)
@@ -6958,16 +7087,34 @@ def generar_pdf(request):
 
         if validation_errors:
             detalle = f"Cerebras devolvio HTML incompleto para PDF: {', '.join(validation_errors)}"
-            logger.error("[PDF] HTML invalido listado_id=%s errores=%s", listado_id_hint, validation_errors)
-            _mark_generation_failed(generation_run_id, generation_step_name, detalle, error_code='pdf_html_invalid')
-            return Response(
-                {
-                    "error": "pdf_html_invalid",
-                    "detalle": detalle,
-                    "validation_errors": validation_errors,
-                    "template_id": template_id,
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
+            logger.warning("[PDF] HTML invalido listado_id=%s errores=%s. Usando fallback local.", listado_id_hint, validation_errors)
+            pdf_generation_source = 'fallback_local'
+            pdf_fallback_reason = detalle
+            html_string = _build_guaranteed_pdf_html(context, template_id, detalle)
+            html_string = _inject_agency_brand_lockup(html_string, context.get('logo_url', ''), context.get('agencia_nombre', ''))
+            html_string = _repair_mojibake_text(html_string)
+            html_string = _apply_template_tokens_to_html(html_string, template_id, selection.get('template_tokens'))
+            validation_errors = _validate_generated_pdf_html(html_string, context)
+
+            if validation_errors:
+                fallback_detalle = f"Fallback local PDF invalido: {', '.join(validation_errors)}"
+                logger.error("[PDF] Fallback local invalido listado_id=%s errores=%s", listado_id_hint, validation_errors)
+                _mark_generation_failed(generation_run_id, generation_step_name, fallback_detalle, error_code='pdf_fallback_invalid')
+                return Response(
+                    {
+                        "error": "pdf_fallback_invalid",
+                        "detalle": fallback_detalle,
+                        "validation_errors": validation_errors,
+                        "template_id": template_id,
+                    },
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+            logger.info(
+                "[PDF] Fallback local listo listado_id=%s template_id=%s reason=%s",
+                listado_id_hint,
+                template_id,
+                pdf_fallback_reason,
             )
 
         # ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ ConversiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n a PDF Real con Playwright ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
@@ -6997,11 +7144,14 @@ def generar_pdf(request):
 
                     listado_obj.datos_extra['resultados']['pdf'] = {
                         "url": pdf_url,
+                        "html": html_string,
                         "cover_frame_url": pdf_cover_url,
                         "cover_url": pdf_cover_url,
                         "template_id": template_id,
                         "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
                         "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
+                        "generation_source": pdf_generation_source,
+                        "fallback_reason": pdf_fallback_reason,
                     }
                     if pdf_cover_url:
                         listado_obj.datos_extra['dashboard_image_url'] = pdf_cover_url
@@ -7022,6 +7172,47 @@ def generar_pdf(request):
                     os.remove(f)
             except Exception:
                 pass
+
+        if not pdf_url and html_string and listado_obj:
+            detalle = pdf_error_detail or "PDF remoto no disponible; se guardo HTML para render bajo demanda."
+            logger.warning("[PDF] Sin URL remota, guardando HTML fallback listado_id=%s detalle=%s", listado_id_hint, detalle)
+            if not listado_obj.datos_extra:
+                listado_obj.datos_extra = {}
+            if 'resultados' not in listado_obj.datos_extra:
+                listado_obj.datos_extra['resultados'] = {}
+            listado_obj.datos_extra['resultados']['pdf'] = {
+                "url": "",
+                "html": html_string,
+                "cover_frame_url": pdf_cover_url,
+                "cover_url": pdf_cover_url,
+                "template_id": template_id,
+                "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+                "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
+                "generation_source": pdf_generation_source,
+                "fallback_reason": pdf_fallback_reason,
+                "render_error": detalle,
+            }
+            listado_obj.save(update_fields=['datos_extra'])
+            response_payload = {
+                "html": html_string,
+                "url": "",
+                "cover_frame_url": pdf_cover_url,
+                "cover_url": pdf_cover_url,
+                "listado_id": listado_id_hint,
+                "template_id": template_id,
+                "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
+                "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
+                "generation_source": pdf_generation_source,
+                "fallback_reason": pdf_fallback_reason,
+                "render_error": detalle,
+            }
+            _mark_generation_done(generation_run_id, generation_step_name, {
+                "html": html_string,
+                "template_id": template_id,
+                "generation_source": pdf_generation_source,
+                "render_error": detalle,
+            })
+            return Response(response_payload, status=status.HTTP_200_OK)
 
         if not pdf_url:
             detalle = pdf_error_detail or "No se pudo generar un PDF valido para guardar."
@@ -7053,11 +7244,15 @@ def generar_pdf(request):
             "template_id": template_id,
             "brand_template_id": (selection.get('brand_template').id if selection.get('brand_template') else None),
             "brand_template_revision": (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None),
+            "generation_source": pdf_generation_source,
+            "fallback_reason": pdf_fallback_reason,
         }
         _mark_generation_done(generation_run_id, generation_step_name, {
             "url": pdf_url,
+            "html": html_string,
             "cover_url": pdf_cover_url,
             "template_id": template_id,
+            "generation_source": pdf_generation_source,
         })
         return Response(response_payload, status=status.HTTP_200_OK)
 
