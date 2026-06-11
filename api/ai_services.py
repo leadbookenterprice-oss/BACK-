@@ -18,6 +18,7 @@ from api.services.cerebras_slots import (
     reserve_cerebras_slot,
     resolve_cerebras_max_completion_tokens,
 )
+from api.services.ai_limits import ProviderLimitExceeded, preflight_ai_request
 from api.services.content_generation import (
     extract_rate_limit_headers,
     infer_step_from_task,
@@ -1019,6 +1020,47 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
     last_err = None
     last_status_code = None
     for model_id in models_fallback:
+        try:
+            preflight_ai_request('cerebras', model_id, estimated_tokens=estimated_tokens)
+        except ProviderLimitExceeded as exc:
+            last_err = exc
+            _record_cerebras_usage_log(
+                slot.key_id if slot else None,
+                agente,
+                listado_id=listado_id,
+                run_id=generation_run_id,
+                step_name=generation_step,
+                model=model_id,
+                task=task,
+                success=False,
+                status_code=429,
+                estimated_tokens=estimated_tokens,
+                retry_after_seconds=getattr(exc, 'retry_after_seconds', None),
+                error_message=str(exc),
+                metadata={
+                    'max_completion_tokens': max_completion_tokens,
+                    'preflight_blocked': True,
+                    'limit_key': getattr(exc, 'limit_key', ''),
+                },
+            )
+            if model_id != models_fallback[-1]:
+                continue
+            if getattr(exc, 'quota_state', '') == 'hard_exhausted':
+                raise GeminiQuotaExhaustedError(
+                    str(exc),
+                    provider='cerebras',
+                    scope=getattr(exc, 'scope', 'model'),
+                    quota_state='hard_exhausted',
+                    retry_after_seconds=getattr(exc, 'retry_after_seconds', None),
+                ) from exc
+            raise GeminiRateLimitedError(
+                str(exc),
+                provider='cerebras',
+                scope=getattr(exc, 'scope', 'model'),
+                quota_state='soft_rate_limited',
+                retry_after_seconds=getattr(exc, 'retry_after_seconds', 600),
+            ) from exc
+
         payload = dict(payload_base)
         payload['model'] = model_id
         attempt_started_at = time.time()
@@ -1427,6 +1469,8 @@ def _as_clean_list(value, limit=8):
 
 
 def _build_controlled_pdf_html_prompt(context):
+    from api.services.cerebras_generation_protocol import protocol_prompt_fragment
+
     template_id = normalize_contract_template_id(context.get('template_id')) or 'tech_modern'
     contract = get_template_contract(template_id)
     if not contract:
@@ -1465,10 +1509,12 @@ def _build_controlled_pdf_html_prompt(context):
             'agency': context.get('agencia_nombre') or '',
             'contact_html': context.get('agente_contacto_html') or '',
         },
+        'generation_protocol': context.get('generation_protocol') if isinstance(context.get('generation_protocol'), dict) else {},
     }
 
     colors = contract['colors']
     fonts = contract['fonts']
+    protocol_fragment = protocol_prompt_fragment(context.get('generation_protocol'), 'pdf')
     prompt = f"""
 Genera UN HTML completo para PDF A4 inmobiliario de LeadBook.
 No generes una web navegable. No uses nav, menu, Inicio, Propiedades, Contacto superior ni links de landing.
@@ -1490,6 +1536,7 @@ Contrato visual obligatorio:
 
 Datos compactos:
 {json.dumps(payload, ensure_ascii=False)}
+{protocol_fragment}
 """
     return prompt.strip(), contract
 

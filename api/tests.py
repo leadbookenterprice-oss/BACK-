@@ -1,43 +1,22 @@
 import json
+from datetime import datetime
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 from unittest.mock import patch
 
 from api.ai_services import APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError
-from api.models import APIKey, AgentMediaAsset, ComercialAgentProfile, Listado, Notificacion, OTPCode, Servicio, UserAPIAssignment
+from api.models import APIKey, AgentMediaAsset, ComercialAgentProfile, ConfiguracionSistema, ContentGenerationRun, Listado, Notificacion, OTPCode, Servicio, UsageLog, UserAPIAssignment
 from api.pool_manager import get_next_available_api
-from api.services.listing_extractor import ExtractorError, extract_listing_from_url
-
-
-class _FakeRawResponse:
-    def __init__(self, content):
-        self._content = content
-
-    def read(self, *_args, **_kwargs):
-        return self._content
-
-
-class _FakeHttpResponse:
-    is_redirect = False
-    is_permanent_redirect = False
-    status_code = 200
-
-    def __init__(self, html, url='https://example.com/propiedad'):
-        self.url = url
-        self.headers = {'Content-Type': 'text/html; charset=utf-8'}
-        self.raw = _FakeRawResponse(html.encode('utf-8'))
-        self._content = b''
-
-    @property
-    def content(self):
-        return self._content
-
-    def raise_for_status(self):
-        return None
+from api.services.ai_router import build_ai_root_payload
+from api.services.ai_limits import get_model_limit_config, load_ai_limits_config
+from api.services.cerebras_generation_protocol import PROTOCOL_VERSION, create_generation_protocol
+from api.services.content_generation import CONTENT_PACK_STEPS, start_or_resume_generation_run
+from api.services.nvidia_models import NVIDIA_FREE_MODELS_CONFIG_KEY, discover_nvidia_free_models, normalize_nvidia_models
 
 
 class _FakeStreamResponse:
@@ -175,239 +154,314 @@ class UploadPostAssignmentTests(TestCase):
         )
 
 
-class ListingExtractorTests(TestCase):
-    def test_structured_extraction_success(self):
-        html = '''
-        <html><head><script type="application/ld+json">
-        {"@type":"RealEstateListing","name":"Casa luminosa en Palermo","description":"Casa con patio y pileta.",
-        "image":["/foto1.jpg","https://cdn.example.com/foto2.jpg"],
-        "offers":{"price":"250000","priceCurrency":"USD"},
-        "address":{"addressLocality":"Palermo","streetAddress":"Av. Siempre Viva 123"},
-        "numberOfBedrooms":3,"numberOfBathroomsTotal":2,"floorSize":{"value":180},
-        "amenityFeature":[{"name":"Piscina"},{"name":"Parrilla"}]}
-        </script></head><body></body></html>
-        '''
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
-            result = extract_listing_from_url('https://example.com/propiedad')
-
-        self.assertTrue(result['ok'])
-        self.assertGreaterEqual(result['confidence'], 0.6)
-        self.assertEqual(result['data']['titulo'], 'Casa luminosa en Palermo')
-        self.assertEqual(result['data']['moneda'], 'USD')
-        self.assertEqual(result['data']['recamaras'], 3)
-        self.assertEqual(len(result['data']['fotos']), 2)
-        self.assertEqual(len(result['media_candidates']), 2)
-        self.assertEqual(result['required_action'], 'none')
-        self.assertIn('extraction_id', result)
-
-    def test_fallback_extraction_when_no_structured_data(self):
-        html = '''
-        <html><head><title>Departamento en venta</title><meta property="og:image" content="/hero.jpg"></head>
-        <body><h1>Departamento en venta en Belgrano</h1>
-        <p>Excelente departamento en venta con 2 habitaciones, 1 baño, 74 m2, balcon y cochera. USD 120.000.</p></body></html>
-        '''
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
-            result = extract_listing_from_url('https://example.com/depto')
-
-        self.assertTrue(result['ok'])
-        self.assertIn('semiestructurada', ' '.join(result['warnings']))
-        self.assertEqual(result['data']['operacion'], 'venta')
-        self.assertEqual(result['data']['recamaras'], 2)
-        self.assertEqual(result['data']['moneda'], 'USD')
-
-    def test_invalid_url_controlled_error(self):
-        with self.assertRaises(ExtractorError) as ctx:
-            extract_listing_from_url('ftp://example.com/a')
-        self.assertEqual(ctx.exception.status_code, 400)
-
-    @override_settings(IMPORT_URL_PLAYWRIGHT_ENABLED=True)
-    def test_js_only_page_uses_playwright_when_enabled(self):
-        empty_html = '<html><head><title>Cargando</title></head><body><div id="app"></div></body></html>'
-        rendered_html = '''
-        <html><head><meta property="og:image" content="https://cdn.example.com/rendered.jpg"></head>
-        <body><h1>Casa renderizada en Punta</h1>
-        <p>Casa en venta con 4 habitaciones, 3 banos, piscina y 320 m2. USD 900000.</p></body></html>
-        '''
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(empty_html)), \
-             patch('api.services.listing_extractor._render_html_with_playwright', return_value=(rendered_html, 'https://example.com/js')):
-            result = extract_listing_from_url('https://example.com/js')
-
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['mode'], 'playwright')
-        self.assertEqual(result['data']['titulo'], 'Casa renderizada en Punta')
-        self.assertEqual(result['media_candidates'][0], 'https://cdn.example.com/rendered.jpg')
-
-    def test_blocked_page_returns_required_action(self):
-        html = '<html><body><h1>Access denied</h1><p>Verify you are human. CAPTCHA required.</p></body></html>'
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
-            result = extract_listing_from_url('https://example.com/blocked', use_playwright=False, use_unlocker=False)
-
-        self.assertFalse(result['ok'])
-        self.assertEqual(result['required_action'], 'manual_review')
-        self.assertEqual(result['status'], 'needs_input')
-
-    @override_settings(
-        IMPORT_URL_PLAYWRIGHT_ENABLED=True,
-        IMPORT_URL_UNLOCKER_ENABLED=True,
-        BRIGHTDATA_UNLOCKER_TOKEN='token',
-        BRIGHTDATA_UNLOCKER_ZONE='web_unlocker1',
-    )
-    def test_blocked_static_tries_playwright_then_unlocker(self):
-        blocked = ExtractorError(
-            'La pagina bloqueo la extraccion automatica.',
-            status_code=200,
-            required_action='blocked',
-            extraction_status='needs_input',
+class AdminAPIKeyPoolDeleteTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = get_user_model().objects.create_user(
+            email='admin-delete-key@leadbook.local',
+            password='test-pass',
+            nombre='Admin Delete Key',
+            is_staff=True,
         )
-        unlocked_html = '''
-        <html><head><meta property="og:image" content="https://cdn.example.com/unlocked.webp"></head>
-        <body><h1>Residencia desbloqueada</h1>
-        <p>Casa en venta con 4 habitaciones, 5 banos, terraza y 433 m2. USD 1323383.</p></body></html>
-        '''
-
-        class UnlockedResponse:
-            url = 'https://example.com/blocked'
-            content = unlocked_html.encode('utf-8')
-
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor._fetch_html', side_effect=blocked), \
-             patch('api.services.listing_extractor._render_html_with_playwright', side_effect=ExtractorError('Playwright bloqueado', required_action='blocked')) as playwright_mock, \
-             patch('api.services.listing_extractor._fetch_html_with_unlocker', return_value=UnlockedResponse()) as unlocker_mock:
-            result = extract_listing_from_url('https://example.com/blocked')
-
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['mode'], 'unlocker')
-        self.assertEqual(result['data']['titulo'], 'Residencia desbloqueada')
-        self.assertEqual(result['media_candidates'][0], 'https://cdn.example.com/unlocked.webp')
-        self.assertEqual(playwright_mock.call_count, 1)
-        self.assertEqual(unlocker_mock.call_count, 1)
-        self.assertEqual([item['mode'] for item in result['attempts']], ['static', 'playwright', 'unlocker'])
-        self.assertEqual(result['attempts'][-1]['status'], 'success')
-
-    @override_settings(
-        IMPORT_URL_PLAYWRIGHT_ENABLED=True,
-        IMPORT_URL_UNLOCKER_ENABLED=True,
-        BRIGHTDATA_UNLOCKER_TOKEN='token',
-        BRIGHTDATA_UNLOCKER_ZONE='web_unlocker1',
-    )
-    def test_all_providers_fail_returns_manual_review(self):
-        blocked = ExtractorError(
-            'La pagina bloqueo la extraccion automatica.',
-            status_code=200,
-            required_action='blocked',
-            extraction_status='needs_input',
+        self.user = get_user_model().objects.create_user(
+            email='assigned-key-user@leadbook.local',
+            password='test-pass',
+            nombre='Assigned Key User',
+            plan_nombre='starter',
         )
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor._fetch_html', side_effect=blocked), \
-             patch('api.services.listing_extractor._render_html_with_playwright', side_effect=ExtractorError('Playwright bloqueado', required_action='blocked')), \
-             patch('api.services.listing_extractor._fetch_html_with_unlocker', side_effect=ExtractorError('Unlocker bloqueado', required_action='blocked')):
-            result = extract_listing_from_url('https://example.com/blocked')
-
-        self.assertFalse(result['ok'])
-        self.assertEqual(result['required_action'], 'manual_review')
-        self.assertEqual(result['status'], 'needs_input')
-        self.assertEqual([item['mode'] for item in result['attempts']], ['static', 'playwright', 'unlocker'])
-
-    @override_settings(IMPORT_URL_UNLOCKER_ENABLED=True, BRIGHTDATA_UNLOCKER_TOKEN='', BRIGHTDATA_UNLOCKER_ZONE='')
-    def test_unlocker_without_credentials_returns_attempt_not_configured(self):
-        blocked = ExtractorError(
-            'La pagina bloqueo la extraccion automatica.',
-            status_code=200,
-            required_action='blocked',
-            extraction_status='needs_input',
+        self.service, _ = Servicio.objects.update_or_create(
+            nombre='cerebras',
+            defaults={
+                'descripcion': 'Cerebras',
+                'default_daily_limit': 1000000,
+            },
         )
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor._fetch_html', side_effect=blocked):
-            result = extract_listing_from_url('https://example.com/blocked', use_playwright=False, use_unlocker=True)
+        self.client.force_authenticate(self.admin)
 
-        self.assertFalse(result['ok'])
-        self.assertEqual(result['required_action'], 'manual_review')
-        self.assertIn({'mode': 'unlocker', 'status': 'not_configured', 'reason': 'Proveedor anti-bot no configurado.'}, result['attempts'])
-
-    @override_settings(
-        IMPORT_URL_UNLOCKER_ENABLED=True,
-        BRIGHTDATA_UNLOCKER_TOKEN='token',
-        BRIGHTDATA_UNLOCKER_ZONE='web_unlocker1',
-    )
-    def test_brightdata_raw_html_response_extracts_data(self):
-        blocked = ExtractorError(
-            'La pagina bloqueo la extraccion automatica.',
-            status_code=200,
-            required_action='blocked',
-            extraction_status='needs_input',
+    def test_admin_can_delete_key_with_historical_assignment(self):
+        key = APIKey.objects.create(
+            servicio=self.service,
+            api_key='csk-protected-delete-test',
+            label='Cerebras protected delete test',
+            status='exhausted',
+            google_daily_limit=1000000,
         )
-        raw_html = '''
-        <html><head><meta property="og:image" content="https://cdn.example.com/raw.webp"></head>
-        <body><h1>Residencia raw</h1>
-        <p>Casa en venta con 4 habitaciones, 5 banos y 433 m2. USD 1323383.</p></body></html>
-        '''
+        UserAPIAssignment.objects.create(
+            user=self.user,
+            apikey=key,
+            servicio=self.service,
+            is_primary=True,
+            activo=False,
+        )
 
-        class RawUnlockerResponse:
+        response = self.client.delete(f'/api/admin/apikeys/pool/{key.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(APIKey.objects.filter(id=key.id).exists())
+        self.assertFalse(UserAPIAssignment.objects.filter(apikey_id=key.id).exists())
+
+
+class NvidiaModelDiscoveryTests(TestCase):
+    def setUp(self):
+        self.service, _ = Servicio.objects.update_or_create(
+            nombre='nvidia',
+            defaults={
+                'descripcion': 'NVIDIA NIM',
+                'default_daily_limit': 1500,
+            },
+        )
+        APIKey.objects.filter(servicio=self.service).delete()
+
+    def test_normalize_nvidia_models_keeps_free_or_accessible_models(self):
+        payload = {
+            'data': [
+                {'id': 'meta/llama-3.1-70b-instruct'},
+                {'id': 'nvidia/paid-model', 'free_endpoint': False},
+                {'id': 'nvidia/free-model', 'freeEndpoint': True, 'display_name': 'Free Model'},
+                {'id': 'meta/llama-3.1-70b-instruct'},
+            ],
+        }
+
+        models = normalize_nvidia_models(payload)
+
+        self.assertEqual(
+            [item['model'] for item in models],
+            ['meta/llama-3.1-70b-instruct', 'nvidia/free-model'],
+        )
+        self.assertEqual(models[1]['label'], 'Free Model')
+
+    @patch('api.services.nvidia_models.requests.get')
+    def test_discover_nvidia_free_models_persists_catalog(self, mock_get):
+        APIKey.objects.create(
+            servicio=self.service,
+            api_key='nvapi-test',
+            status='available',
+        )
+
+        class FakeResponse:
             status_code = 200
-            headers = {'Content-Type': 'text/html; charset=utf-8'}
-            text = raw_html
-            content = raw_html.encode('utf-8')
-
-            def json(self):
-                raise ValueError('raw html')
+            content = b'{}'
 
             def raise_for_status(self):
                 return None
 
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor._fetch_html', side_effect=blocked), \
-             patch('api.services.listing_extractor.requests.post', return_value=RawUnlockerResponse()):
-            result = extract_listing_from_url('https://example.com/raw', use_playwright=False, use_unlocker=True)
+            def json(self):
+                return {
+                    'data': [
+                        {'id': 'meta/llama-3.1-70b-instruct'},
+                        {'id': 'deepseek-ai/deepseek-v4-flash', 'free_endpoint': True},
+                    ],
+                }
 
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['mode'], 'unlocker')
-        self.assertEqual(result['data']['titulo'], 'Residencia raw')
-        self.assertEqual(result['media_candidates'][0], 'https://cdn.example.com/raw.webp')
+        mock_get.return_value = FakeResponse()
 
-    def test_unlocked_jamesedition_like_html_extracts_details_and_script_images(self):
-        html = '''
-        <html><head>
-        <title>Panoramic Four Bedroom Sky Residence</title>
-        <meta property="og:image" content="https://img.example.com/hero.webp">
-        <script id="__NEXT_DATA__" type="application/json">
-        {"props":{"gallery":["https:\\/\\/img.example.com\\/gallery-1.jpg","https:\\/\\/img.example.com\\/gallery-2.jpg"]}}
-        </script>
-        </head><body>
-        <h1>Panoramic Four Bedroom Sky Residence</h1>
-        <p>$1,323,383</p>
-        <p>4 Beds 5 Baths 4,661 Sqft</p>
-        <p>Al Omraneya, Giza Governorate, Egypt</p>
-        <p>An expansive rhythm of space, light, and outdoor flow defines this 433 sqm four-bedroom residence with terrace and privacy.</p>
-        </body></html>
-        '''
-        with patch('api.services.listing_extractor._assert_public_host'), \
-             patch('api.services.listing_extractor.requests.Session.get', return_value=_FakeHttpResponse(html)):
-            result = extract_listing_from_url('https://www.jamesedition.com/real_estate/demo')
+        payload = discover_nvidia_free_models(requested_by='test')
 
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['data']['titulo'], 'Panoramic Four Bedroom Sky Residence')
-        self.assertEqual(result['data']['precio'], '1,323,383')
-        self.assertGreaterEqual(len(result['media_candidates']), 3)
-        self.assertIn('https://img.example.com/gallery-1.jpg', result['media_candidates'])
+        self.assertEqual(payload['status'], 'ok')
+        self.assertEqual(payload['count'], 2)
+        cfg = ConfiguracionSistema.objects.get(clave=NVIDIA_FREE_MODELS_CONFIG_KEY)
+        self.assertEqual(cfg.valor, '2')
+        self.assertEqual(cfg.datos['models'][0]['model'], 'deepseek-ai/deepseek-v4-flash')
+        mock_get.assert_called_once()
+        self.assertEqual(mock_get.call_args.kwargs['headers']['Authorization'], 'Bearer nvapi-test')
 
-    def test_private_local_url_is_still_blocked(self):
-        with self.assertRaises(ExtractorError) as ctx:
-            extract_listing_from_url('http://127.0.0.1/admin')
-        self.assertEqual(ctx.exception.status_code, 400)
+    def test_ai_root_payload_uses_cached_nvidia_models(self):
+        APIKey.objects.create(
+            servicio=self.service,
+            api_key='nvapi-test',
+            status='available',
+        )
+        ConfiguracionSistema.objects.update_or_create(
+            clave=NVIDIA_FREE_MODELS_CONFIG_KEY,
+            defaults={
+                'valor': '1',
+                'datos': {
+                    'provider': 'nvidia',
+                    'status': 'ok',
+                    'models': [
+                        {'model': 'nvidia/nemotron-demo', 'label': 'Nemotron Demo'},
+                    ],
+                },
+            },
+        )
 
-    def test_pasted_text_fallback_extracts_manual_content(self):
-        text = 'Casa en venta en Recoleta. USD 450000. 3 habitaciones, 2 banos, 160 m2, balcon y cochera.'
-        with patch('api.services.listing_extractor._assert_public_host'):
-            result = extract_listing_from_url('https://example.com/private', pasted_text=text)
+        payload = build_ai_root_payload()
+        nvidia = next(item for item in payload['providers'] if item['provider'] == 'nvidia')
 
-        self.assertTrue(result['ok'])
-        self.assertEqual(result['mode'], 'manual')
-        self.assertEqual(result['data']['operacion'], 'venta')
-        self.assertEqual(result['data']['recamaras'], 3)
+        self.assertEqual(nvidia['models_source'], 'discovered')
+        self.assertEqual(nvidia['models'][0]['model'], 'nvidia/nemotron-demo')
+        self.assertTrue(nvidia['models'][0]['selectable'])
+
+
+class AILimitsAndProtocolTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email='protocol-user@leadbook.local',
+            password='test-pass',
+            nombre='Protocol User',
+            plan_nombre='starter',
+            plan_activo=True,
+        )
+        self.listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa luminosa',
+            tipo_propiedad='Casa',
+            operacion='venta',
+            ciudad='Cordoba',
+            barrio='Centro',
+            precio='250000',
+            moneda='USD',
+            metros_cuadrados=180,
+            datos_extra={
+                'amenidades': ['Pileta', 'Quincho'],
+                'descripcion': 'Casa amplia con jardin y buena luz natural.',
+                'template_id': 'arena_clara',
+            },
+        )
+
+    def test_ai_limits_config_loads_cerebras_free_models(self):
+        config = load_ai_limits_config()
+        glm = get_model_limit_config('cerebras', 'zai-glm-4.7')
+        gpt = get_model_limit_config('cerebras', 'gpt-oss-120b')
+
+        self.assertEqual(config['version'], 1)
+        self.assertEqual(glm['limits']['requests_per_minute'], 5)
+        self.assertEqual(gpt['limits']['tokens_per_day'], 1000000)
+
+    def test_generation_run_starts_with_plan_step(self):
+        run, reservation = start_or_resume_generation_run(
+            self.user,
+            self.listado,
+            metadata={'ai_provider': 'gemini'},
+        )
+
+        self.assertIsNone(reservation['error'])
+        self.assertEqual(run.current_step, 'plan')
+        self.assertEqual(
+            list(run.steps.order_by('order').values_list('step', flat=True)),
+            CONTENT_PACK_STEPS,
+        )
+
+    @patch('api.ai_services.call_cerebras_api')
+    def test_cerebras_protocol_is_ai_generated_and_normalized(self, mock_call):
+        mock_call.return_value = json.dumps({
+            'version': PROTOCOL_VERSION,
+            'creative_direction': {
+                'tone': 'premium concreto',
+                'positioning': 'familia e inversion',
+                'main_angle': 'luz y jardin',
+                'avoid': ['datos inventados'],
+            },
+            'asset_instructions': {
+                'pdf': 'Priorizar jardin y galeria.',
+                'post': 'Caption aspiracional concreto.',
+                'story': 'CTA breve.',
+                'carrusel': 'Narrativa por recorrido.',
+                'email': 'Correo profesional.',
+            },
+            'requested_outputs': ['pdf', 'post', 'story', 'carrusel', 'email'],
+        })
+        run = ContentGenerationRun.objects.create(
+            user=self.user,
+            listado=self.listado,
+            status='running',
+            current_step='plan',
+            metadata={'ai_provider': 'cerebras', 'selected_template': 'arena_clara'},
+        )
+
+        protocol = create_generation_protocol(run, payload={'template_id': 'arena_clara'}, user=self.user)
+
+        self.assertEqual(protocol['version'], PROTOCOL_VERSION)
+        self.assertEqual(protocol['planner']['status'], 'ai_generated')
+        self.assertEqual(protocol['planner']['primary_model'], 'zai-glm-4.7')
+        self.assertEqual(protocol['planner']['fallback_model'], 'gpt-oss-120b')
+        self.assertEqual(protocol['template']['id'], 'arena_clara')
+        self.assertEqual(protocol['asset_instructions']['pdf'], 'Priorizar jardin y galeria.')
+        mock_call.assert_called_once()
+
+
+class DashboardMetricsDetailTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            email='dashboard-metrics@leadbook.local',
+            password='test-pass',
+            nombre='Dashboard Metrics',
+            plan_nombre='starter',
+            plan_activo=True,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def _aware(self, year, month, day, hour=10):
+        return timezone.make_aware(datetime(year, month, day, hour, 0, 0))
+
+    def _usage(self, tipo, fecha):
+        log = UsageLog.objects.create(agent=self.user, tipo=tipo)
+        UsageLog.objects.filter(pk=log.pk).update(fecha=fecha)
+        return log
+
+    def test_dashboard_metrics_detail_counts_week_month_and_legacy_fields(self):
+        fixed_now = self._aware(2026, 6, 9, 12)
+        self._usage('property', self._aware(2026, 6, 1))
+        self._usage('property', self._aware(2026, 6, 8))
+        self._usage('property', self._aware(2026, 6, 9, 9))
+        self._usage('property', self._aware(2026, 6, 9, 15))
+        self._usage('property', self._aware(2026, 5, 31))
+        self._usage('video', self._aware(2026, 6, 8))
+        self._usage('video', self._aware(2026, 6, 9))
+        self._usage('video', self._aware(2026, 5, 31))
+        Listado.objects.create(
+            agente=self.user,
+            titulo='Casa demo',
+            tipo_propiedad='Casa',
+            operacion='venta',
+            ciudad='Cairo',
+            precio='150000',
+            moneda='USD',
+            videos_creados=5,
+        )
+
+        with patch('api.views.timezone.now', return_value=fixed_now):
+            response = self.client.get(reverse('dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['listados_este_mes'], 4)
+        self.assertEqual(payload['total_generados'], 5)
+        self.assertEqual(payload['videos_creados'], 2)
+
+        detail = payload['metrics_detail']
+        self.assertEqual(detail['period']['today'], '2026-06-09')
+        self.assertEqual(detail['period']['week_start'], '2026-06-08')
+        self.assertEqual(detail['period']['week_end'], '2026-06-14')
+        self.assertEqual(detail['listings']['today'], 2)
+        self.assertEqual(detail['listings']['this_week'], 3)
+        self.assertEqual(detail['listings']['this_month'], 4)
+        self.assertEqual(detail['listings']['total'], 5)
+        self.assertEqual([item['count'] for item in detail['listings']['week_days']], [1, 2, 0, 0, 0, 0, 0])
+        self.assertEqual(detail['videos']['today'], 1)
+        self.assertEqual(detail['videos']['this_week'], 2)
+        self.assertEqual(detail['videos']['this_month'], 2)
+        self.assertEqual(detail['videos']['total'], 5)
+        self.assertEqual([item['count'] for item in detail['videos']['week_days']], [1, 1, 0, 0, 0, 0, 0])
+        self.assertIn('listados_recientes', payload)
+
+    def test_dashboard_metrics_detail_returns_zeroes_without_activity(self):
+        fixed_now = self._aware(2026, 6, 9, 12)
+
+        with patch('api.views.timezone.now', return_value=fixed_now):
+            response = self.client.get(reverse('dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        detail = response.json()['metrics_detail']
+        self.assertEqual(detail['listings']['today'], 0)
+        self.assertEqual(detail['listings']['this_week'], 0)
+        self.assertEqual(detail['listings']['this_month'], 0)
+        self.assertEqual(detail['listings']['total'], 0)
+        self.assertEqual(len(detail['listings']['week_days']), 7)
+        self.assertTrue(all(item['count'] == 0 for item in detail['listings']['week_days']))
+        self.assertEqual(detail['videos']['this_month'], 0)
+        self.assertEqual(len(detail['videos']['week_days']), 7)
 
 
 class AdsStudioEndpointTests(TestCase):
@@ -421,66 +475,6 @@ class AdsStudioEndpointTests(TestCase):
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
-
-    def test_extract_endpoint_integration(self):
-        payload = {
-            'ok': True,
-            'extraction_id': 'ext-123',
-            'status': 'ready',
-            'source': 'example.com',
-            'mode': 'static',
-            'confidence': 0.82,
-            'data': {'titulo': 'Casa importada', 'fotos': ['https://example.com/a.jpg']},
-            'media_candidates': ['https://example.com/a.jpg'],
-            'warnings': [],
-            'required_action': 'none',
-            'final_url': 'https://example.com/propiedad',
-        }
-        with patch('api.views.extract_listing_from_url', return_value=payload):
-            response = self.client.post(
-                reverse('extract_listado_from_url'),
-                {'url': 'https://example.com/propiedad'},
-                format='json',
-            )
-        self.assertEqual(response.status_code, 200, response.content)
-        self.assertTrue(response.json()['ok'])
-        self.assertEqual(response.json()['data']['titulo'], 'Casa importada')
-        self.assertEqual(response.json()['extraction_id'], 'ext-123')
-        self.assertEqual(response.json()['media_candidates'], ['https://example.com/a.jpg'])
-        self.assertEqual(response.json()['required_action'], 'none')
-
-    def test_extract_endpoint_allows_starter_plan(self):
-        starter_user = get_user_model().objects.create_user(
-            email='starter-import-test@leadbook.local',
-            password='test-pass',
-            nombre='Starter Import',
-            plan_nombre='starter',
-            plan_activo=True,
-        )
-        self.client.force_authenticate(user=starter_user)
-        payload = {
-            'ok': True,
-            'extraction_id': 'starter-ext-123',
-            'status': 'ready',
-            'source': 'example.com',
-            'mode': 'static',
-            'confidence': 0.78,
-            'data': {'titulo': 'Depto importado'},
-            'media_candidates': [],
-            'warnings': [],
-            'required_action': 'none',
-            'final_url': 'https://example.com/depto',
-        }
-        with patch('api.views.extract_listing_from_url', return_value=payload):
-            response = self.client.post(
-                reverse('extract_listado_from_url'),
-                {'url': 'https://example.com/depto'},
-                format='json',
-            )
-
-        self.assertEqual(response.status_code, 200, response.content)
-        self.assertTrue(response.json()['ok'])
-        self.assertEqual(response.json()['extraction_id'], 'starter-ext-123')
 
     def test_generate_meta_variants_persists_on_listing(self):
         listado = Listado.objects.create(
@@ -552,6 +546,58 @@ class ListingResultPersistenceTests(TestCase):
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
+
+    def test_creating_listing_does_not_register_property_usage_until_content_ready(self):
+        response = self.client.post(
+            reverse('listados'),
+            {
+                'formData': {
+                    'titulo': 'Casa sin contenidos',
+                    'tipoPropiedad': 'Casa',
+                    'operacion': 'venta',
+                    'ciudad': 'Palermo',
+                    'precio': '250000',
+                    'moneda': 'USD',
+                }
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 0)
+        quota = response.json()['daily_listing_quota']
+        self.assertEqual(quota['used'], 0)
+        self.assertEqual(quota['remaining'], 30)
+
+    def test_property_usage_counts_once_after_full_content_pack_is_persisted(self):
+        from api.views import actualizar_resultados_listado
+
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa pack completo',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={'resultados': {}},
+        )
+
+        actualizar_resultados_listado(listado, 'pdf', {'url': 'https://res.cloudinary.com/demo/raw/upload/ficha.pdf'})
+        actualizar_resultados_listado(listado, 'post', {'url': 'https://res.cloudinary.com/demo/image/upload/post.jpg'})
+        actualizar_resultados_listado(listado, 'story', {'url': 'https://res.cloudinary.com/demo/image/upload/story.jpg'})
+        actualizar_resultados_listado(listado, 'carrusel', {'slides': ['https://res.cloudinary.com/demo/image/upload/slide.jpg']})
+        stale_listado = Listado.objects.get(pk=listado.pk)
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 0)
+
+        actualizar_resultados_listado(listado, 'email', {'html': '<p>Mail listo</p>'})
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 1)
+
+        listado.refresh_from_db()
+        self.assertIn('property_usage_counted_at', listado.datos_extra)
+
+        actualizar_resultados_listado(stale_listado, 'email', {'html': '<p>Mail regenerado</p>'})
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 1)
 
     def test_upload_fotos_replace_returns_only_current_batch(self):
         listado = Listado.objects.create(
@@ -653,65 +699,20 @@ class ListingResultPersistenceTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         destroy_mock.assert_called_once_with(safe_public_id, resource_type='image')
 
-    def test_upload_fotos_downloads_only_accepted_external_import_refs(self):
-        accepted_cover = {
-            'url': 'https://cdn.example.com/cover.webp',
-            'source': 'external_import',
-            'external_import': True,
-        }
-        accepted_gallery = {
-            'url': 'https://cdn.example.com/gallery.webp',
-            'source': 'external_import',
-            'external_import': True,
-        }
-        removed_external = {
-            'url': 'https://cdn.example.com/removed.webp',
-            'source': 'external_import',
-            'external_import': True,
-        }
+    def test_upload_fotos_rejects_unallowed_remote_urls(self):
+        response = self.client.post(
+            reverse('upload_fotos_listado'),
+            {
+                'mode': 'replace',
+                'portadaUrl': {'url': 'https://cdn.example.com/cover.webp'},
+                'fotosRecorrido': ['https://cdn.example.com/gallery.webp'],
+            },
+            format='json',
+        )
 
-        downloaded_urls = []
-
-        def fake_download(url, *args, **kwargs):
-            downloaded_urls.append(url)
-            return b'image-bytes', 'image/webp'
-
-        def fake_upload(file_obj, user_id, listado_id=None, tipo_foto='portada', indice=0):
-            stem = file_obj.name.rsplit('.', 1)[0]
-            public_id = f'leadbook/listados/usuario_{user_id}/temp/foto_{stem}_{tipo_foto}_{indice}'
-            return {
-                'public_id': public_id,
-                'secure_url': f'https://res.cloudinary.com/demo/image/upload/{public_id}.webp',
-                'url': f'https://res.cloudinary.com/demo/image/upload/{public_id}.webp',
-                'resource_type': 'image',
-                'cloudinary_account': 'demo',
-                'format': 'webp',
-                'width': 1200,
-                'height': 900,
-                'bytes': 128,
-            }
-
-        with patch('api.views._download_remote_asset', side_effect=fake_download), \
-             patch('api.services.almacenamiento.AlmacenamientoCloudinary.guardar_foto_propiedad_file', side_effect=fake_upload):
-            response = self.client.post(
-                reverse('upload_fotos_listado'),
-                {
-                    'mode': 'replace',
-                    'delete_removed': True,
-                    'download_remote': True,
-                    'portadaUrl': accepted_cover,
-                    'fotosRecorrido': [accepted_gallery],
-                    'removedMediaRefs': [removed_external],
-                },
-                format='json',
-            )
-
-        self.assertEqual(response.status_code, 200, response.content)
-        payload = response.json()
-        self.assertEqual(downloaded_urls, ['https://cdn.example.com/cover.webp', 'https://cdn.example.com/gallery.webp'])
-        self.assertIn('cover', payload['portadaUrl']['public_id'])
-        self.assertEqual(len(payload['fotosRecorrido']), 1)
-        self.assertIn('gallery', payload['fotosRecorrido'][0]['public_id'])
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json()['error'], 'invalid_media_payload')
+        self.assertIn('URL de imagen no permitida', response.json()['mensaje'])
 
     def test_update_preserves_existing_generated_results(self):
         listado = Listado.objects.create(

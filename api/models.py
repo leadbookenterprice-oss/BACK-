@@ -1507,6 +1507,7 @@ class ContentGenerationRun(models.Model):
 class ContentGenerationStep(models.Model):
     """Estado de cada paso del pack sin video."""
     STEPS = [
+        ('plan', 'Plan'),
         ('pdf', 'PDF'),
         ('post', 'Post'),
         ('story', 'Story'),

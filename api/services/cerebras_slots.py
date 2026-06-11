@@ -23,6 +23,7 @@ TASK_MAX_COMPLETION_TOKENS = {
     'story_caption': 650,
     'email': 1200,
     'ads_json': 1200,
+    'generation_plan': 2400,
     'general': 1600,
 }
 

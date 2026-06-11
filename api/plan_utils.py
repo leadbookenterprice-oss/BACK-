@@ -5,6 +5,9 @@ TRIAL_EXPIRED_MESSAGE = 'Tu prueba Starter expiro. Para seguir usando LeadBook, 
 PRO_FEATURE_PLANS = {'pro', 'scale', 'business'}
 STARTER_DAILY_LISTING_LIMIT = 30
 STARTER_DAILY_LISTING_PLANS = {'free', 'starter'}
+CONTENT_PACK_REQUIRED_FORMATS = ('pdf', 'post', 'story', 'carrusel', 'email')
+PROPERTY_USAGE_COUNTED_AT_KEY = 'property_usage_counted_at'
+PROPERTY_USAGE_COUNTED_RUN_ID_KEY = 'property_usage_generation_run_id'
 
 LIMITES = {
     # Alias legacy: las cuentas nuevas con codigo usan starter.
@@ -165,3 +168,61 @@ def incrementar_uso(agente, tipo):
 def registrar_uso(agent, tipo):
     from api.models import UsageLog
     UsageLog.objects.create(agent=agent, tipo=tipo)
+
+def _has_text(value):
+    return isinstance(value, str) and bool(value.strip())
+
+def _first_dict(*values):
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+def _has_nonempty_sequence(value):
+    return isinstance(value, (list, tuple)) and any(item for item in value)
+
+def _has_served_content(format_id, value):
+    if not isinstance(value, dict):
+        return False
+
+    if format_id == 'pdf':
+        return _has_text(value.get('url')) or _has_text(value.get('pdf_url'))
+    if format_id in {'post', 'story'}:
+        return any(_has_text(value.get(key)) for key in ('url', 'image_url', 'secure_url'))
+    if format_id == 'carrusel':
+        return (
+            _has_nonempty_sequence(value.get('slides'))
+            or _has_nonempty_sequence(value.get('images'))
+            or any(_has_text(value.get(key)) for key in ('url', 'image_url', 'secure_url'))
+        )
+    if format_id == 'email':
+        return _has_text(value.get('html')) or _has_text(value.get('url'))
+    return False
+
+def listing_content_pack_ready(datos_extra):
+    datos = datos_extra if isinstance(datos_extra, dict) else {}
+    resultados = _first_dict(datos.get('resultados'))
+    return all(_has_served_content(format_id, resultados.get(format_id)) for format_id in CONTENT_PACK_REQUIRED_FORMATS)
+
+def registrar_uso_listado_si_completo(listado, *, generation_run_id=None):
+    if not listado or not getattr(listado, 'pk', None):
+        return False
+
+    from django.db import transaction
+    from api.models import Listado, UsageLog
+
+    with transaction.atomic():
+        locked = Listado.objects.select_for_update().select_related('agente').get(pk=listado.pk)
+        datos_extra = locked.datos_extra if isinstance(locked.datos_extra, dict) else {}
+        if datos_extra.get(PROPERTY_USAGE_COUNTED_AT_KEY):
+            return False
+        if not listing_content_pack_ready(datos_extra):
+            return False
+
+        UsageLog.objects.create(agent=locked.agente, tipo='property')
+        datos_extra[PROPERTY_USAGE_COUNTED_AT_KEY] = timezone.now().isoformat()
+        if generation_run_id:
+            datos_extra[PROPERTY_USAGE_COUNTED_RUN_ID_KEY] = int(generation_run_id)
+        locked.datos_extra = datos_extra
+        locked.save(update_fields=['datos_extra'])
+        return True

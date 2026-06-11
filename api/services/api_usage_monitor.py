@@ -42,8 +42,8 @@ def _safe_float(value, default=0.0):
 
 def _service_name(value):
     normalized = str(value or '').strip().lower()
-    if normalized in {'nvidia', 'nvidia_nim'}:
-        return 'nim'
+    if normalized in {'nvidia', 'nvidia_nim', 'nim'}:
+        return 'nvidia'
     return normalized
 
 
@@ -51,7 +51,7 @@ def _service_filter_q(field_name, service):
     if not service:
         return Q()
     normalized = _service_name(service)
-    if normalized == 'nim':
+    if normalized == 'nvidia':
         return Q(**{f'{field_name}__iexact': 'nim'}) | Q(**{f'{field_name}__iexact': 'nvidia'})
     return Q(**{f'{field_name}__iexact': normalized})
 

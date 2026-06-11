@@ -479,6 +479,28 @@ def health_check_all_keys():
                 APIPoolService.mark_key_dead(key)
             key.save()
 
+
+@shared_task(name='api.tasks.discover_nvidia_free_models_task')
+def discover_nvidia_free_models_task():
+    """Actualiza semanalmente el catalogo de modelos NVIDIA accesibles/gratis."""
+    from api.services.nvidia_models import discover_nvidia_free_models
+
+    result = discover_nvidia_free_models(requested_by='celery-weekly')
+    logger.info(
+        "[NVIDIA] Discovery semanal status=%s count=%s raw_count=%s",
+        result.get('status'),
+        result.get('count'),
+        result.get('raw_count'),
+    )
+    return {
+        'status': result.get('status'),
+        'count': result.get('count', 0),
+        'raw_count': result.get('raw_count', 0),
+        'fetched_at': result.get('fetched_at'),
+        'last_error': result.get('last_error', ''),
+    }
+
+
 @shared_task
 def reset_free_pool_counters():
     """Reinicia contadores compartidos cada 12 horas y notifica a usuarios afectados."""

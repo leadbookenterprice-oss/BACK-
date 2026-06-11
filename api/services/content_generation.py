@@ -11,6 +11,7 @@ from api.models import (
     ContentGenerationStep,
     Listado,
 )
+from api.plan_utils import registrar_uso_listado_si_completo
 from api.services.cerebras_slots import (
     CEREBRAS_DAILY_TOKEN_LIMIT,
     CerebrasSlotUnavailable,
@@ -18,8 +19,9 @@ from api.services.cerebras_slots import (
 )
 
 
-CONTENT_PACK_STEPS = ['pdf', 'post', 'story', 'carrusel', 'email']
+CONTENT_PACK_STEPS = ['plan', 'pdf', 'post', 'story', 'carrusel', 'email']
 CONTENT_PACK_STEP_LABELS = {
+    'plan': 'Plan',
     'pdf': 'PDF',
     'post': 'Post',
     'story': 'Story',
@@ -27,6 +29,7 @@ CONTENT_PACK_STEP_LABELS = {
     'email': 'Email',
 }
 TASK_TO_STEP = {
+    'generation_plan': 'plan',
     'pdf_description': 'pdf',
     'html_design': 'pdf',
     'html_full': 'pdf',
@@ -202,6 +205,9 @@ def _ensure_steps(run):
     ]
     if missing:
         ContentGenerationStep.objects.bulk_create(missing, ignore_conflicts=True)
+    for index, step_name in enumerate(CONTENT_PACK_STEPS):
+        desired_order = index + 1
+        run.steps.filter(step=step_name).exclude(order=desired_order).update(order=desired_order)
 
 
 def _key_budget(key):
@@ -341,8 +347,8 @@ def start_or_resume_generation_run(user, listado, *, metadata=None):
             metadata={
                 'pack_steps': CONTENT_PACK_STEPS,
                 'estimated_tokens_per_pack': CEREBRAS_PACK_ESTIMATED_TOKENS,
-                'model_primary': 'gpt-oss-120b',
-                'model_fallback': 'zai-glm-4.7',
+                'model_primary': 'zai-glm-4.7',
+                'model_fallback': 'gpt-oss-120b',
                 'ai_provider': requested_provider,
                 **metadata,
             },
@@ -551,6 +557,9 @@ def mark_generation_step(run_id, step_name, status_value, *, result=None, error_
             'completed_at',
             'updated_at',
         ])
+
+    if run.status == 'done':
+        registrar_uso_listado_si_completo(run.listado, generation_run_id=run.id)
 
     if run.status in {'done', 'failed', 'cancelled'}:
         release_generation_run_slot(run)

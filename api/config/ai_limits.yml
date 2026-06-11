@@ -1,0 +1,49 @@
+version: 1
+updated_at: "2026-06-10"
+source:
+  cerebras_rate_limits: "https://inference-docs.cerebras.ai/support/rate-limits"
+  cerebras_usage_monitoring: "https://inference-docs.cerebras.ai/console/usage-monitoring"
+  cerebras_models_api: "https://inference-docs.cerebras.ai/api-reference/models/public-models"
+
+providers:
+  cerebras:
+    label: "Cerebras"
+    notes: "Free Trial limits from official Cerebras docs. Exact org limits can differ; response headers are the live correction source."
+    default_model: "gpt-oss-120b"
+    planner_primary_model: "zai-glm-4.7"
+    planner_fallback_model: "gpt-oss-120b"
+    models:
+      zai-glm-4.7:
+        label: "ZAI GLM 4.7"
+        tier: "free_trial"
+        role: "planner_primary"
+        limits:
+          requests_per_minute: 5
+          tokens_per_minute: 30000
+          tokens_per_hour: 1000000
+          tokens_per_day: 1000000
+      gpt-oss-120b:
+        label: "GPT OSS 120B"
+        tier: "free_trial"
+        role: "production_fallback"
+        limits:
+          requests_per_minute: 5
+          tokens_per_minute: 30000
+          tokens_per_hour: 1000000
+          tokens_per_day: 1000000
+
+  nvidia:
+    label: "NVIDIA NIM"
+    notes: "Free model catalog is discovered weekly from NVIDIA; rate limits are provider/account specific unless configured later."
+    models_source: "weekly_discovery"
+    default_limits: {}
+
+  gemini:
+    label: "Gemini"
+    notes: "Limits vary by Google project/model/tier. Backend pool status and provider errors are the current live source."
+    default_limits: {}
+
+  groq:
+    label: "Groq"
+    notes: "Limits vary by Groq account/model/tier. Backend provider errors are the current live source."
+    default_limits: {}

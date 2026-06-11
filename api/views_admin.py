@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from decouple import config
 from django.conf import settings
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.utils.crypto import constant_time_compare
 from django.utils.timezone import now
 from datetime import timedelta
@@ -20,6 +21,7 @@ from .models import (
 from api.services.pool_service import SERVICE_DEFAULTS
 from api.services.api_usage_monitor import build_api_usage_logs, build_api_usage_summary
 from api.services.ai_router import build_ai_root_payload, save_ai_root_config, test_ai_root
+from api.services.nvidia_models import discover_nvidia_free_models, get_cached_nvidia_free_models
 from admin_panel.auth import is_admin_request
 
 ADMIN_KEY = config('ADMIN_KEY', default='')
@@ -172,6 +174,30 @@ def _api_key_has_history(key):
         return True
     counters = [key.requests_today, key.requests_this_month, key.total_requests, key.error_count]
     return bool(key.last_used_at or any(int(value or 0) > 0 for value in counters))
+
+
+def _delete_pool_api_key(key):
+    """
+    Hard-delete an admin pool key after intentionally clearing assignment rows.
+
+    UserAPIAssignment protects APIKey rows so assignment history cannot vanish
+    accidentally through cascades. When an admin deletes a key from the pool,
+    those assignment links must be removed first or Django raises ProtectedError.
+    """
+    service_name = _normalize_service_name(key.servicio.nombre if key.servicio_id else '')
+    key_id = key.id
+    label = key.label or _mask_secret(key.api_key)
+    with transaction.atomic():
+        assignments_deleted, _ = UserAPIAssignment.objects.filter(apikey=key).delete()
+        deleted_count, _ = key.delete()
+    return {
+        'ok': True,
+        'deleted': deleted_count,
+        'assignments_deleted': assignments_deleted,
+        'id': key_id,
+        'service': service_name,
+        'label': label,
+    }
 
 
 def _key_assignment_stats(key):
@@ -575,6 +601,24 @@ def admin_ai_root_test(request):
         )
 
     return Response(result)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def admin_nvidia_free_models(request):
+    if not _is_staff_check(request):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == 'GET':
+        return Response(get_cached_nvidia_free_models(), status=status.HTTP_200_OK)
+
+    payload = discover_nvidia_free_models(
+        requested_by=getattr(request.user, 'email', '') or 'admin-manual',
+    )
+    http_status = status.HTTP_200_OK if payload.get('status') == 'ok' else status.HTTP_502_BAD_GATEWAY
+    if payload.get('status') == 'missing_key':
+        http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    return Response(payload, status=http_status)
 
 
 @api_view(['GET'])
@@ -1016,8 +1060,15 @@ def admin_apikeys_pool_detail(request, pk):
         k.save(update_fields=['label', 'google_daily_limit', 'google_monthly_limit', 'updated_at'])
         return Response({'ok': True})
     elif request.method == 'DELETE':
-        k.delete()
-        return Response({'ok': True})
+        try:
+            return Response(_delete_pool_api_key(k))
+        except ProtectedError as exc:
+            protected = [obj.__class__.__name__ for obj in exc.protected_objects]
+            return Response({
+                'error': 'api_key_delete_blocked',
+                'message': 'No se pudo borrar la key porque todavia tiene datos protegidos relacionados.',
+                'protected_objects': sorted(set(protected)),
+            }, status=status.HTTP_409_CONFLICT)
 
 
 def _admin_key_test_request(service_name, api_key):

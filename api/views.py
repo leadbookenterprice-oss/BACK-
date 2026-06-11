@@ -63,6 +63,7 @@ from .plan_utils import (
     puede_generar,
     incrementar_uso,
     registrar_uso,
+    registrar_uso_listado_si_completo,
     get_free_trial_status,
     get_plan_block_payload,
     get_pro_feature_block_payload,
@@ -73,7 +74,6 @@ from .services.ads_studio import (
     normalize_ads_request,
     parse_meta_ads_response,
 )
-from .services.listing_extractor import ExtractorError, extract_listing_from_url
 from .services.content_generation import (
     CONTENT_PACK_STEPS,
     extract_generation_run_id,
@@ -97,6 +97,11 @@ from .services.template_contracts import (
     get_template_contract,
     normalize_template_id as normalize_contract_template_id,
     template_catalog_from_contracts,
+)
+from .services.cerebras_generation_protocol import (
+    PROTOCOL_VERSION,
+    create_generation_protocol,
+    protocol_prompt_fragment,
 )
 
 
@@ -223,6 +228,49 @@ def _mark_generation_failed(run_id, step_name, exc_or_message, *, error_code='st
         error_code=error_code,
         error_message=str(exc_or_message or ''),
     )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_active_plan
+def generar_generation_plan(request):
+    data = request.data if isinstance(request.data, dict) else {}
+    run_id, step_name = _mark_generation_running(data, 'plan')
+    run = get_generation_run_for_user(request.user, run_id)
+    if not run:
+        return Response({'error': 'generation_run_not_found'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        protocol = create_generation_protocol(run, payload=data, user=request.user)
+        run.metadata = {
+            **(run.metadata or {}),
+            'generation_protocol': protocol,
+            'generation_protocol_version': PROTOCOL_VERSION,
+            'generation_protocol_created_at': timezone.now().isoformat(),
+        }
+        run.save(update_fields=['metadata', 'updated_at'])
+        planner = protocol.get('planner') if isinstance(protocol, dict) else {}
+        _mark_generation_done(run_id, step_name, {
+            'protocol_version': PROTOCOL_VERSION,
+            'planner_status': (planner or {}).get('status', ''),
+            'planner_model_used': (planner or {}).get('model_used', ''),
+        })
+        refreshed = get_generation_run_for_user(request.user, run.id)
+        return Response({
+            'success': True,
+            'protocol': protocol,
+            'run': serialize_generation_run(refreshed or run),
+        }, status=status.HTTP_200_OK)
+    except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as exc:
+        _mark_generation_failed(run_id, step_name, exc)
+        return _quota_error_response(exc, user=request.user, source='generar_generation_plan')
+    except Exception as exc:
+        logger.exception('[PLAN] No se pudo generar generation_protocol')
+        _mark_generation_failed(run_id, step_name, exc, error_code='generation_plan_failed')
+        return Response({
+            'error': 'generation_plan_failed',
+            'detalle': str(exc)[:300],
+        }, status=status.HTTP_502_BAD_GATEWAY)
 
 
 @api_view(['GET'])
@@ -360,6 +408,10 @@ def _build_generation_run_payload(run, incoming=None, step_name=''):
     if selected_provider:
         payload['ai_provider'] = selected_provider
         payload['aiProvider'] = selected_provider
+    protocol = metadata.get('generation_protocol') if isinstance(metadata, dict) else None
+    if isinstance(protocol, dict):
+        payload['generation_protocol'] = protocol
+        payload['generationProtocol'] = protocol
     return payload
 
 
@@ -473,6 +525,7 @@ def advance_content_generation_run(request, run_id):
         }, status=status.HTTP_409_CONFLICT)
 
     step_views = {
+        'plan': generar_generation_plan,
         'pdf': generar_pdf,
         'post': generar_imagen_post,
         'story': generar_imagen_story,
@@ -706,14 +759,22 @@ def actualizar_resultados_listado(listado, tipo, resultado):
     Esto permite persistencia entre sesiones.
     """
     if not listado: return
-    if not isinstance(listado.datos_extra, dict):
-        listado.datos_extra = {}
-    
-    if 'resultados' not in listado.datos_extra:
-        listado.datos_extra['resultados'] = {}
-    
-    listado.datos_extra['resultados'][tipo] = _sanitize_listing_storage_value(resultado)
+    persisted_extra = {}
+    if getattr(listado, 'pk', None):
+        persisted_extra = Listado.objects.filter(pk=listado.pk).values_list('datos_extra', flat=True).first() or {}
+    if not isinstance(persisted_extra, dict):
+        persisted_extra = {}
+    current_extra = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    datos_extra = {**persisted_extra, **current_extra}
+
+    persisted_results = persisted_extra.get('resultados') if isinstance(persisted_extra.get('resultados'), dict) else {}
+    current_results = current_extra.get('resultados') if isinstance(current_extra.get('resultados'), dict) else {}
+    datos_extra['resultados'] = {**persisted_results, **current_results}
+    datos_extra['resultados'][tipo] = _sanitize_listing_storage_value(resultado)
+
+    listado.datos_extra = datos_extra
     listado.save(update_fields=['datos_extra'])
+    registrar_uso_listado_si_completo(listado)
 
 
 DEFAULT_USER_SETTINGS = {
@@ -2693,7 +2754,7 @@ def _is_safe_remote_asset_url(url, allowed_hosts=None, allow_any_host=False, all
         return False
 
 
-def _download_remote_asset(
+def _fetch_remote_asset(
     url,
     timeout=25,
     max_bytes=20 * 1024 * 1024,
@@ -4214,6 +4275,64 @@ class DashboardView(APIView):
             },
             "daily_listing_quota": daily_listing_quota,
         })
+
+_DASHBOARD_WEEKDAY_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+
+
+def _dashboard_week_days(queryset, week_start, week_end):
+    counts = {week_start + timedelta(days=offset): 0 for offset in range(7)}
+    for fecha in queryset.filter(fecha__date__gte=week_start, fecha__date__lte=week_end).values_list('fecha', flat=True):
+        if not fecha:
+            continue
+        local_date = timezone.localtime(fecha).date()
+        if local_date in counts:
+            counts[local_date] += 1
+    return [
+        {
+            'date': day.isoformat(),
+            'label': _DASHBOARD_WEEKDAY_LABELS[index],
+            'count': counts[day],
+        }
+        for index, day in enumerate(counts.keys())
+    ]
+
+
+def _build_dashboard_metrics_detail(listados, property_usage, videos_usage, auto_posts_used, now):
+    today = timezone.localdate(now)
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    listing_week_days = _dashboard_week_days(property_usage, week_start, week_end)
+    video_week_days = _dashboard_week_days(videos_usage, week_start, week_end)
+    videos_total_from_logs = videos_usage.count()
+    videos_total_from_listings = listados.aggregate(total_videos=Sum('videos_creados'))['total_videos'] or 0
+
+    return {
+        'period': {
+            'today': today.isoformat(),
+            'week_start': week_start.isoformat(),
+            'week_end': week_end.isoformat(),
+        },
+        'listings': {
+            'today': property_usage.filter(fecha__date=today).count(),
+            'this_week': sum(item['count'] for item in listing_week_days),
+            'this_month': property_usage.filter(fecha__gte=start_of_month).count(),
+            'total': property_usage.count(),
+            'week_days': listing_week_days,
+        },
+        'videos': {
+            'today': videos_usage.filter(fecha__date=today).count(),
+            'this_week': sum(item['count'] for item in video_week_days),
+            'this_month': videos_usage.filter(fecha__gte=start_of_month).count(),
+            'total': max(videos_total_from_logs, videos_total_from_listings),
+            'week_days': video_week_days,
+        },
+        'publishing': {
+            'this_month': auto_posts_used,
+        },
+    }
+
 
 class PerfilView(APIView):
     permission_classes = [IsAuthenticated]
@@ -5840,6 +5959,7 @@ Requisitos obligatorios:
 - Cerrar con 25 a 30 hashtags variados y especificos, no genericos repetidos.
 - No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
+        prompt_text += protocol_prompt_fragment(data.get('generation_protocol') or data.get('generationProtocol'), 'carrusel')
         prompt_text = _repair_mojibake_text(prompt_text)
         caption = smart_call(
             prompt_text,
@@ -6256,170 +6376,14 @@ class ListadosView(APIView):
             moneda=moneda,
             datos_extra=payload
         )
-        
-        registrar_uso(user, 'property')
-        
+
         return Response({
             "mensaje": "Listado guardado", 
             "id": listado.id,
             "titulo": listado.titulo,
-            "daily_listing_quota": {
-                **daily_listing_quota,
-                "used": daily_listing_quota["used"] + 1 if daily_listing_quota.get("limit") is not None else daily_listing_quota.get("used", 0),
-                "remaining": max(0, daily_listing_quota["remaining"] - 1) if daily_listing_quota.get("remaining") is not None else None,
-            }
+            "daily_listing_quota": daily_listing_quota,
+            "listing_counts_when_ready": True,
         }, status=status.HTTP_201_CREATED)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-@require_active_plan
-def extract_listado_from_url(request):
-    from django.conf import settings
-
-    if not getattr(settings, 'IMPORT_URL_ENABLED', True):
-        return Response({
-            'ok': False,
-            'status': 'disabled',
-            'source': '',
-            'confidence': 0,
-            'data': {},
-            'media_candidates': [],
-            'warnings': ['La importacion por URL no esta habilitada.'],
-            'required_action': 'blocked',
-            'final_url': request.data.get('url') if hasattr(request.data, 'get') else '',
-        }, status=status.HTTP_403_FORBIDDEN)
-
-    payload = request.data if hasattr(request.data, 'get') else {}
-    url = payload.get('url')
-    source_hint = payload.get('source_hint') or payload.get('sourceHint')
-
-    def _truthy(value):
-        return str(value or '').strip().lower() in ('1', 'true', 'yes', 'on')
-
-    try:
-        result = extract_listing_from_url(
-            url,
-            pais=payload.get('pais'),
-            idioma=payload.get('idioma'),
-            source_hint=source_hint,
-            pasted_html=payload.get('pasted_html') or payload.get('pastedHtml'),
-            pasted_text=payload.get('pasted_text') or payload.get('pastedText'),
-            use_playwright=True if _truthy(payload.get('force_playwright') or payload.get('forcePlaywright')) else None,
-            use_unlocker=True if _truthy(payload.get('force_unlocker') or payload.get('forceUnlocker')) else None,
-        )
-        result = _maybe_enrich_imported_listing_data(result, request.user, url)
-        data = result.get('data') or {}
-        media_candidates = result.get('media_candidates') or data.get('fotos') or []
-        return Response({
-            'ok': bool(result.get('ok')),
-            'extraction_id': result.get('extraction_id') or '',
-            'status': result.get('status') or ('ready' if result.get('ok') else 'needs_input'),
-            'source': result.get('source') or '',
-            'mode': result.get('mode') or '',
-            'confidence': result.get('confidence') or 0,
-            'data': data,
-            'media_candidates': media_candidates,
-            'warnings': result.get('warnings') or [],
-            'required_action': result.get('required_action') or 'none',
-            'final_url': result.get('final_url') or url,
-            'attempts': result.get('attempts') or [],
-        }, status=status.HTTP_200_OK)
-    except ExtractorError as exc:
-        explicit_action = getattr(exc, 'required_action', None)
-        action = explicit_action or 'manual_review'
-        response_status = status.HTTP_200_OK if explicit_action in {'paste_html', 'manual_review', 'blocked', 'login_required'} else getattr(exc, 'status_code', status.HTTP_400_BAD_REQUEST)
-        return Response({
-            'ok': False,
-            'extraction_id': '',
-            'status': getattr(exc, 'extraction_status', None) or 'needs_input',
-            'source': source_hint or '',
-            'confidence': 0,
-            'data': {},
-            'media_candidates': [],
-            'warnings': list(exc.warnings or []) + [str(exc)],
-            'required_action': action,
-            'final_url': url,
-        }, status=response_status)
-    except Exception as exc:
-        logger.exception('[EXTRACTOR] fail url=%s reason=unexpected:%s', url, exc)
-        return Response({
-            'ok': False,
-            'extraction_id': '',
-            'status': 'error',
-            'source': source_hint or '',
-            'confidence': 0,
-            'data': {},
-            'media_candidates': [],
-            'warnings': ['Error inesperado al extraer la URL.'],
-            'required_action': 'manual_review',
-            'final_url': url,
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-def _maybe_enrich_imported_listing_data(result, user, source_url=''):
-    from django.conf import settings
-
-    if not getattr(settings, 'IMPORT_URL_AI_ENRICHMENT_ENABLED', False):
-        return result
-    data = result.get('data') if isinstance(result, dict) else {}
-    if not isinstance(data, dict) or not data:
-        return result
-
-    raw_context = '\n'.join(
-        str(data.get(key) or '')
-        for key in ('titulo', 'descripcion', 'direccion', 'ciudad', 'precio', 'moneda', 'tipo_propiedad', 'operacion')
-    ).strip()
-    if len(raw_context) < 40:
-        return result
-
-    prompt = f"""
-Normaliza datos de una publicacion inmobiliaria importada. No generes piezas finales, solo campos limpios.
-Devuelve JSON con estas claves si las podes inferir:
-titulo, descripcion, tipo_propiedad, operacion, pais, ciudad, direccion, precio, moneda, recamaras, banos,
-superficie_total, superficie_cubierta, estacionamientos, amenidades.
-
-URL fuente: {source_url}
-Datos extraidos:
-{json.dumps(data, ensure_ascii=False)[:6000]}
-"""
-    try:
-        raw = smart_call(
-            prompt,
-            retries=1,
-            agente=user,
-            system_prompt='Sos un asistente de limpieza de datos inmobiliarios. Respondes solo JSON valido.',
-            task='listing_import_enrichment',
-        )
-        parsed = _parse_json_object(raw)
-        if not isinstance(parsed, dict):
-            return result
-        allowed = {
-            'titulo', 'descripcion', 'tipo_propiedad', 'operacion', 'pais', 'ciudad', 'direccion',
-            'precio', 'moneda', 'recamaras', 'banos', 'superficie_total', 'superficie_cubierta',
-            'estacionamientos', 'amenidades',
-        }
-        enriched = dict(data)
-        for key in allowed:
-            value = parsed.get(key)
-            if value in (None, '', [], {}):
-                continue
-            if key == 'amenidades':
-                if isinstance(value, list):
-                    enriched[key] = [str(item).strip() for item in value if str(item).strip()][:20]
-                continue
-            if key == 'descripcion' and len(str(value)) > len(str(enriched.get(key) or '')):
-                enriched[key] = _repair_mojibake_text(str(value).strip())[:2200]
-                continue
-            enriched.setdefault(key, _repair_mojibake_text(str(value).strip()))
-        next_result = dict(result)
-        next_result['data'] = enriched
-        next_result['warnings'] = list(result.get('warnings') or []) + ['Datos normalizados con IA antes de la revision.']
-        return next_result
-    except Exception as exc:
-        logger.warning('[EXTRACTOR] enrichment skipped url=%s reason=%s', source_url, exc)
-        return result
-
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -6932,6 +6896,7 @@ def generar_pdf(request):
         context['generation_step'] = generation_step_name
         context['ai_model'] = _resolve_requested_ai_model(data)
         context['ai_provider'] = _resolve_requested_ai_provider(data)
+        context['generation_protocol'] = data.get('generation_protocol') or data.get('generationProtocol') or {}
 
         logger.info(
             "[PDF] generar_pdf listado_id=%s template_id=%s user_id=%s",
@@ -7042,6 +7007,7 @@ def generar_pdf(request):
                         listado_obj.datos_extra['dashboard_image_url'] = pdf_cover_url
                         listado_obj.datos_extra['cover_frame_url'] = pdf_cover_url
                     listado_obj.save(update_fields=['datos_extra'])
+                    registrar_uso_listado_si_completo(listado_obj, generation_run_id=generation_run_id)
                     print(f"[PDF] URL guardada en DB: {pdf_url}")
             else:
                 print("[PDF] Error: Playwright devolviÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ bytes vacÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­os.")
@@ -7237,6 +7203,7 @@ Requisitos obligatorios:
 - Cerrar con 25 a 30 hashtags variados, mezclando ciudad, pais, tipo de propiedad, operacion, inversion, lujo y real estate.
 - No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
 Maximo 2200 caracteres. {_caption_preference_prompt(content_prefs)}"""
+        prompt_text += protocol_prompt_fragment(data.get('generation_protocol') or data.get('generationProtocol'), 'post')
         prompt_text = _repair_mojibake_text(prompt_text)
         caption = smart_call(
             prompt_text,
@@ -7532,6 +7499,7 @@ Requisitos obligatorios:
 - Debe tener: gancho breve, sensacion premium, razon concreta para consultar, CTA a responder la story o escribir por WhatsApp y 8 a 12 hashtags.
 - No des opciones, no uses titulos como "Opcion 1", no expliques el caption, no menciones que sos IA.
 {_caption_preference_prompt(content_prefs)}"""
+        prompt_text += protocol_prompt_fragment(data.get('generation_protocol') or data.get('generationProtocol'), 'story')
         prompt_text = _repair_mojibake_text(prompt_text)
         raw_caption = smart_call(
             prompt_text,
@@ -7541,6 +7509,8 @@ Requisitos obligatorios:
             ai_provider=_resolve_requested_ai_provider(data),
             task='story_caption',
             listado_id=listado_id_val,
+            generation_run_id=generation_run_id,
+            generation_step=generation_step_name,
         )
         caption = _finalize_caption_text(raw_caption, data, formato='story', prefs=content_prefs, max_chars=650)
 
@@ -7660,6 +7630,7 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
   "texto_plano": "el equivalente en texto plano bÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡sico pero atractivo"
 }}
 """
+        prompt_text += protocol_prompt_fragment(data.get('generation_protocol') or data.get('generationProtocol'), 'email')
         prompt_text = _repair_mojibake_text(prompt_text)
         json_str = smart_call(
             prompt_text,
@@ -8895,12 +8866,17 @@ def dashboard(request):
     property_usage = UsageLog.objects.filter(agent=agent, tipo='property')
     listados_este_mes = property_usage.filter(fecha__gte=start_of_month).count()
     total_generados = property_usage.count()
-    videos_creados = UsageLog.objects.filter(
-        agent=agent, tipo='video',
-        fecha__year=now.year, fecha__month=now.month
-    ).count()
+    videos_usage = UsageLog.objects.filter(agent=agent, tipo='video')
+    videos_creados = videos_usage.filter(fecha__year=now.year, fecha__month=now.month).count()
     uploadpost_quota = get_uploadpost_quota(agent)
     auto_posts_used = uploadpost_quota.requests_this_month if uploadpost_quota else 0
+    metrics_detail = _build_dashboard_metrics_detail(
+        listados=listados,
+        property_usage=property_usage,
+        videos_usage=videos_usage,
+        auto_posts_used=auto_posts_used,
+        now=now,
+    )
 
     listados_recientes = [
         _serialize_listing_summary(listado)
@@ -8930,6 +8906,7 @@ def dashboard(request):
         'videos_creados': videos_creados,
         'conexiones_activas': auto_posts_used,
         'auto_posts_used': auto_posts_used,
+        'metrics_detail': metrics_detail,
         'listados_recientes': listados_recientes,
         'plan': plan,
         'plan_activo': agent.plan_activo,
@@ -9833,7 +9810,7 @@ def export_listado_zip(request, pk):
         if not source_url or not str(source_url).startswith('http'):
             return None
 
-        raw_bytes, content_type = _download_remote_asset(source_url)
+        raw_bytes, content_type = _fetch_remote_asset(source_url)
         if not raw_bytes:
             return None
 
@@ -10099,7 +10076,6 @@ def upload_fotos_listado(request):
     mode = str(data.get('mode') or '').strip().lower()
     replace_mode = mode == 'replace'
     delete_removed = str(data.get('delete_removed') or '').strip().lower() in ('1', 'true', 'yes', 'on')
-    download_remote = str(data.get('download_remote') or data.get('downloadRemote') or '').strip().lower() in ('1', 'true', 'yes', 'on')
     portada_input = _parse_media_ref_input(data.get('portadaUrl'))
     if hasattr(data, 'getlist'):
         fotos_input = data.getlist('fotosRecorrido') or data.get('fotosRecorrido', [])
@@ -10211,59 +10187,10 @@ def upload_fotos_listado(request):
                 return None, "No se pudo subir una foto a Cloudinary."
             return complete_media_ref(uploaded, role, order), None
 
-        def remote_url_from_item(item):
-            if isinstance(item, str) and item.startswith(('http://', 'https://')):
-                return item
-            if isinstance(item, dict):
-                return item.get('url') or item.get('secure_url') or item.get('remote_url')
-            return None
-
-        def guess_remote_filename(url, content_type, fallback):
-            from urllib.parse import urlparse
-            raw_path = urlparse(str(url or '')).path.rsplit('/', 1)[-1]
-            raw_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', raw_path or fallback or 'foto')
-            if '.' in raw_name[-8:]:
-                return raw_name[:90]
-            ct = str(content_type or '').split(';', 1)[0].lower()
-            ext_by_type = {
-                'image/jpeg': '.jpg',
-                'image/jpg': '.jpg',
-                'image/png': '.png',
-                'image/webp': '.webp',
-                'image/avif': '.avif',
-                'image/heic': '.heic',
-                'image/heif': '.heif',
-                'image/gif': '.gif',
-                'image/bmp': '.bmp',
-                'image/tiff': '.tiff',
-            }
-            return f"{raw_name[:80]}{ext_by_type.get(ct, '.jpg')}"
-
-        def upload_remote_url(item, role, order):
-            remote_url = remote_url_from_item(item)
-            if not remote_url:
-                return None, "Referencia remota incompleta."
-            raw_bytes, content_type = _download_remote_asset(
-                remote_url,
-                timeout=18,
-                max_bytes=15 * 1024 * 1024,
-                allow_any_host=True,
-                allowed_schemes=('https', 'http'),
-                content_type_prefixes=('image/',),
-                max_redirects=3,
-            )
-            if not raw_bytes:
-                response_data['warnings'].append(f"No se pudo descargar una imagen remota: {remote_url}")
-                return None, None
-            from django.core.files.base import ContentFile
-            filename = guess_remote_filename(remote_url, content_type, f'{role}_{order}')
-            file_obj = ContentFile(raw_bytes, name=filename)
-            return upload_file(file_obj, role, order, max(order - 1, 0))
-
         def normalize_media(item, role, order):
             if item and isinstance(item, str) and item.startswith('data:image'):
                 if not allow_legacy_base64:
-                    return None, "Formato base64 no permitido. Subi archivo o URL remota."
+                    return None, "Formato base64 no permitido. Subi archivo o URL remota permitida."
                 logger.info("[UPLOAD] Subiendo foto %s order=%s listado_id=%s", role, order, listado_id)
                 uploaded = AlmacenamientoCloudinary.guardar_foto_propiedad(
                     item,
@@ -10276,16 +10203,14 @@ def upload_fotos_listado(request):
                     return None, "No se pudo subir una foto a Cloudinary."
                 return complete_media_ref(uploaded, role, order), None
             if isinstance(item, dict):
-                remote_url = remote_url_from_item(item)
-                if download_remote and remote_url and not item.get('public_id'):
-                    return upload_remote_url(item, role, order)
                 media = complete_media_ref(item, role, order)
                 if not (media.get('url') or media.get('secure_url') or media.get('public_id')):
                     return None, "Referencia de imagen incompleta."
+                media_url = media.get('secure_url') or media.get('url')
+                if media_url and not media.get('public_id') and not _is_safe_remote_asset_url(media_url):
+                    return None, "URL de imagen no permitida."
                 return media, None
             if item and isinstance(item, str) and item.startswith('http'):
-                if download_remote:
-                    return upload_remote_url(item, role, order)
                 if not _is_safe_remote_asset_url(item):
                     return None, "URL de imagen no permitida."
                 return {
@@ -10302,6 +10227,13 @@ def upload_fotos_listado(request):
             if item:
                 return None, "Formato de imagen no soportado."
             return None, None
+
+        def invalid_media_status(error_msg):
+            error_text = str(error_msg or '').lower()
+            client_error_markers = ('base64', 'url de imagen', 'referencia de imagen', 'formato de imagen')
+            if any(marker in error_text for marker in client_error_markers):
+                return status.HTTP_400_BAD_REQUEST
+            return 502
 
         raw_gallery_items = []
         portada_identity = media_identity(portada_input)
@@ -10322,7 +10254,7 @@ def upload_fotos_listado(request):
         elif portada_input:
             media, error_msg = normalize_media(portada_input, 'portada', 0)
             if error_msg:
-                status_code = status.HTTP_400_BAD_REQUEST if 'base64' in error_msg.lower() else 502
+                status_code = invalid_media_status(error_msg)
                 return Response(
                     {
                         "error": "invalid_media_payload",
@@ -10339,7 +10271,7 @@ def upload_fotos_listado(request):
             order = 0 if role == 'portada' else len(normalized)
             media, error_msg = normalize_media(item, role, order)
             if error_msg:
-                status_code = status.HTTP_400_BAD_REQUEST if 'base64' in error_msg.lower() else 502
+                status_code = invalid_media_status(error_msg)
                 return Response(
                     {
                         "error": "invalid_media_payload",

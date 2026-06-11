@@ -261,14 +261,6 @@ REMOTE_ASSET_ALLOWED_HOSTS = [
     for host in config('REMOTE_ASSET_ALLOWED_HOSTS', default='res.cloudinary.com,placehold.co').split(',')
     if host.strip()
 ]
-IMPORT_URL_ENABLED = config('IMPORT_URL_ENABLED', default=True, cast=bool)
-IMPORT_URL_PLAYWRIGHT_ENABLED = config('IMPORT_URL_PLAYWRIGHT_ENABLED', default=True, cast=bool)
-IMPORT_URL_AI_ENRICHMENT_ENABLED = config('IMPORT_URL_AI_ENRICHMENT_ENABLED', default=False, cast=bool)
-IMPORT_URL_UNLOCKER_ENABLED = config('IMPORT_URL_UNLOCKER_ENABLED', default=False, cast=bool)
-IMPORT_URL_UNLOCKER_PROVIDER = config('IMPORT_URL_UNLOCKER_PROVIDER', default='brightdata')
-IMPORT_URL_UNLOCKER_TIMEOUT_MS = config('IMPORT_URL_UNLOCKER_TIMEOUT_MS', default=45000, cast=int)
-BRIGHTDATA_UNLOCKER_TOKEN = config('BRIGHTDATA_UNLOCKER_TOKEN', default='')
-BRIGHTDATA_UNLOCKER_ZONE = config('BRIGHTDATA_UNLOCKER_ZONE', default='')
 
 # Celery Configuration
 CELERY_BROKER_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
@@ -288,6 +280,10 @@ CELERY_BEAT_SCHEDULE = {
     'weekly-notification-digest': {
         'task': 'api.tasks.send_weekly_notification_digest',
         'schedule': crontab(day_of_week='mon', hour=12, minute=0),
+    },
+    'discover-nvidia-free-models-weekly': {
+        'task': 'api.tasks.discover_nvidia_free_models_task',
+        'schedule': crontab(day_of_week='mon', hour=13, minute=0),
     },
 }
 
