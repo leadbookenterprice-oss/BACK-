@@ -1699,6 +1699,199 @@ def call_elevenlabs_api(text: str, agente=None, voz='femenina', voice_id=None, v
         return None
 
 
+def _elevenlabs_available_key_rows(excluded_values=None):
+    from api.models import APIKey
+
+    excluded_values = {str(value) for value in (excluded_values or []) if value}
+    keys = (
+        APIKey.objects
+        .filter(servicio__nombre__iexact='elevenlabs')
+        .exclude(status__in=['dead', 'disabled', 'exhausted'])
+        .order_by('requests_this_month', 'requests_today', 'last_used_at', 'id')
+    )
+    result = []
+    for key in keys:
+        if str(key.api_key) in excluded_values:
+            continue
+        monthly_limit = key.google_monthly_limit or 10000
+        if monthly_limit and (key.requests_this_month or 0) >= monthly_limit:
+            key.status = 'exhausted'
+            key.save(update_fields=['status', 'updated_at'])
+            continue
+        result.append(key)
+    return result
+
+
+def _record_elevenlabs_key_result(key, *, ok=False, status_code=None, error_message='', hard_quota=False, auth_failed=False, chars_used=0):
+    if not key:
+        return
+    try:
+        from django.utils import timezone
+
+        update_fields = ['last_health_check', 'last_health_status', 'slot_last_error', 'error_count', 'updated_at']
+        key.last_health_check = timezone.now()
+        key.last_health_status = bool(ok)
+        if ok:
+            key.last_used_at = timezone.now()
+            key.requests_today = (key.requests_today or 0) + 1
+            key.requests_this_month = (key.requests_this_month or 0) + max(0, int(chars_used or 0))
+            key.total_requests = (key.total_requests or 0) + 1
+            key.slot_last_error = ''
+            if key.status in {'assigned', 'in_use'}:
+                key.status = 'available'
+                update_fields.append('status')
+            update_fields.extend(['last_used_at', 'requests_today', 'requests_this_month', 'total_requests'])
+        else:
+            key.error_count = (key.error_count or 0) + 1
+            detail = str(error_message or '')
+            if status_code:
+                detail = f'HTTP {status_code}: {detail}'
+            key.slot_last_error = detail[:1000]
+            if hard_quota:
+                key.status = 'exhausted'
+                limit = key.google_monthly_limit or max(key.requests_this_month or 0, 10000)
+                key.requests_this_month = max(key.requests_this_month or 0, limit)
+                update_fields.extend(['status', 'requests_this_month'])
+            elif auth_failed:
+                key.status = 'dead'
+                update_fields.append('status')
+        key.save(update_fields=sorted(set(update_fields)))
+    except Exception as exc:
+        logger.error('Error registrando resultado ElevenLabs key_id=%s: %s', getattr(key, 'id', None), exc)
+
+
+def _classify_elevenlabs_failure(status_code, body):
+    body_l = str(body or '').lower()
+    hard_terms = ('quota', 'credits', 'insufficient', 'exceeded', 'monthly', 'payment', 'balance')
+    has_hard_terms = any(term in body_l for term in hard_terms)
+    if status_code in {401, 403}:
+        return {'hard_quota': has_hard_terms, 'auth_failed': not has_hard_terms, 'soft_rate': False}
+    if status_code == 429:
+        return {'hard_quota': has_hard_terms, 'auth_failed': False, 'soft_rate': not has_hard_terms}
+    return {'hard_quota': False, 'auth_failed': False, 'soft_rate': bool(status_code and status_code >= 500)}
+
+
+@track_api_call(service='elevenlabs')
+def call_elevenlabs_api(text: str, agente=None, voz='femenina', voice_id=None, voice_settings=None) -> bytes:
+    """Genera audio MP3 usando el pool global de ElevenLabs de LeadBook."""
+    voice_choice, filtered_candidates, resolved_voice_settings = resolve_elevenlabs_voice_profile(
+        voz=voz,
+        voice_id=voice_id,
+        voice_settings=voice_settings,
+    )
+    if not filtered_candidates:
+        if voice_choice == 'personalizada':
+            logger.error('[ELEVENLABS] No hay voice_id personalizada disponible')
+            return None
+        logger.error('[ELEVENLABS] No hay voces disponibles')
+        return None
+
+    data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": resolved_voice_settings,
+    }
+
+    key_rows = _elevenlabs_available_key_rows()
+    fallback_env_key = _settings_or_env('ELEVENLABS_API_KEY')
+    if _allow_global_api_fallback() and fallback_env_key and not any(k.api_key == fallback_env_key for k in key_rows):
+        key_rows.append(type('EnvElevenLabsKey', (), {
+            'id': None,
+            'api_key': fallback_env_key,
+            'status': 'available',
+            'google_monthly_limit': None,
+            'requests_this_month': 0,
+            'requests_today': 0,
+            'total_requests': 0,
+            'error_count': 0,
+            'save': lambda self, update_fields=None: None,
+        })())
+
+    if not key_rows:
+        logger.error('[ELEVENLABS] No hay keys disponibles en el pool global')
+        raise APIKeyUnavailableError(
+            API_KEY_UNAVAILABLE_MESSAGE,
+            provider='elevenlabs',
+            scope='pool',
+        )
+
+    try:
+        max_attempts = max(1, int(_settings_or_env('ELEVENLABS_POOL_MAX_ATTEMPTS', '8') or 8))
+    except (TypeError, ValueError):
+        max_attempts = 8
+
+    last_error = ''
+    saw_soft_error = False
+    saw_hard_error = False
+    for key_row in key_rows[:max_attempts]:
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": key_row.api_key,
+        }
+        for voice_candidate_id in filtered_candidates:
+            try:
+                url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_candidate_id}"
+                response = requests.post(url, json=data, headers=headers, timeout=60)
+            except requests.RequestException as exc:
+                last_error = str(exc)
+                saw_soft_error = True
+                _record_elevenlabs_key_result(key_row, error_message=last_error)
+                logger.warning('[ELEVENLABS] request error key_id=%s: %s', getattr(key_row, 'id', None), last_error[:220])
+                break
+
+            if response.status_code == 200 and response.content:
+                _record_elevenlabs_key_result(key_row, ok=True, chars_used=len(str(text or '')))
+                return response.content
+
+            body = response.text or ''
+            if response.status_code == 404 and 'voice_not_found' in body:
+                logger.warning('[ELEVENLABS] voice_id no disponible key_id=%s voice_id=%s', getattr(key_row, 'id', None), voice_candidate_id)
+                continue
+
+            failure = _classify_elevenlabs_failure(response.status_code, body)
+            saw_soft_error = saw_soft_error or failure['soft_rate']
+            saw_hard_error = saw_hard_error or failure['hard_quota'] or failure['auth_failed']
+            last_error = (body or f'HTTP {response.status_code}')[:500]
+            _record_elevenlabs_key_result(
+                key_row,
+                status_code=response.status_code,
+                error_message=last_error,
+                hard_quota=failure['hard_quota'],
+                auth_failed=failure['auth_failed'],
+            )
+            logger.warning(
+                '[ELEVENLABS] key fallo key_id=%s status=%s hard=%s auth=%s soft=%s',
+                getattr(key_row, 'id', None),
+                response.status_code,
+                failure['hard_quota'],
+                failure['auth_failed'],
+                failure['soft_rate'],
+            )
+            break
+
+    if saw_soft_error:
+        raise ElevenLabsRateLimitedError(
+            "Servicio de voz temporalmente saturado. Reintenta en unos minutos.",
+            provider='elevenlabs',
+            scope='provider',
+            quota_state='soft_rate_limited',
+            retry_after_seconds=600,
+        )
+    if saw_hard_error:
+        raise ElevenLabsQuotaExhaustedError(
+            LIMIT_REACHED_MESSAGE,
+            provider='elevenlabs',
+            scope='provider',
+            quota_state='hard_exhausted',
+        )
+    raise APIKeyUnavailableError(
+        last_error or API_KEY_UNAVAILABLE_MESSAGE,
+        provider='elevenlabs',
+        scope='pool',
+    )
+
+
 def _get_leadbook_watermark_url():
     configured = _settings_or_env('LEADBOOK_WATERMARK_URL')
     if configured.startswith('http'):

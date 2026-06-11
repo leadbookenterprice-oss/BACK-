@@ -41,9 +41,10 @@ ROOT_LLM_SERVICES = {
     'cloudflare_workers_ai',
     'github_models',
 }
-ASSIGNABLE_SERVICES = {'uploadpost', 'elevenlabs'}
+VOICE_POOL_SERVICES = {'elevenlabs'}
+ASSIGNABLE_SERVICES = {'uploadpost'}
 ENVIRONMENT_SERVICES = {'cloudinary'}
-ADMIN_POOL_SERVICES = ROOT_LLM_SERVICES | ASSIGNABLE_SERVICES
+ADMIN_POOL_SERVICES = ROOT_LLM_SERVICES | VOICE_POOL_SERVICES | ASSIGNABLE_SERVICES
 
 def _is_staff_check(request):
     return is_admin_request(request)
@@ -73,6 +74,8 @@ def _service_category(service_name):
     normalized = _normalize_service_name(service_name)
     if normalized in ROOT_LLM_SERVICES:
         return 'root_llm'
+    if normalized in VOICE_POOL_SERVICES:
+        return 'voice'
     if normalized in ASSIGNABLE_SERVICES:
         return 'assignable'
     if normalized in ENVIRONMENT_SERVICES:
@@ -90,6 +93,8 @@ def _allowed_pool_services_for_category(category):
         return ROOT_LLM_SERVICES
     if normalized in {'assignable', 'assignment', 'asignacion', 'asignables'}:
         return ASSIGNABLE_SERVICES
+    if normalized in {'voice', 'voz', 'audio', 'tts'}:
+        return VOICE_POOL_SERVICES
     return ADMIN_POOL_SERVICES
 
 
@@ -285,6 +290,7 @@ def _serialize_access_code(code):
         'code': code.code,
         'is_active': code.is_active,
         'trial_days': code.trial_days,
+        'target_plan': getattr(code, 'target_plan', 'starter') or 'starter',
         'assigned_email': code.assigned_email or '',
         'notes': code.notes or '',
         'created_at': code.created_at,
@@ -374,6 +380,9 @@ def admin_access_codes(request):
 
     assigned_email = str(request.data.get('assigned_email') or '').strip().lower() or None
     notes = str(request.data.get('notes') or '').strip()[:500]
+    target_plan = str(request.data.get('target_plan') or request.data.get('plan') or 'starter').strip().lower()
+    if target_plan not in {'free', 'starter', 'pro', 'scale'}:
+        return Response({'error': 'target_plan_invalid'}, status=status.HTTP_400_BAD_REQUEST)
     created_by = request.user if request.user and request.user.is_authenticated else None
 
     created = []
@@ -381,6 +390,7 @@ def admin_access_codes(request):
         code = AccessCode.objects.create(
             code=AccessCode.generate_code(),
             trial_days=trial_days,
+            target_plan=target_plan,
             assigned_email=assigned_email if count == 1 else None,
             notes=notes,
             created_by=created_by,

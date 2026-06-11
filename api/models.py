@@ -51,6 +51,7 @@ class Agent(AbstractBaseUser, PermissionsMixin):
     - agentes_asociados removido — reemplazado por tabla AgentAssociation
     """
     PLANES = [
+        ('free',     'Free'),
         ('starter',  'Starter'),
         ('pro',      'Pro'),
         ('scale',    'Scale'),
@@ -1253,9 +1254,17 @@ class OTPCode(models.Model):
 
 class AccessCode(models.Model):
     """Codigo de acceso de 6 caracteres para habilitar el trial Starter."""
+    TARGET_PLANS = [
+        ('free', 'Free'),
+        ('starter', 'Starter'),
+        ('pro', 'Pro'),
+        ('scale', 'Scale'),
+    ]
+
     code = models.CharField(max_length=6, unique=True, db_index=True)
     is_active = models.BooleanField(default=True)
     trial_days = models.PositiveSmallIntegerField(default=30)
+    target_plan = models.CharField(max_length=20, choices=TARGET_PLANS, default='starter')
     assigned_email = models.EmailField(null=True, blank=True)
     assigned_phone = models.CharField(max_length=50, null=True, blank=True)
     notes = models.TextField(blank=True)
@@ -1363,6 +1372,7 @@ class AdminAlert(models.Model):
         ('pool_low',        'Pool bajo — menos de 3 disponibles'),
         ('user_abuse',      'Abuso de usuario'),
         ('trial_token_request', 'Token solicitado'),
+        ('voice_complaint', 'Reclamo de voz'),
         ('high_error_rate', 'Alta tasa de errores'),
         ('webhook_error',   'Error en Webhook'),
         ('assign_failed',   'Fallo en asignación de APIs'),
@@ -1381,6 +1391,38 @@ class AdminAlert(models.Model):
     class Meta:
         ordering = ['-creado_en']
         indexes  = [models.Index(fields=['is_read', 'severidad'])]
+
+
+class VideoVoiceComplaint(models.Model):
+    ACTIONS = [
+        ('complaint_only', 'Solo reclamo'),
+        ('complaint_and_silent', 'Reclamo y video sin voz'),
+        ('retry_voice', 'Reintentar voz'),
+    ]
+    EMAIL_STATUS = [
+        ('pending', 'Pendiente'),
+        ('sent', 'Enviado'),
+        ('failed', 'Fallido'),
+        ('console', 'Consola'),
+    ]
+
+    user = models.ForeignKey(Agent, on_delete=models.CASCADE, related_name='video_voice_complaints')
+    listado = models.ForeignKey(Listado, on_delete=models.CASCADE, related_name='voice_complaints')
+    action = models.CharField(max_length=30, choices=ACTIONS)
+    error_message = models.TextField(blank=True)
+    email_status = models.CharField(max_length=20, choices=EMAIL_STATUS, default='pending')
+    email_detail = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['listado', 'created_at']),
+            models.Index(fields=['action', 'email_status']),
+        ]
 
 
 class AdminLog(models.Model):

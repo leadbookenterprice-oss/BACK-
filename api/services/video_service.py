@@ -423,6 +423,12 @@ def generar_video_listado(listado_id):
         vo_duration = 0.0
         duracion_texto = "entre 45 y 60 segundos. Describí los ambientes con detalle y de forma inmersiva" if is_tour else "unos 15-20 segundos. Sé muy dinámico y enfocado en el hook"
         script_vo = ""
+        voice_enabled = str(datos.get('voiceover', True)).strip().lower() not in {'false', '0', 'no', 'off'}
+        silent_accepted = bool(
+            datos.get('video_silent_accepted')
+            or datos.get('voice_fallback_accepted')
+            or datos.get('allow_silent_video')
+        )
         
         try:
             superficie_terreno = (
@@ -466,11 +472,11 @@ No incluyas preámbulos, solo el texto en español neutro."""
                 if not script_vo:
                     script_vo = _build_property_script(datos, listado, price_voice)
 
-            if script_vo:
+            if script_vo and voice_enabled:
                 script_vo = _sanitize_video_script(script_vo, price_voice)
                 script_vo = _prepare_tts_text(script_vo, is_tour=is_tour)
                 audio_bytes = call_elevenlabs_api(script_vo, agente=listado.agente, voz=voz_seleccionada)
-                if not audio_bytes:
+                if not audio_bytes and config('ALLOW_GLOBAL_API_FALLBACK', default=False, cast=bool):
                     audio_bytes = _call_elevenlabs_direct(script_vo, voz=voz_seleccionada)
                 if audio_bytes:
                     with open(audio_path, 'wb') as f_audio:
@@ -516,8 +522,19 @@ No incluyas preámbulos, solo el texto en español neutro."""
                             })
                         with open(transcript_path, 'w', encoding='utf-8') as f_dummy:
                             json.dump(dummy_transcript, f_dummy)
+                else:
+                    raise RuntimeError('ElevenLabs no devolvio audio')
         except Exception as e:
             logging.error(f"Voiceover/Transcription failed: {e}")
+            if not silent_accepted:
+                datos['video_provider'] = 'hyperframes'
+                datos['video_voice_status'] = 'failed'
+                datos['video_voice_error'] = str(e)[:500]
+                datos['video_voice_requires_decision'] = True
+                listado.datos = datos
+                listado.video_status = 'voice_failed'
+                listado.save(update_fields=['datos_extra', 'video_status', 'updated_at'])
+                return False
 
         ffmpeg_bin_dir = _detect_ffmpeg_bin_dir()
 

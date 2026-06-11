@@ -29,6 +29,7 @@ from .views import (
     cambiar_password, password_change_code, logout_all,
     start_content_generation_pack, content_generation_run_detail, retry_content_generation_run,
     advance_content_generation_run, content_generation_providers, video_studio_quick_base,
+    video_voice_complaint,
 )
 from .views_admin import (
     admin_metricas, admin_usuarios_list, admin_usuario_cambiar_plan, admin_usuario_eliminar,
@@ -124,6 +125,7 @@ urlpatterns = [
     path('generation-runs/<int:run_id>/advance/', advance_content_generation_run, name='advance_content_generation_run'),
     path('generation-runs/<int:run_id>/retry/', retry_content_generation_run, name='retry_content_generation_run'),
     path('listados/<int:pk>/generar-video/', generar_video, name='generar_video'),
+    path('listados/<int:pk>/video-voice-complaint/', video_voice_complaint, name='video_voice_complaint'),
     path('listados/<int:pk>/video/', generar_video, name='generar_video_legacy'),
     path('listados/<int:listado_id>/video-status/', video_status, name='video_status_legacy'),
     path('video-studio/quick-base/', video_studio_quick_base, name='video_studio_quick_base'),

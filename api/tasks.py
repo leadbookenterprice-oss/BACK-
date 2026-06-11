@@ -175,7 +175,14 @@ def process_video_queue(max_jobs=None):
                 )
             else:
                 failed += 1
-                Listado.objects.filter(id=listado.id).update(video_status='error')
+                fresh_status = (
+                    Listado.objects
+                    .filter(id=listado.id)
+                    .values_list('video_status', flat=True)
+                    .first()
+                )
+                if fresh_status != 'voice_failed':
+                    Listado.objects.filter(id=listado.id).update(video_status='error')
                 logger.warning(
                     "[VIDEO_QUEUE] FAIL listado_id=%s provider=%s elapsed=%.2fs",
                     listado.id,

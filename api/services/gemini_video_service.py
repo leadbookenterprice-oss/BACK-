@@ -39,6 +39,10 @@ class GeminiVideoError(Exception):
     pass
 
 
+class GeminiVideoVoiceRequiredError(GeminiVideoError):
+    pass
+
+
 def _value(datos, *keys, default=''):
     for key in keys:
         value = datos.get(key)
@@ -162,7 +166,12 @@ def _collect_photo_urls(listado):
         or datos.get('imagenesVideo')
         or datos.get('video_photo_urls')
     )
-    if isinstance(explicit_video_photos, list) and explicit_video_photos:
+    storyboard = datos.get('video_storyboard') or datos.get('storyboard') or []
+    if isinstance(storyboard, list) and storyboard:
+        for item in _ordered_media_items(storyboard):
+            if isinstance(item, dict):
+                add(item.get('photo_url') or item.get('fotoUrl') or item.get('foto_url') or item.get('url'))
+    elif isinstance(explicit_video_photos, list) and explicit_video_photos:
         for item in _ordered_media_items(explicit_video_photos):
             add(item)
     else:
@@ -575,7 +584,7 @@ def _generate_voice_bytes(listado):
             voice_settings=voice_settings if isinstance(voice_settings, dict) else None,
         )
     if not audio_bytes:
-        raise GeminiVideoError('No se pudo generar la voz con ElevenLabs')
+        raise GeminiVideoVoiceRequiredError('No se pudo generar la voz con ElevenLabs')
     return audio_bytes, script
 
 
@@ -695,8 +704,15 @@ def generar_video_listado_veo3(listado_id):
         if listado is not None:
             datos = listado.datos or {}
             datos['video_provider'] = 'veo3'
-            datos['video_error'] = str(exc)[:500]
+            if isinstance(exc, GeminiVideoVoiceRequiredError):
+                datos['video_voice_status'] = 'failed'
+                datos['video_voice_error'] = str(exc)[:500]
+                datos['video_voice_requires_decision'] = True
+                datos['video_error'] = ''
+                listado.video_status = 'voice_failed'
+            else:
+                datos['video_error'] = str(exc)[:500]
+                listado.video_status = 'error'
             listado.datos = datos
-            listado.video_status = 'error'
             listado.save(update_fields=['datos_extra', 'video_status', 'updated_at'])
         return False

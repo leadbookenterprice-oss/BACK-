@@ -43,6 +43,10 @@ class LightweightVideoError(Exception):
     pass
 
 
+class LightweightVideoVoiceRequiredError(LightweightVideoError):
+    pass
+
+
 def _run(cmd, timeout=180):
     process = subprocess.run(
         cmd,
@@ -393,6 +397,12 @@ def _generate_voice_file(listado, temp_dir, script):
 
     datos = listado.datos or {}
     voice_enabled = str(datos.get('voiceover', True)).strip().lower() not in {'0', 'false', 'no', 'off'}
+    silent_accepted = str(
+        datos.get('voice_fallback_accepted')
+        or datos.get('video_silent_accepted')
+        or datos.get('allow_silent_video')
+        or ''
+    ).strip().lower() in {'1', 'true', 'yes', 'on', 'si', 'sÃ­'}
     force_voiceover = config('LIGHT_VIDEO_FORCE_VOICEOVER', default=False, cast=bool)
     if not voice_enabled:
         if not force_voiceover:
@@ -434,7 +444,7 @@ def _generate_voice_file(listado, temp_dir, script):
             voice_settings=voice_settings if isinstance(voice_settings, dict) else None,
         )
     except (ElevenLabsQuotaExhaustedError, ElevenLabsRateLimitedError, APIKeyUnavailableError) as exc:
-        fail_open = config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
+        fail_open = silent_accepted and config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
         if fail_open:
             local_audio_path, local_duration, local_engine = _fallback_voice(exc)
             if local_audio_path:
@@ -446,17 +456,17 @@ def _generate_voice_file(listado, temp_dir, script):
                 getattr(exc, 'quota_state', None),
             )
             return '', 0.0, 'none', str(exc)[:220]
-        raise
+        raise LightweightVideoVoiceRequiredError(str(exc)[:240])
 
     if not audio_bytes:
-        fail_open_empty = config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
+        fail_open_empty = silent_accepted and config('LIGHT_VIDEO_TTS_FAIL_OPEN', default=True, cast=bool)
         if fail_open_empty:
             local_audio_path, local_duration, local_engine = _fallback_voice('empty_audio')
             if local_audio_path:
                 return local_audio_path, local_duration, local_engine, 'empty_audio'
             logger.warning('[LIGHT_VIDEO] ElevenLabs sin audio, seguimos sin voz listado_id=%s', listado.id)
             return '', 0.0, 'none', 'empty_audio'
-        raise LightweightVideoError('ElevenLabs no devolvio audio')
+        raise LightweightVideoVoiceRequiredError('ElevenLabs no devolvio audio')
 
     audio_path = os.path.join(temp_dir, 'voice.mp3')
     with open(audio_path, 'wb') as handle:
@@ -1880,6 +1890,7 @@ def generar_video_listado_liviano(listado_id):
         datos['video_reference_photo_count'] = len(used_urls)
         datos['video_voice_enabled'] = bool(audio_path)
         datos['video_voice_engine'] = voice_engine
+        datos['video_voice_status'] = 'ready' if audio_path else ('silent_accepted' if voice_error else 'skipped')
         if voice_error:
             datos['video_voice_error'] = str(voice_error)[:240]
         else:
@@ -1944,9 +1955,15 @@ def generar_video_listado_liviano(listado_id):
         if listado is not None:
             datos = listado.datos or {}
             datos['video_provider'] = 'leadbook_sync'
-            datos['video_error'] = str(exc)[:500]
+            if isinstance(exc, LightweightVideoVoiceRequiredError):
+                datos['video_voice_status'] = 'failed'
+                datos['video_voice_error'] = str(exc)[:500]
+                datos['video_voice_requires_decision'] = True
+                listado.video_status = 'voice_failed'
+            else:
+                datos['video_error'] = str(exc)[:500]
+                listado.video_status = 'error'
             listado.datos = datos
-            listado.video_status = 'error'
             listado.save(update_fields=['datos_extra', 'video_status', 'updated_at'])
         return False
     finally:

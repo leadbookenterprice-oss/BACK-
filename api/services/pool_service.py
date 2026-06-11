@@ -106,10 +106,16 @@ SERVICE_DEFAULTS = {
 AI_POOL_SERVICES = tuple(name for name in SERVICE_DEFAULTS if name not in {'uploadpost', 'cloudinary'})
 CONTENT_BUNDLE_SERVICES = ('cerebras',)
 SERVICIOS_CRITICOS = list(CONTENT_BUNDLE_SERVICES)
+UPLOADPOST_PAID_PLANS = {'starter', 'pro', 'scale', 'business'}
 
 
 def _is_staff_account(user):
     return bool(getattr(user, 'is_staff', False) or getattr(user, 'is_superuser', False))
+
+
+def _can_receive_uploadpost(user):
+    plan = str(getattr(user, 'plan_nombre', '') or 'free').strip().lower()
+    return plan in UPLOADPOST_PAID_PLANS
 
 
 def ensure_core_services():
@@ -132,6 +138,9 @@ class APIPoolService:
     def ensure_uploadpost_assignment(user):
         """Asigna exactamente una key UploadPost activa por usuario si hay stock."""
         if not user or _is_staff_account(user):
+            return None
+        if not _can_receive_uploadpost(user):
+            APIPoolService.release_keys_from_user(user)
             return None
 
         ensure_core_services()

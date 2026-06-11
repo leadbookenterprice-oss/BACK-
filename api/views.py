@@ -36,7 +36,8 @@ from .models import (
     AgentMediaAsset, UserContentPreference,
     BrandTemplate, BrandTemplateRevision, default_template_tokens,
     AgentAssociation, CRMClient, SocialPublicationLog,
-    TerminosCondiciones, PoliticaPrivacidad, UsageLog, AccessCode, AdminAlert
+    TerminosCondiciones, PoliticaPrivacidad, UsageLog, AccessCode, AdminAlert,
+    VideoVoiceComplaint
 )
 from .serializers import (
     RegisterSerializer, GeneratedAssetSerializer,
@@ -3710,6 +3711,7 @@ def validate_access_code(request):
         "valid": True,
         "access_code": code,
         "trial_days": access_code.trial_days or 30,
+        "target_plan": getattr(access_code, 'target_plan', 'starter') or 'starter',
     })
 
 
@@ -3787,7 +3789,10 @@ class RegisterView(APIView):
                 user = serializer.save()
                 now_ts = timezone.now()
                 if signup_type == 'free':
-                    user.plan_nombre = 'starter'
+                    target_plan = str(getattr(access_code, 'target_plan', 'starter') or 'starter').strip().lower()
+                    if target_plan not in {'free', 'starter', 'pro', 'scale'}:
+                        target_plan = 'starter'
+                    user.plan_nombre = target_plan
                     trial_ends_at = now_ts + timedelta(days=access_code.trial_days or 30)
                     user.plan_activo = True
                     user.plan_seleccionado = True
@@ -6418,6 +6423,7 @@ def video_status(request, listado_id):
     try:
         from .models import Listado
         listado = Listado.objects.get(id=listado_id, agente=request.user)
+        datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
 
         status_map = {
             'ready': 'done',
@@ -6445,11 +6451,20 @@ def video_status(request, listado_id):
         return Response({
             "status": normalized_status,
             "video_url": listado.video_url,
-            "video_version": (listado.datos_extra or {}).get('video_generated_at') or (listado.updated_at.isoformat() if listado.updated_at else None),
+            "video_version": datos.get('video_generated_at') or (listado.updated_at.isoformat() if listado.updated_at else None),
             "updated_at": listado.updated_at,
             "queue_position": queue_position,
             "queue_priority": queue_meta.get('priority') if queue_meta else None,
-            "provider": queue_meta.get('provider') if queue_meta else (listado.datos_extra or {}).get('video_provider'),
+            "provider": queue_meta.get('provider') if queue_meta else datos.get('video_provider'),
+            "voice_status": datos.get('video_voice_status') or ('ready' if datos.get('video_voice_enabled') else None),
+            "voice_error": datos.get('video_voice_error') or '',
+            "voice_requires_decision": bool(datos.get('video_voice_requires_decision') or normalized_status == 'voice_failed'),
+            "captions": {
+                "enabled": bool(datos.get('video_captions_enabled')),
+                "engine": datos.get('video_caption_engine') or '',
+                "language": datos.get('video_caption_language') or '',
+                "chunks": datos.get('video_caption_chunks'),
+            },
         }, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
@@ -6466,6 +6481,178 @@ def _is_video_only_listing(listado):
 
 def _clean_video_quick_text(value, default=''):
     return _repair_mojibake_text(str(value or default).strip())
+
+
+def _dispatch_video_queue_processing(listado, video_provider=None):
+    from django.conf import settings
+    import threading
+
+    video_provider = (video_provider or config('VIDEO_PROVIDER', default='leadbook_sync')).strip().lower()
+    from api.services.video_queue import get_video_queue_position, mark_video_queued
+    queue_meta = mark_video_queued(listado, video_provider)
+
+    default_generation_mode = 'thread' if settings.DEBUG else 'celery'
+    generation_mode = config('VIDEO_GENERATION_MODE', default=default_generation_mode).strip().lower()
+
+    if generation_mode != 'celery' or getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+        logger.info(
+            "[VIDEO] Dispatch thread listado_id=%s mode=%s eager=%s",
+            listado.id,
+            generation_mode,
+            getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False),
+        )
+        from api.tasks import process_video_queue
+        threading.Thread(target=process_video_queue, daemon=True).start()
+        mode = 'thread'
+    else:
+        logger.info(
+            "[VIDEO] Dispatch celery listado_id=%s mode=%s eager=%s",
+            listado.id,
+            generation_mode,
+            getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False),
+        )
+        from api.tasks import process_video_queue_task
+        async_result = process_video_queue_task.delay()
+        logger.info("[VIDEO] Celery task enviada listado_id=%s task_id=%s", listado.id, getattr(async_result, 'id', None))
+        mode = 'celery'
+
+        fallback_thread = config('VIDEO_FALLBACK_TO_THREAD_IF_NO_WORKER', default=False, cast=bool)
+        if fallback_thread:
+            try:
+                from subzero_core.celery import app as celery_app
+                inspect = celery_app.control.inspect(timeout=1)
+                pings = inspect.ping() or {}
+                if not pings:
+                    logger.warning("[VIDEO] No Celery workers responded to ping; using thread fallback listado_id=%s", listado.id)
+                    from api.tasks import process_video_queue
+                    threading.Thread(target=process_video_queue, daemon=True).start()
+                    mode = 'thread'
+            except Exception as ping_err:
+                logger.warning("[VIDEO] Worker ping failed (%s); using thread fallback listado_id=%s", ping_err, listado.id)
+                from api.tasks import process_video_queue
+                threading.Thread(target=process_video_queue, daemon=True).start()
+                mode = 'thread'
+
+    return {
+        "status": "queued",
+        "id": listado.id,
+        "provider": video_provider,
+        "queue_position": get_video_queue_position(listado),
+        "queue_priority": queue_meta.get('priority'),
+        "mode": mode,
+    }
+
+
+def _send_video_voice_complaint_email(complaint):
+    from django.conf import settings
+    from django.core.mail import send_mail
+
+    support_email = config('SUPPORT_EMAIL', default='leadbookenterprise@gmail.com').strip() or 'leadbookenterprise@gmail.com'
+    backend_name = str(getattr(settings, 'EMAIL_BACKEND', '') or '').lower()
+    host_user = str(getattr(settings, 'EMAIL_HOST_USER', '') or '').strip()
+    resend_key = str(getattr(settings, 'RESEND_API_KEY', '') or '').strip()
+    if 'console' in backend_name or (not host_user and not resend_key):
+        return 'console', 'Email backend no configurado; reclamo guardado y alertado.'
+
+    listado = complaint.listado
+    user = complaint.user
+    subject = f"[LeadBook] Reclamo de voz video #{listado.id}"
+    message = (
+        f"Se registro un reclamo de voz en LeadBook.\n\n"
+        f"Usuario: {user.email}\n"
+        f"Listado: {listado.id} - {listado.titulo}\n"
+        f"Accion: {complaint.action}\n"
+        f"Error: {complaint.error_message or '-'}\n\n"
+        "El equipo de LeadBook revisara el pool de ElevenLabs."
+    )
+    recipients = []
+    for email in [user.email, support_email]:
+        if email and email not in recipients:
+            recipients.append(email)
+    try:
+        sent_count = send_mail(subject, message, getattr(settings, 'DEFAULT_FROM_EMAIL', support_email), recipients, fail_silently=False)
+        return ('sent' if sent_count else 'failed'), f'sent_count={sent_count}'
+    except Exception as exc:
+        logger.warning('[VIDEO_VOICE] complaint email failed complaint_id=%s: %s', complaint.id, exc)
+        return 'failed', str(exc)[:500]
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@require_active_plan
+def video_voice_complaint(request, pk):
+    try:
+        listado = Listado.objects.get(id=pk, agente=request.user)
+    except Listado.DoesNotExist:
+        return Response({"error": "Listado no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+    action_value = str((request.data or {}).get('action') or 'complaint_only').strip().lower()
+    if action_value not in {'complaint_only', 'complaint_and_silent', 'retry_voice'}:
+        return Response({'error': 'action_invalid'}, status=status.HTTP_400_BAD_REQUEST)
+
+    datos = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+    error_message = str(
+        (request.data or {}).get('error')
+        or datos.get('video_voice_error')
+        or datos.get('video_error')
+        or 'ElevenLabs no pudo generar la voz.'
+    )[:1000]
+
+    complaint = VideoVoiceComplaint.objects.create(
+        user=request.user,
+        listado=listado,
+        action=action_value,
+        error_message=error_message,
+        metadata={
+            'video_status': listado.video_status,
+            'voice_status': datos.get('video_voice_status'),
+            'provider': datos.get('video_provider'),
+        },
+    )
+    email_status, email_detail = _send_video_voice_complaint_email(complaint)
+    complaint.email_status = email_status
+    complaint.email_detail = email_detail
+    complaint.save(update_fields=['email_status', 'email_detail', 'updated_at'])
+
+    AdminAlert.objects.create(
+        tipo='voice_complaint',
+        severidad='warning' if email_status != 'sent' else 'info',
+        titulo='Reclamo de voz en Video Studio',
+        mensaje=f'{request.user.email} reporto falla de ElevenLabs en listado {listado.id}. Accion: {action_value}. Email: {email_status}.',
+        related_user=request.user,
+    )
+
+    dispatch_payload = None
+    if action_value in {'complaint_and_silent', 'retry_voice'}:
+        datos = dict(datos)
+        datos['video_voice_requires_decision'] = False
+        if action_value == 'complaint_and_silent':
+            datos['voiceover'] = False
+            datos['video_silent_accepted'] = True
+            datos['voice_fallback_accepted'] = True
+            datos['video_voice_status'] = 'silent_accepted'
+            datos['video_voice_error'] = ''
+        else:
+            datos['voiceover'] = True
+            datos.pop('video_silent_accepted', None)
+            datos.pop('voice_fallback_accepted', None)
+            datos.pop('allow_silent_video', None)
+            datos['video_voice_status'] = 'retrying'
+            datos['video_voice_error'] = ''
+        listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
+        listado.video_status = 'queued'
+        listado.video_url = ''
+        listado.save(update_fields=['datos_extra', 'video_status', 'video_url', 'updated_at'])
+        dispatch_payload = _dispatch_video_queue_processing(listado)
+
+    return Response({
+        'ok': True,
+        'complaint_id': complaint.id,
+        'email_status': email_status,
+        'email_detail': email_detail,
+        'video_status': listado.video_status,
+        'dispatch': dispatch_payload,
+    }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
