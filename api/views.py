@@ -64,6 +64,9 @@ from .plan_utils import (
     incrementar_uso,
     registrar_uso,
     registrar_uso_listado_si_completo,
+    listing_content_pack_ready,
+    PROPERTY_USAGE_COUNTED_AT_KEY,
+    get_daily_listing_quota,
     get_free_trial_status,
     get_plan_block_payload,
     get_pro_feature_block_payload,
@@ -76,10 +79,12 @@ from .services.ads_studio import (
 )
 from .services.content_generation import (
     CONTENT_PACK_STEPS,
+    cooldown_generation_run_slot,
     extract_generation_run_id,
     extract_generation_step,
     mark_generation_step,
     mark_generation_step_from_exception,
+    reset_generation_step_for_retry,
     serialize_generation_run,
     start_or_resume_generation_run,
     get_generation_run_for_user,
@@ -604,6 +609,64 @@ def _build_guaranteed_pdf_html(context, template_id, fallback_reason=''):
 </html>"""
 
 
+def _pack_step_retry_reason(response_status, response_data, refreshed_run, step_name):
+    data = response_data if isinstance(response_data, dict) else {}
+    text_parts = [
+        data.get('mensaje'),
+        data.get('detalle'),
+        data.get('error'),
+        data.get('quota_state'),
+    ]
+    if refreshed_run:
+        text_parts.extend([
+            getattr(refreshed_run, 'status', ''),
+            getattr(refreshed_run, 'error_code', ''),
+            getattr(refreshed_run, 'error_message', ''),
+        ])
+        step = next((item for item in refreshed_run.steps.all() if item.step == step_name), None)
+        if step:
+            text_parts.extend([step.status, step.error_code, step.error_message])
+    haystack = ' '.join(str(part or '') for part in text_parts).lower()
+
+    hard_terms = ('hard_exhausted', 'quota exhausted', 'insufficient credits', 'billing', 'payment', 'cuota agotada')
+    if data.get('quota_state') == 'hard_exhausted' or any(term in haystack for term in hard_terms):
+        return ''
+    if data.get('quota_state') == 'soft_rate_limited':
+        return data.get('mensaje') or data.get('detalle') or 'soft_rate_limited'
+    if response_status == status.HTTP_429_TOO_MANY_REQUESTS:
+        return data.get('mensaje') or data.get('detalle') or 'rate_limited'
+    retry_terms = (
+        'soft_rate_limited',
+        'rate limit',
+        'rate_limited',
+        '429',
+        'saturad',
+        'temporarily',
+        'timeout',
+        'timed out',
+        'respuesta vacia',
+        'empty response',
+        'no devolvio',
+        'server error',
+        'bad gateway',
+        'service unavailable',
+    )
+    if response_status in {500, 502, 503, 504} and any(term in haystack for term in retry_terms):
+        return data.get('mensaje') or data.get('detalle') or data.get('error') or haystack[:300]
+    if refreshed_run and refreshed_run.status == 'waiting_rate_limit':
+        return refreshed_run.error_message or refreshed_run.error_code or 'waiting_rate_limit'
+    return ''
+
+
+def _pack_step_retry_after(response_data, default=45):
+    data = response_data if isinstance(response_data, dict) else {}
+    try:
+        retry_after = int(data.get('retry_after_seconds') or default)
+    except (TypeError, ValueError):
+        retry_after = default
+    return min(max(retry_after, 15), 120)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @require_active_plan
@@ -615,46 +678,6 @@ def advance_content_generation_run(request, run_id):
     if run.status in {'done', 'cancelled'}:
         return Response({'success': True, 'run': serialize_generation_run(run), 'already_complete': True})
 
-    if run.status in {'pending', 'waiting_slot'} or not run.api_key_id:
-        run, reservation = start_or_resume_generation_run(
-            request.user,
-            run.listado,
-            metadata={'advance_run_id': run.id, **(run.metadata or {})},
-        )
-        selected_provider = _resolve_requested_ai_provider(run.metadata or {})
-        if reservation.get('error'):
-            return Response({
-                'success': False,
-                'run': serialize_generation_run(run),
-                'error': 'ia_rate_limited',
-                'mensaje': str(reservation['error']),
-                'provider': selected_provider or 'cerebras',
-                'scope': getattr(reservation['error'], 'scope', None),
-                'quota_state': getattr(reservation['error'], 'quota_state', None),
-                'retry_after_seconds': reservation.get('retry_after_seconds'),
-            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
-
-    steps = list(run.steps.all().order_by('order', 'id'))
-    next_step = next((step for step in steps if step.status in {'pending', 'waiting_rate_limit'}), None)
-    if not next_step:
-        if all(step.status in {'done', 'failed', 'skipped'} for step in steps):
-            run.status = 'done'
-            run.current_step = ''
-            run.completed_at = run.completed_at or timezone.now()
-            run.error_code = ''
-            run.error_message = ''
-            run.save(update_fields=['status', 'current_step', 'completed_at', 'error_code', 'error_message', 'updated_at'])
-        refreshed = get_generation_run_for_user(request.user, run.id)
-        return Response({'success': True, 'run': serialize_generation_run(refreshed), 'already_complete': True})
-
-    if next_step.status in {'running', 'uploading'}:
-        return Response({
-            'success': False,
-            'error': 'generation_step_in_progress',
-            'step': next_step.step,
-            'run': serialize_generation_run(run),
-        }, status=status.HTTP_409_CONFLICT)
-
     step_views = {
         'plan': generar_generation_plan,
         'pdf': generar_pdf,
@@ -663,38 +686,139 @@ def advance_content_generation_run(request, run_id):
         'carrusel': generar_carrusel,
         'email': generar_email,
     }
-    step_view = step_views.get(next_step.step)
-    if not step_view:
-        return Response({'error': 'generation_step_not_supported', 'step': next_step.step}, status=status.HTTP_400_BAD_REQUEST)
-
     from rest_framework.test import APIRequestFactory, force_authenticate
 
-    payload = _build_generation_run_payload(run, request.data, next_step.step)
-    factory = APIRequestFactory()
-    internal_request = factory.post('/api/internal/generation-step/', payload, format='json')
-    force_authenticate(internal_request, user=request.user)
-    response = step_view(internal_request)
+    max_attempts = max(1, config('CONTENT_GENERATION_MAX_KEY_ATTEMPTS', default=8, cast=int))
+    last_response = None
+    last_response_status = status.HTTP_500_INTERNAL_SERVER_ERROR
+    last_response_data = None
+    last_step_name = ''
+    rotation_attempts = 0
 
-    refreshed = get_generation_run_for_user(request.user, run.id)
-    response_data = getattr(response, 'data', None)
-    response_status = getattr(response, 'status_code', status.HTTP_500_INTERNAL_SERVER_ERROR)
-    refreshed_step = None
-    if refreshed:
-        refreshed_step = next((step for step in refreshed.steps.all() if step.step == next_step.step), None)
-    should_continue_after_failure = (
-        response_status >= 400
-        and refreshed
-        and refreshed.status in {'running', 'done'}
-        and refreshed_step
-        and refreshed_step.status in {'failed', 'skipped'}
-    )
-    return Response({
-        'success': (200 <= response_status < 300) or bool(should_continue_after_failure),
-        'step': next_step.step,
-        'step_response': response_data,
-        'run': serialize_generation_run(refreshed or run),
-        'continued_after_step_failure': bool(should_continue_after_failure),
-    }, status=status.HTTP_200_OK if should_continue_after_failure else response_status)
+    for attempt in range(max_attempts):
+        run = get_generation_run_for_user(request.user, run.id)
+        if not run:
+            return Response({'error': 'generation_run_not_found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if run.status in {'pending', 'waiting_slot', 'waiting_rate_limit'} or not run.api_key_id:
+            run, reservation = start_or_resume_generation_run(
+                request.user,
+                run.listado,
+                metadata={'advance_run_id': run.id, **(run.metadata or {})},
+            )
+            selected_provider = _resolve_requested_ai_provider(run.metadata or {})
+            if reservation.get('error'):
+                last_response_status = status.HTTP_429_TOO_MANY_REQUESTS
+                last_response_data = {
+                    'success': False,
+                    'run': serialize_generation_run(run),
+                    'error': 'ia_rate_limited',
+                    'mensaje': str(reservation['error']),
+                    'provider': selected_provider or 'cerebras',
+                    'scope': getattr(reservation['error'], 'scope', None),
+                    'quota_state': getattr(reservation['error'], 'quota_state', None),
+                    'retry_after_seconds': reservation.get('retry_after_seconds'),
+                    'rotation_attempts': rotation_attempts,
+                }
+                break
+
+        steps = list(run.steps.all().order_by('order', 'id'))
+        next_step = next((step for step in steps if step.status in {'pending', 'waiting_rate_limit'}), None)
+        if not next_step:
+            if all(step.status in {'done', 'failed', 'skipped'} for step in steps):
+                run.status = 'done'
+                run.current_step = ''
+                run.completed_at = run.completed_at or timezone.now()
+                run.error_code = ''
+                run.error_message = ''
+                run.save(update_fields=['status', 'current_step', 'completed_at', 'error_code', 'error_message', 'updated_at'])
+            refreshed = get_generation_run_for_user(request.user, run.id)
+            return Response({'success': True, 'run': serialize_generation_run(refreshed), 'already_complete': True})
+
+        if next_step.status in {'running', 'uploading'}:
+            return Response({
+                'success': False,
+                'error': 'generation_step_in_progress',
+                'step': next_step.step,
+                'run': serialize_generation_run(run),
+            }, status=status.HTTP_409_CONFLICT)
+
+        step_view = step_views.get(next_step.step)
+        if not step_view:
+            return Response({'error': 'generation_step_not_supported', 'step': next_step.step}, status=status.HTTP_400_BAD_REQUEST)
+
+        last_step_name = next_step.step
+        payload = _build_generation_run_payload(run, request.data, next_step.step)
+        factory = APIRequestFactory()
+        internal_request = factory.post('/api/internal/generation-step/', payload, format='json')
+        force_authenticate(internal_request, user=request.user)
+        response = step_view(internal_request)
+        last_response = response
+
+        refreshed = get_generation_run_for_user(request.user, run.id)
+        response_data = getattr(response, 'data', None)
+        response_status = getattr(response, 'status_code', status.HTTP_500_INTERNAL_SERVER_ERROR)
+        last_response_status = response_status
+        last_response_data = response_data
+        retry_reason = _pack_step_retry_reason(response_status, response_data, refreshed, next_step.step)
+        selected_provider = _resolve_requested_ai_provider((refreshed or run).metadata or {})
+
+        if retry_reason and selected_provider == 'cerebras' and attempt < max_attempts - 1:
+            rotation_attempts += 1
+            cooldown_generation_run_slot(
+                refreshed or run,
+                seconds=_pack_step_retry_after(response_data),
+                error_message=retry_reason,
+            )
+            reset_generation_step_for_retry(refreshed or run, next_step.step, error_message=retry_reason)
+            logger.warning(
+                '[PACK_ORCHESTRATOR] Rotando key Cerebras run_id=%s listado_id=%s step=%s attempt=%s/%s reason=%s',
+                run.id,
+                run.listado_id,
+                next_step.step,
+                attempt + 1,
+                max_attempts,
+                retry_reason,
+            )
+            continue
+
+        refreshed_step = None
+        if refreshed:
+            refreshed_step = next((step for step in refreshed.steps.all() if step.step == next_step.step), None)
+        should_continue_after_failure = (
+            response_status >= 400
+            and refreshed
+            and refreshed.status in {'running', 'done'}
+            and refreshed_step
+            and refreshed_step.status in {'failed', 'skipped'}
+        )
+        return Response({
+            'success': (200 <= response_status < 300) or bool(should_continue_after_failure),
+            'step': next_step.step,
+            'step_response': response_data,
+            'run': serialize_generation_run(refreshed or run),
+            'continued_after_step_failure': bool(should_continue_after_failure),
+            'rotation_attempts': rotation_attempts,
+        }, status=status.HTTP_200_OK if should_continue_after_failure else response_status)
+
+    final_run = get_generation_run_for_user(request.user, run.id)
+    if isinstance(last_response_data, dict):
+        payload = {
+            **last_response_data,
+            'run': serialize_generation_run(final_run or run),
+            'step': last_step_name,
+            'rotation_attempts': rotation_attempts,
+        }
+    else:
+        payload = {
+            'success': False,
+            'error': 'generation_step_failed',
+            'step': last_step_name,
+            'step_response': getattr(last_response, 'data', None),
+            'run': serialize_generation_run(final_run or run),
+            'rotation_attempts': rotation_attempts,
+        }
+    return Response(payload, status=last_response_status)
 
 
 GENERATION_MODEL_ALIASES = {
@@ -2178,6 +2302,8 @@ def _listing_generated_formats(listado, datos):
 def _serialize_listing_summary(listado):
     cover_url = _ensure_listing_pdf_cover_frame(listado) or _ensure_listing_cover_frame(listado)
     datos = _repair_listing_response_value(listado.datos_extra if isinstance(listado.datos_extra, dict) else {})
+    content_pack_ready = listing_content_pack_ready(datos)
+    counted_as_listing = bool(datos.get(PROPERTY_USAGE_COUNTED_AT_KEY))
     return {
         'id': listado.id,
         'titulo': listado.titulo,
@@ -2194,6 +2320,8 @@ def _serialize_listing_summary(listado):
         'cover_frame_url': cover_url,
         'fotoportada': cover_url,
         'formatos_generados': _listing_generated_formats(listado, datos),
+        'content_pack_ready': content_pack_ready,
+        'counted_as_listing': counted_as_listing,
         'video_only': bool(datos.get('video_only')),
         'source': datos.get('source') or '',
         'datos': datos,
@@ -7041,21 +7169,25 @@ def generar_pdf(request):
         if listado_obj:
             _persist_template_selection(listado_obj, selection, source='pdf')
 
-        try:
-            html_string = generar_html_gemini(context, request.user)
-        except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as e:
-            logger.warning("[PDF] IA no disponible en template (%s).", e)
-            raise
-        except Exception as e:
-            logger.exception("[PDF] Error en sistema de templates IA")
-            _mark_generation_failed(generation_run_id, generation_step_name, e, error_code='pdf_ia_failed')
-            return Response(
-                {
-                    "error": "pdf_ia_failed",
-                    "detalle": str(e)[:300],
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+        if config('LEADBOOK_PDF_CONTROLLED_RENDERER', default=True, cast=bool):
+            pdf_generation_source = 'controlled_template'
+            html_string = _build_guaranteed_pdf_html(context, template_id, '')
+        else:
+            try:
+                html_string = generar_html_gemini(context, request.user)
+            except (APIKeyUnavailableError, GeminiQuotaExhaustedError, GeminiRateLimitedError) as e:
+                logger.warning("[PDF] IA no disponible en template (%s).", e)
+                raise
+            except Exception as e:
+                logger.exception("[PDF] Error en sistema de templates IA")
+                _mark_generation_failed(generation_run_id, generation_step_name, e, error_code='pdf_ia_failed')
+                return Response(
+                    {
+                        "error": "pdf_ia_failed",
+                        "detalle": str(e)[:300],
+                    },
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
             
         if not html_string:
             pdf_generation_source = 'fallback_local'
@@ -9058,6 +9190,7 @@ def dashboard(request):
     from .tracking import get_uploadpost_quota
 
     listados = Listado.objects.filter(agente=agent)
+    listados_guardados_total = listados.count()
     property_usage = UsageLog.objects.filter(agent=agent, tipo='property')
     listados_este_mes = property_usage.filter(fecha__gte=start_of_month).count()
     total_generados = property_usage.count()
@@ -9098,6 +9231,9 @@ def dashboard(request):
         'logo_url': _safe_persisted_media_url(getattr(agent, 'logo_url', None)),
         'listados_este_mes': listados_este_mes,
         'total_generados': total_generados,
+        'listados_guardados_total': listados_guardados_total,
+        'listados_generados_este_mes': listados_este_mes,
+        'total_listados_generados': total_generados,
         'videos_creados': videos_creados,
         'conexiones_activas': auto_posts_used,
         'auto_posts_used': auto_posts_used,
@@ -9125,7 +9261,8 @@ def dashboard(request):
             'images_used': images_used,
             'videos_used': videos_used,
             'auto_posts_used': auto_posts_used,
-        }
+        },
+        'daily_listing_quota': get_daily_listing_quota(agent),
     })
 
 @api_view(['GET'])

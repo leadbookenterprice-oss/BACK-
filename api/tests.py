@@ -428,7 +428,13 @@ class DashboardMetricsDetailTests(TestCase):
         payload = response.json()
         self.assertEqual(payload['listados_este_mes'], 4)
         self.assertEqual(payload['total_generados'], 5)
+        self.assertEqual(payload['listados_guardados_total'], 1)
+        self.assertEqual(payload['listados_generados_este_mes'], 4)
+        self.assertEqual(payload['total_listados_generados'], 5)
         self.assertEqual(payload['videos_creados'], 2)
+        self.assertIn('daily_listing_quota', payload)
+        self.assertFalse(payload['listados_recientes'][0]['content_pack_ready'])
+        self.assertFalse(payload['listados_recientes'][0]['counted_as_listing'])
 
         detail = payload['metrics_detail']
         self.assertEqual(detail['period']['today'], '2026-06-09')

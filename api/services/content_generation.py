@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Sum
@@ -322,6 +324,96 @@ def release_generation_run_slot(run):
             'slot_locked_until',
             'updated_at',
         ])
+
+
+def cooldown_generation_run_slot(run, *, seconds=60, error_message=''):
+    """Park the current slot briefly so the run can rotate to another key."""
+    if not run or not getattr(run, 'api_key_id', None):
+        return None
+    now = timezone.now()
+    locked_until = now + timedelta(seconds=max(int(seconds or 60), 5))
+    with transaction.atomic():
+        locked_run = ContentGenerationRun.objects.select_for_update().filter(pk=run.pk).first()
+        if not locked_run or not locked_run.api_key_id:
+            return None
+        key = (
+            APIKey.objects.select_for_update()
+            .filter(pk=locked_run.api_key_id, servicio__nombre__iexact='cerebras')
+            .first()
+        )
+        old_key_id = locked_run.api_key_id
+        if key:
+            key.status = 'in_use'
+            key.slot_locked_by = None
+            key.slot_locked_listado = None
+            key.slot_locked_at = now
+            key.slot_locked_until = locked_until
+            key.slot_last_error = str(error_message or 'soft rate limited')[:4000]
+            key.save(update_fields=[
+                'status',
+                'slot_locked_by',
+                'slot_locked_listado',
+                'slot_locked_at',
+                'slot_locked_until',
+                'slot_last_error',
+                'updated_at',
+            ])
+
+        locked_run.api_key = None
+        locked_run.status = 'pending'
+        locked_run.error_code = ''
+        locked_run.error_message = ''
+        locked_run.completed_at = None
+        locked_run.save(update_fields=[
+            'api_key',
+            'status',
+            'error_code',
+            'error_message',
+            'completed_at',
+            'updated_at',
+        ])
+        return old_key_id
+
+
+def reset_generation_step_for_retry(run, step_name, *, error_message=''):
+    if not run or step_name not in CONTENT_PACK_STEPS:
+        return None
+    with transaction.atomic():
+        locked_run = ContentGenerationRun.objects.select_for_update().filter(pk=run.pk).first()
+        if not locked_run:
+            return None
+        step = (
+            ContentGenerationStep.objects.select_for_update()
+            .filter(run=locked_run, step=step_name)
+            .first()
+        )
+        if step:
+            history = step.result if isinstance(step.result, dict) else {}
+            attempts = list(history.get('retry_history') or [])
+            if error_message:
+                attempts.append({
+                    'at': timezone.now().isoformat(),
+                    'message': str(error_message)[:500],
+                })
+            step.status = 'pending'
+            step.error_code = ''
+            step.error_message = ''
+            step.result = {**history, 'retry_history': attempts[-5:]} if attempts else history
+            step.save(update_fields=['status', 'error_code', 'error_message', 'result', 'updated_at'])
+        locked_run.status = 'pending'
+        locked_run.current_step = step_name
+        locked_run.error_code = ''
+        locked_run.error_message = ''
+        locked_run.completed_at = None
+        locked_run.save(update_fields=[
+            'status',
+            'current_step',
+            'error_code',
+            'error_message',
+            'completed_at',
+            'updated_at',
+        ])
+        return locked_run
 
 
 def start_or_resume_generation_run(user, listado, *, metadata=None):

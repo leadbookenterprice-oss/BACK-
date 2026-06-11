@@ -4,10 +4,15 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from unittest.mock import patch
 
-from api.models import ContentGenerationRun, Listado
+from api.models import APIKey, ContentGenerationRun, Listado, Servicio
 from api.services.ai_limits import get_model_limit_config, load_ai_limits_config
 from api.services.cerebras_generation_protocol import PROTOCOL_VERSION, create_generation_protocol
-from api.services.content_generation import CONTENT_PACK_STEPS, start_or_resume_generation_run
+from api.services.content_generation import (
+    CONTENT_PACK_STEPS,
+    cooldown_generation_run_slot,
+    reset_generation_step_for_retry,
+    start_or_resume_generation_run,
+)
 
 
 class AILimitsAndProtocolTests(TestCase):
@@ -58,6 +63,50 @@ class AILimitsAndProtocolTests(TestCase):
             list(run.steps.order_by('order').values_list('step', flat=True)),
             CONTENT_PACK_STEPS,
         )
+
+    def test_cerebras_run_rotates_to_another_key_after_soft_cooldown(self):
+        service, _ = Servicio.objects.get_or_create(
+            nombre='cerebras',
+            defaults={'descripcion': 'Cerebras', 'default_daily_limit': 1000000},
+        )
+        APIKey.objects.filter(servicio=service).delete()
+        first_key = APIKey.objects.create(
+            servicio=service,
+            api_key='ck-first',
+            status='available',
+            google_daily_limit=1000000,
+        )
+        second_key = APIKey.objects.create(
+            servicio=service,
+            api_key='ck-second',
+            status='available',
+            google_daily_limit=1000000,
+        )
+
+        run, reservation = start_or_resume_generation_run(
+            self.user,
+            self.listado,
+            metadata={'ai_provider': 'cerebras'},
+        )
+        self.assertIsNone(reservation['error'])
+        self.assertEqual(run.api_key_id, first_key.id)
+
+        cooldown_generation_run_slot(run, seconds=60, error_message='soft 429')
+        reset_generation_step_for_retry(run, 'plan', error_message='soft 429')
+        run.refresh_from_db()
+        first_key.refresh_from_db()
+        self.assertIsNone(run.api_key_id)
+        self.assertIsNone(first_key.slot_locked_by_id)
+        self.assertIsNone(first_key.slot_locked_listado_id)
+        self.assertIsNotNone(first_key.slot_locked_until)
+
+        rotated_run, second_reservation = start_or_resume_generation_run(
+            self.user,
+            self.listado,
+            metadata={'ai_provider': 'cerebras'},
+        )
+        self.assertIsNone(second_reservation['error'])
+        self.assertEqual(rotated_run.api_key_id, second_key.id)
 
     @patch('api.ai_services.call_cerebras_api')
     def test_cerebras_protocol_is_ai_generated_and_normalized(self, mock_call):
