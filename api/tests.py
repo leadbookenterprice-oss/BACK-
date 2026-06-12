@@ -857,6 +857,60 @@ class ListingResultPersistenceTests(TestCase):
         actualizar_resultados_listado(stale_listado, 'email', {'html': '<p>Mail regenerado</p>'})
         self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 1)
 
+    def test_generate_email_falls_back_to_complete_html_when_ai_returns_invalid_json(self):
+        self.user.plan_nombre = 'pro'
+        self.user.plan_activo = True
+        self.user.save(update_fields=['plan_nombre', 'plan_activo'])
+        self.client.force_authenticate(user=self.user)
+
+        listado = Listado.objects.create(
+            agente=self.user,
+            titulo='Casa email fallback',
+            tipo_propiedad='casa',
+            operacion='venta',
+            ciudad='Palermo',
+            precio='250000',
+            moneda='USD',
+            datos_extra={
+                'titulo': 'Casa email fallback',
+                'tipoPropiedad': 'Casa',
+                'operacion': 'venta',
+                'ciudad': 'Palermo',
+                'precio': '250000',
+                'moneda': 'USD',
+                'template_id': 'tech_modern',
+                'portadaUrl': 'https://res.cloudinary.com/demo/image/upload/cover.jpg',
+            },
+        )
+
+        with patch('api.views.smart_call', return_value='respuesta no json'):
+            response = self.client.post(
+                reverse('generar_email'),
+                {
+                    'listado_id': listado.id,
+                    'tipoPropiedad': 'Casa',
+                    'operacion': 'venta',
+                    'ciudad': 'Palermo',
+                    'precio': '250000',
+                    'moneda': 'USD',
+                    'template_id': 'tech_modern',
+                    'portadaUrl': 'https://res.cloudinary.com/demo/image/upload/cover.jpg',
+                },
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        payload = response.json()
+        self.assertIn('<html', payload['html'].lower())
+        self.assertIn('<table', payload['html'].lower())
+        self.assertTrue(payload['fallback_applied'])
+        self.assertIn('json_invalid', payload['fallback_reason'])
+
+        listado.refresh_from_db()
+        stored_email = listado.datos_extra['resultados']['email']
+        self.assertIn('<html', stored_email['html'].lower())
+        self.assertTrue(stored_email['fallback_applied'])
+
     def test_upload_fotos_replace_returns_only_current_batch(self):
         listado = Listado.objects.create(
             agente=self.user,

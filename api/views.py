@@ -3529,6 +3529,175 @@ def _sanitize_generated_email_text(raw_text):
     text = re.sub(r'\s{2,}', ' ', text)
     return _repair_mojibake_text(text).strip()
 
+
+def _validate_generated_email_html(html_string, context=None):
+    html_text = _repair_mojibake_text(html_string or '')
+    lower_html = html_text.lower()
+    plain_text = re.sub(r'(?is)<[^>]+>', ' ', html_text)
+    plain_text = re.sub(r'\s{2,}', ' ', plain_text).strip()
+    context = context if isinstance(context, dict) else {}
+    errors = []
+
+    if '<html' not in lower_html or '</html>' not in lower_html:
+        errors.append('html_document_missing')
+    if '<table' not in lower_html:
+        errors.append('email_table_layout_missing')
+    if len(plain_text) < 80:
+        errors.append('content_too_short')
+    if '{{' in html_text or '{%' in html_text or '}}' in html_text or '%}' in html_text:
+        errors.append('template_placeholder_missing')
+    if '<script' in lower_html or 'javascript:' in lower_html or 'data:text/html' in lower_html:
+        errors.append('unsafe_markup')
+
+    city = str(context.get('ciudad') or '').strip()
+    city_html = html_lib.escape(city, quote=True).lower()
+    if city and city.lower() not in lower_html and city_html not in lower_html:
+        errors.append('city_missing')
+    price = str(context.get('precio') or '').strip()
+    price_html = html_lib.escape(price, quote=True).lower()
+    if price and price.lower() not in lower_html and price_html not in lower_html:
+        errors.append('price_missing')
+
+    cover_url = str(context.get('portada_url') or '').strip()
+    if cover_url:
+        cover_url_html = cover_url.replace('&', '&amp;')
+        if cover_url not in html_text and cover_url_html not in html_text:
+            errors.append('cover_image_missing')
+
+    return errors
+
+
+def _build_guaranteed_email_html(context, template_id=None):
+    context = context if isinstance(context, dict) else {}
+    normalized_template_id = _normalize_template_id(template_id or context.get('template_id')) or 'tech_modern'
+    contract = get_template_contract(normalized_template_id) or get_template_contract('tech_modern') or {}
+    colors = (contract.get('colors') or TEMPLATE_CATALOG.get(normalized_template_id, {}).get('colors') or {})
+    primary = colors.get('primary') or context.get('color_primary') or '#0d47a1'
+    secondary = colors.get('secondary') or context.get('color_secondary') or '#1565c0'
+    accent = colors.get('accent') or context.get('color_accent') or '#00e5ff'
+    background = colors.get('background') or '#f6f7fb'
+    text_color = colors.get('text') or '#1f2937'
+
+    asunto = _pdf_escape(context.get('asunto'), 'Propiedad destacada')
+    tipo = _pdf_escape(context.get('tipoPropiedad'), 'Propiedad')
+    ciudad = _pdf_escape(context.get('ciudad'), 'Ubicacion destacada')
+    precio = _pdf_escape(context.get('precio'), 'Consultar')
+    moneda = _pdf_escape(context.get('moneda'), 'USD')
+    operacion = _pdf_escape(context.get('operacion'), 'Venta')
+    agencia = _pdf_escape(context.get('agenciaNombre'), 'LeadBook')
+    agente = _pdf_escape(context.get('agenteNombre'), 'Asesor Comercial')
+    agente_rol = _pdf_escape(context.get('agenteRol'), 'Asesor Comercial')
+    telefono = _pdf_escape(context.get('agenteTelefonoDisplay') or context.get('agenteTelefono'), '')
+    email = _pdf_escape(context.get('agenteEmail'), '')
+    whatsapp_url = _pdf_url(context.get('whatsapp_url'))
+    cover_url = _pdf_url(context.get('portada_url'))
+    logo_url = _pdf_url(context.get('logo_url'))
+    body_html = _sanitize_generated_email_html(context.get('html_content') or '')
+    if not body_html:
+        body_html = '<p>Propiedad disponible para revisar con informacion comercial completa.</p>'
+
+    gallery_urls = []
+    raw_gallery = context.get('galeria_urls') if isinstance(context.get('galeria_urls'), (list, tuple)) else []
+    for image_url in raw_gallery[:4]:
+        clean_url = _pdf_url(image_url)
+        if clean_url:
+            gallery_urls.append(clean_url)
+
+    logo_html = (
+        f'<img src="{html_lib.escape(logo_url, quote=True)}" alt="{agencia}" width="44" height="44" '
+        'style="display:block;width:44px;height:44px;border-radius:50%;object-fit:contain;background:#fff;padding:4px;">'
+        if logo_url else ''
+    )
+    cover_html = (
+        f'<tr><td style="padding:0 32px 22px 32px;"><img src="{html_lib.escape(cover_url, quote=True)}" '
+        f'alt="{tipo}" width="576" style="display:block;width:100%;height:auto;max-height:320px;object-fit:cover;border:1px solid {html_lib.escape(secondary, quote=True)};"></td></tr>'
+        if cover_url else ''
+    )
+    gallery_cells = ''.join(
+        f'<td width="50%" style="padding:4px;"><img src="{html_lib.escape(url, quote=True)}" alt="Foto de galeria" '
+        f'width="276" style="display:block;width:100%;height:132px;object-fit:cover;border:1px solid {html_lib.escape(secondary, quote=True)};"></td>'
+        for url in gallery_urls
+    )
+    gallery_html = (
+        f'<tr><td style="padding:0 28px 24px 28px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>{gallery_cells}</tr></table></td></tr>'
+        if gallery_cells else ''
+    )
+    contact_lines = ''
+    if telefono:
+        contact_lines += f'WhatsApp: {telefono}<br>'
+    if email:
+        contact_lines += f'Email: {email}<br>'
+    cta_html = (
+        f'<a href="{html_lib.escape(whatsapp_url, quote=True)}" style="display:inline-block;padding:12px 18px;background:{html_lib.escape(accent, quote=True)};color:#111;text-decoration:none;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;font-weight:800;">Contactar por WhatsApp</a>'
+        if whatsapp_url else ''
+    )
+
+    return _repair_mojibake_text(f'''<!DOCTYPE html>
+<html lang="es" data-leadbook-email="true" data-template-id="{html_lib.escape(normalized_template_id, quote=True)}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{asunto}</title>
+</head>
+<body style="margin:0;padding:0;background:{html_lib.escape(background, quote=True)};font-family:Arial,Helvetica,sans-serif;color:{html_lib.escape(text_color, quote=True)};">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{html_lib.escape(background, quote=True)};padding:28px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px;max-width:640px;background:#ffffff;border:1px solid #e5e7eb;">
+          <tr>
+            <td style="padding:26px 32px;background:{html_lib.escape(primary, quote=True)};color:#ffffff;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td valign="middle">{logo_html}<div style="font-size:18px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">{agencia}</div></td>
+                  <td align="right" valign="middle"><span style="display:inline-block;padding:8px 12px;border:1px solid rgba(255,255,255,0.75);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;font-weight:800;">{operacion}</span></td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px 32px 20px 32px;">
+              <div style="font-size:11px;letter-spacing:2px;text-transform:uppercase;color:{html_lib.escape(accent, quote=True)};font-weight:800;margin-bottom:10px;">Propiedad disponible</div>
+              <h1 style="margin:0;font-size:34px;line-height:1.1;color:{html_lib.escape(text_color, quote=True)};">{tipo} en {ciudad}</h1>
+            </td>
+          </tr>
+          {cover_html}
+          {gallery_html}
+          <tr>
+            <td style="padding:0 32px 24px 32px;font-size:15px;line-height:1.75;color:{html_lib.escape(text_color, quote=True)};">{body_html}</td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 28px 32px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e5e7eb;background:#f9fafb;">
+                <tr>
+                  <td width="50%" style="padding:18px;border-right:1px solid #e5e7eb;">
+                    <div style="font-size:10px;letter-spacing:1.8px;text-transform:uppercase;color:#6b7280;font-weight:800;">Precio</div>
+                    <div style="font-size:26px;color:{html_lib.escape(primary, quote=True)};font-weight:800;">{moneda} {precio}</div>
+                  </td>
+                  <td width="50%" style="padding:18px;">
+                    <div style="font-size:10px;letter-spacing:1.8px;text-transform:uppercase;color:#6b7280;font-weight:800;">Operacion</div>
+                    <div style="font-size:18px;color:{html_lib.escape(text_color, quote=True)};font-weight:800;text-transform:uppercase;">{operacion}</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 34px 32px;">
+              <div style="padding-top:18px;border-top:1px solid #e5e7eb;font-size:13px;line-height:1.7;color:#4b5563;">
+                <strong style="color:{html_lib.escape(text_color, quote=True)};font-size:15px;">{agente}</strong><br>
+                {agente_rol} | {agencia}<br>
+                {contact_lines}
+              </div>
+              <div style="padding-top:16px;">{cta_html}</div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>''')
+
 def get_client_ip(request):
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded_for:
@@ -8079,6 +8248,8 @@ def generar_email(request):
             email_cover = images_pool[0] if images_pool else ''
         email_gallery = [image_url for image_url in images_pool if image_url != email_cover][:6]
         template_meta = TEMPLATE_CATALOG.get(template_id, {})
+        email_fallback_applied = False
+        email_fallback_reasons = []
         
         prompt_text = f"""
 Redacta el cuerpo de un email profesional para ofrecer esta propiedad a un cliente interesado.
@@ -8118,6 +8289,8 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
         )
         
         if json_str is None:
+            email_fallback_applied = True
+            email_fallback_reasons.append('ai_empty')
             json_str = '{"asunto": "Propiedad destacada", "html": "<div>Tenemos una excelente oportunidad para vos. ContestÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a este mail para mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s detalles.</div>", "texto_plano": "Tenemos una excelente oportunidad para vos. ContestÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ a este mail para mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s detalles."}'
             
         import json
@@ -8126,14 +8299,33 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
             parsed = json.loads(json_str)
         except:
             if '```json' in json_str:
-                json_str = json_str.split('```json')[1].split('```')[0].strip()
-                parsed = json.loads(json_str)
+                try:
+                    json_str = json_str.split('```json')[1].split('```')[0].strip()
+                    parsed = json.loads(json_str)
+                except Exception:
+                    email_fallback_applied = True
+                    email_fallback_reasons.append('json_invalid')
+                    parsed = {
+                        "asunto": "Propiedad destacada",
+                        "html": "<div>Propiedad disponible</div>",
+                        "texto_plano": "Propiedad disponible"
+                    }
             else:
+                email_fallback_applied = True
+                email_fallback_reasons.append('json_invalid')
                 parsed = {
                     "asunto": "Propiedad destacada",
                     "html": "<div>Propiedad disponible</div>",
                     "texto_plano": "Propiedad disponible"
                 }
+        if not isinstance(parsed, dict):
+            email_fallback_applied = True
+            email_fallback_reasons.append('json_not_object')
+            parsed = {
+                "asunto": "Propiedad destacada",
+                "html": "<div>Propiedad disponible</div>",
+                "texto_plano": "Propiedad disponible"
+            }
                 
         if request.user.is_authenticated:
             incrementar_uso(request.user, 'ai')
@@ -8147,12 +8339,15 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
         parsed_html = _sanitize_generated_email_html(parsed.get('html', ''))
         parsed_text = _sanitize_generated_email_text(parsed.get('texto_plano', '') or parsed.get('html', ''))
         if not parsed_html:
+            email_fallback_applied = True
+            email_fallback_reasons.append('body_empty')
             fallback_body = parsed_text or 'Propiedad disponible'
             parsed_html = f'<div>{html_lib.escape(fallback_body).replace("\n", "<br>")}</div>'
 
         parsed['asunto'] = _repair_mojibake_text(parsed.get('asunto', 'Propiedad destacada')).strip() or 'Propiedad destacada'
         parsed['html'] = parsed_html
         parsed['texto_plano'] = parsed_text or 'Propiedad disponible'
+        parsed['texto'] = parsed['texto_plano']
 
         # Inyectar en plantilla premium para consistencia visual total
         context = {
@@ -8196,7 +8391,13 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
             "color_secondary": (template_meta.get('colors') or {}).get('secondary', '#222222'),
             "color_accent": (template_meta.get('colors') or {}).get('accent', '#c9a84c'),
         }
-        premium_html = render_to_string(template_email, context)
+        try:
+            premium_html = render_to_string(template_email, context)
+        except Exception:
+            logger.exception("[EMAIL] Fallo renderizando template %s listado_id=%s", template_email, listado_id_val)
+            email_fallback_applied = True
+            email_fallback_reasons.append('template_render_failed')
+            premium_html = _build_guaranteed_email_html(context, template_id)
         # We comment out the manual HTML gallery block injection because all email templates
         # natively loop over `galeria_urls` in Django's template engine. Manual injection causes duplicate galleries.
         # if email_gallery:
@@ -8235,10 +8436,28 @@ Devuelve **ÃƒÆ’Ã†â€™Ãƒâ€¦Ã‚Â¡NICAMENTE** y estrictamente
                 premium_html,
                 count=1,
             )
+        validation_errors = _validate_generated_email_html(premium_html, context)
+        if validation_errors:
+            guaranteed_html = _build_guaranteed_email_html(context, template_id)
+            guaranteed_errors = _validate_generated_email_html(guaranteed_html, context)
+            logger.warning(
+                "[EMAIL] HTML invalido; usando fallback listado_id=%s template=%s errores=%s fallback_errores=%s",
+                listado_id_val,
+                template_id,
+                validation_errors,
+                guaranteed_errors,
+            )
+            premium_html = guaranteed_html
+            email_fallback_applied = True
+            email_fallback_reasons.append('html_invalid:' + ','.join(validation_errors))
+            validation_errors = guaranteed_errors
         parsed["html"] = _repair_mojibake_text(premium_html)
         parsed["template_id"] = template_id
         parsed["brand_template_id"] = (selection.get('brand_template').id if selection.get('brand_template') else None)
         parsed["brand_template_revision"] = (selection.get('brand_template_revision').revision if selection.get('brand_template_revision') else None)
+        parsed["fallback_applied"] = email_fallback_applied
+        parsed["fallback_reason"] = ', '.join(dict.fromkeys(email_fallback_reasons))
+        parsed["validation_errors"] = validation_errors
         
         # PERSISTENCIA: Guardar en el listado
         if listado_obj:
