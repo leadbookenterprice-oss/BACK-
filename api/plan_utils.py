@@ -223,7 +223,7 @@ def puede_generar(agente, tipo):
     from api.models import UsageLog
     limites = get_limites(agente)
     from django.utils import timezone
-from datetime import timedelta
+    from datetime import timedelta
     ahora = timezone.now()
     
     if tipo == 'property':
