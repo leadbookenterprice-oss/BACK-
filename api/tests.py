@@ -553,12 +553,12 @@ class ListingResultPersistenceTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
-    def test_creating_listing_does_not_register_property_usage_until_content_ready(self):
+    def test_creating_listing_registers_property_usage_immediately(self):
         response = self.client.post(
             reverse('listados'),
             {
                 'formData': {
-                    'titulo': 'Casa sin contenidos',
+                    'titulo': 'Casa con conteo',
                     'tipoPropiedad': 'Casa',
                     'operacion': 'venta',
                     'ciudad': 'Palermo',
@@ -570,10 +570,10 @@ class ListingResultPersistenceTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 201, response.content)
-        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 0)
+        self.assertEqual(UsageLog.objects.filter(agent=self.user, tipo='property').count(), 1)
         quota = response.json()['daily_listing_quota']
-        self.assertEqual(quota['used'], 0)
-        self.assertEqual(quota['remaining'], 30)
+        self.assertEqual(quota['used'], 1)
+        self.assertEqual(quota['remaining'], 29)
 
     def test_property_usage_counts_once_after_full_content_pack_is_persisted(self):
         from api.views import actualizar_resultados_listado

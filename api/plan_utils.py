@@ -1,9 +1,10 @@
 from django.utils import timezone
+from datetime import timedelta
 
 TRIAL_EXPIRED_CODE = 'trial_expired'
 TRIAL_EXPIRED_MESSAGE = 'Tu prueba Starter expiro. Para seguir usando LeadBook, contactanos o compra un plan.'
 PRO_FEATURE_PLANS = {'pro', 'scale', 'business'}
-STARTER_DAILY_LISTING_LIMIT = 30
+STARTER_DAILY_LISTING_LIMIT = 2
 STARTER_DAILY_LISTING_PLANS = {'free', 'starter'}
 CONTENT_PACK_REQUIRED_FORMATS = ('pdf', 'post', 'story', 'carrusel', 'email')
 PROPERTY_USAGE_COUNTED_AT_KEY = 'property_usage_counted_at'
@@ -57,7 +58,7 @@ def build_daily_listing_limit_payload(agente):
     return {
         'error': 'daily_listing_limit_reached',
         'code': 'daily_listing_limit_reached',
-        'mensaje': 'Alcanzaste el limite diario de 30 listados del plan Starter. El video se maneja con limites separados.',
+        'mensaje': 'Alcanzaste el limite diario de 2 listados del plan Starter. El video se maneja con limites separados.',
         'quota': quota,
         'usados': quota['used'],
         'limite': quota['limit'],
@@ -67,6 +68,89 @@ def build_daily_listing_limit_payload(agente):
 def puede_crear_listado_hoy(agente):
     quota = get_daily_listing_quota(agente)
     return not quota['exhausted'], quota
+
+# Weekly listing and video limits for free/starter users
+FREE_WEEKLY_LISTING_LIMIT = 10
+FREE_WEEKLY_VIDEO_LIMIT = 1
+
+def get_week_start():
+    now = timezone.now()
+    # Monday is the start of the week
+    start = now - timedelta(days=now.weekday())
+    return start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+def get_weekly_listing_usage(agente):
+    from api.models import UsageLog
+    week_start = get_week_start()
+    return UsageLog.objects.filter(agent=agente, tipo='property', fecha__gte=week_start).count()
+
+def get_weekly_listing_limit(agente):
+    plan = get_plan_name(agente)
+    if plan in STARTER_DAILY_LISTING_PLANS:
+        return FREE_WEEKLY_LISTING_LIMIT
+    return None
+
+def get_weekly_listing_quota(agente):
+    limit = get_weekly_listing_limit(agente)
+    used = get_weekly_listing_usage(agente) if limit is not None else 0
+    remaining = None if limit is None else max(0, limit - used)
+    return {
+        'applies': limit is not None,
+        'plan': get_plan_name(agente),
+        'used': used,
+        'limit': limit,
+        'remaining': remaining,
+        'exhausted': bool(limit is not None and used >= limit),
+        'window': 'week',
+    }
+
+def build_weekly_listing_limit_payload(agente):
+    quota = get_weekly_listing_quota(agente)
+    return {
+        'error': 'weekly_listing_limit_reached',
+        'code': 'weekly_listing_limit_reached',
+        'mensaje': 'Alcanzaste el limite semanal de 10 listados del plan Starter.',
+        'quota': quota,
+        'usados': quota['used'],
+        'limite': quota['limit'],
+    }
+
+def get_weekly_video_usage(agente):
+    from api.models import UsageLog
+    week_start = get_week_start()
+    return UsageLog.objects.filter(agent=agente, tipo='video', fecha__gte=week_start).count()
+
+def get_weekly_video_limit(agente):
+    plan = get_plan_name(agente)
+    if plan in STARTER_DAILY_LISTING_PLANS:
+        return FREE_WEEKLY_VIDEO_LIMIT
+    return None
+
+def get_weekly_video_quota(agente):
+    limit = get_weekly_video_limit(agente)
+    used = get_weekly_video_usage(agente) if limit is not None else 0
+    remaining = None if limit is None else max(0, limit - used)
+    return {
+        'applies': limit is not None,
+        'plan': get_plan_name(agente),
+        'used': used,
+        'limit': limit,
+        'remaining': remaining,
+        'exhausted': bool(limit is not None and used >= limit),
+        'window': 'week',
+    }
+
+def build_weekly_video_limit_payload(agente):
+    quota = get_weekly_video_quota(agente)
+    return {
+        'error': 'weekly_video_limit_reached',
+        'code': 'weekly_video_limit_reached',
+        'mensaje': 'Alcanzaste el limite semanal de 1 video del plan Starter.',
+        'quota': quota,
+        'usados': quota['used'],
+        'limite': quota['limit'],
+    }
+
 
 def has_pro_feature_access(agente):
     if getattr(agente, 'is_staff', False):
@@ -139,6 +223,7 @@ def puede_generar(agente, tipo):
     from api.models import UsageLog
     limites = get_limites(agente)
     from django.utils import timezone
+from datetime import timedelta
     ahora = timezone.now()
     
     if tipo == 'property':

@@ -71,6 +71,10 @@ from .plan_utils import (
     get_free_trial_status,
     get_plan_block_payload,
     get_pro_feature_block_payload,
+    get_weekly_listing_quota,
+    build_weekly_listing_limit_payload,
+    get_weekly_video_quota,
+    build_weekly_video_limit_payload,
 )
 from .services.ads_studio import (
     build_ads_result,
@@ -3600,11 +3604,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def request_trial_token(request):
-    return Response({
-        "error": "trial_token_request_disabled",
-        "message": "Los tokens gratis solo pueden ser generados desde el Admin Dashboard.",
-    }, status=status.HTTP_410_GONE)
-
     from django.conf import settings
     from .tasks import send_otp_email_async
     email = str(request.data.get('email') or '').strip().lower()
@@ -6775,6 +6774,10 @@ class ListadosView(APIView):
         if not can_create_today:
             return Response(build_daily_listing_limit_payload(user), status=status.HTTP_429_TOO_MANY_REQUESTS)
         
+        # Weekly listing quota for free users
+        weekly_quota = get_weekly_listing_quota(user)
+        if weekly_quota['exhausted']:
+            return Response(build_weekly_listing_limit_payload(user), status=status.HTTP_429_TOO_MANY_REQUESTS)
         # TODO: re-habilitar cuando el sistema de planes estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© estable
         # puede, usados, maximo = verificar_limite_plan(user)
         # if not puede:
@@ -6822,6 +6825,13 @@ class ListadosView(APIView):
             moneda=moneda,
             datos_extra=payload
         )
+
+        datos_extra = listado.datos_extra if isinstance(listado.datos_extra, dict) else {}
+        datos_extra[PROPERTY_USAGE_COUNTED_AT_KEY] = timezone.now().isoformat()
+        listado.datos_extra = datos_extra
+        listado.save(update_fields=['datos_extra'])
+        UsageLog.objects.create(agent=user, tipo='property')
+        daily_listing_quota = get_daily_listing_quota(user)
 
         return Response({
             "mensaje": "Listado guardado", 
@@ -7066,6 +7076,10 @@ def generar_video(request, pk):
             listado.datos_extra = _sanitize_listing_payload_for_storage(datos)
 
         video_provider = config('VIDEO_PROVIDER', default='leadbook_sync').strip().lower()
+        # Weekly video quota for free users
+        weekly_video_quota = get_weekly_video_quota(request.user)
+        if weekly_video_quota['exhausted']:
+            return Response(build_weekly_video_limit_payload(request.user), status=status.HTTP_429_TOO_MANY_REQUESTS)
         from api.services.video_queue import get_video_queue_position, mark_video_queued
         queue_meta = mark_video_queued(listado, video_provider)
 

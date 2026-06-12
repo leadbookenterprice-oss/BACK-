@@ -1247,7 +1247,7 @@ def call_cerebras_api(prompt: str, agente=None, **kwargs) -> str:
                     retry_after_seconds=retry_after_seconds,
                 )
 
-            model_terms = ('model', 'not found', 'invalid model', 'unsupported model', 'deprecated')
+            model_terms = ('model', 'not found', 'invalid model', 'unsupported model', 'deprecated', 'does not support')
             error_obj = RuntimeError(response_text or f'Error Cerebras ({response.status_code})')
             if slot:
                 record_cerebras_slot_result(
